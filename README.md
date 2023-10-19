@@ -1,2 +1,2 @@
-# Values-with-CEP
-Repository with code for an Automatic CEP Rule Learning approach to value learning
+# Values-ValueLearning
+Repository with code for different approaches for the human value learning problem.

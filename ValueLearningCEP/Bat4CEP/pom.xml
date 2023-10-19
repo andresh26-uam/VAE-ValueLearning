@@ -1,0 +1,48 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>de.hsh.min.ceplibs</groupId>
+	<artifactId>bat4cep</artifactId>
+	<version>1.0</version>
+	<properties>
+		<maven.compiler.source>1.8</maven.compiler.source>
+		<maven.compiler.target>1.8</maven.compiler.target>
+	</properties>
+	<dependencies>
+	<!-- https://mvnrepository.com/artifact/org.azeckoski/reflectutils -->
+<dependency>
+    <groupId>org.azeckoski</groupId>
+    <artifactId>reflectutils</artifactId>
+    <version>0.9.20</version>
+</dependency>
+		<!-- https://mvnrepository.com/artifact/com.espertech/esper -->
+		<dependency>
+			<groupId>com.espertech</groupId>
+			<artifactId>esper</artifactId>
+			<version>6.1.0</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>27.0.1-jre</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-nop -->
+		<dependency>
+    		<groupId>org.slf4j</groupId>
+    		<artifactId>slf4j-nop</artifactId>
+    		<version>1.7.21</version>
+		</dependency>	
+		<dependency>
+	<groupId>cglib</groupId>
+	<artifactId>cglib</artifactId>
+	<version>3.2.11</version>
+</dependency>
+<!-- Thanks for using https://jar-download.com -->
+
+
+
+
+	</dependencies>
+</project>

@@ -1,0 +1,14 @@
+;;;;;;Training;;;;Test;;
+;;;;Time;;F1 Score;Recall;Precision;;F1 Score;Recall;Precision
+1;;;;;;;;;;;
+;1;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60 sec)] where (A0.ROOM = B0.ROOM);;00:01:09;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;2;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60 sec)] where (A0.ROOM - B0.ROOM = 0.0);;00:01:19;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;3;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM = B0.ROOM);;00:07:04;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;4;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM - B0.ROOM = 0.0);;00:05:33;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;5;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM - B0.ROOM = 0.0);;00:04:04;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;6;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM - B0.ROOM = 0.0);;00:02:02;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;7;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (B0.ROOM = A0.ROOM);;00:02:18;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;8;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM = B0.ROOM);;00:06:33;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;9;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM = B0.ROOM);;00:04:49;;0,99918;1,00000;0,99837;;1,00000;1,00000;1,00000;
+;10;0.99918 (Recall: 1.00000 Precision: 0.99837) --- [every((A0 = A -> B0 = B)) where timer:within(60)] where (A0.ROOM = B0.ROOM);;00:04:50;;0,99918;1,00000;0,99837;;0,99918;1,00000;0,99837;
+;;;;;;;;;;;;

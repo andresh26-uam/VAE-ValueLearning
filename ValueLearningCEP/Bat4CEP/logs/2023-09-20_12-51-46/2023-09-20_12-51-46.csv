@@ -1,0 +1,16 @@
+;Rule;Result;;;;;Training;;;;Test;;;;HITS;;;;Data;;;;;;;;Swarms;;;;;;;
+;;# of runs:;;"total
+time";"avg
+time ";;"avg 
+F1 Score";"avg 
+recall";"avg  
+precision";;"avg 
+F1 Score";"avg 
+recall";"avg  
+precision";;;Training;Test;;Events;"Event
+Types";"Event
+attributes";"Min sec 
+between events";"Max sec 
+between events";"Complex 
+Event";Event attributes;;;Timestamps;Size;Alpha;Gamma;Loudness;"Max 
+frequency";Pulsrate

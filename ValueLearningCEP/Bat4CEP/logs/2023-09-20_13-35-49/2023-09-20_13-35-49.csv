@@ -1,0 +1,17 @@
+;Rule;Result;;;;;Training;;;;Test;;;;HITS;;;;Data;;;;;;;;Swarms;;;;;;;
+;;# of runs:;;"total
+time";"avg
+time ";;"avg 
+F1 Score";"avg 
+recall";"avg  
+precision";;"avg 
+F1 Score";"avg 
+recall";"avg  
+precision";;;Training;Test;;Events;"Event
+Types";"Event
+attributes";"Min sec 
+between events";"Max sec 
+between events";"Complex 
+Event";Event attributes;;;Timestamps;Size;Alpha;Gamma;Loudness;"Max 
+frequency";Pulsrate
+1;[every((A0 = A -> B0 = B)) where timer:within(60 sec)] where (A0.ROOM = B0.ROOM);10;;00:39:41;00:03:58;;0,99918;1,00000;0,99837;;0,99992;1,00000;0,99984;;;611;611;;15000;10;3;1;10;HIT;TEMP: {1 - 100}, ID: {1 - 10}, ROOM: {1 - 10}, ;;;500;500;0,90;0,90;1,00;2,50;0,10;
