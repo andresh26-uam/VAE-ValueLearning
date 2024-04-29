@@ -165,14 +165,14 @@ for repeat in range(N_EXPERIMENTS):
         od_list_train = od_list_train,
         od_list_test = od_list_test
     )
-    print(list(mce_irl.reward_net.parameters()))
+    print(list(mce_irl._reward_net.parameters()))
     print("TRAINING STARTED")
 
     predicted_rewards_per_profile, train_stats, test_stats = mce_irl.train(max_iter=N_ITER_PER_EXPERIMENT,render_partial_plots=False)
     end_time = time.time()
     print("TIME: ", end_time - st)
     print("FINAL PARAMETERS: ")
-    print(list(mce_irl.reward_net.parameters()))
+    print(list(mce_irl._reward_net.parameters()))
     
 
     rewards_per_experiment.append(predicted_rewards_per_profile)

@@ -4,6 +4,7 @@ import os
 from typing import Iterator
 from gymnasium import Space
 from imitation.rewards import reward_nets
+import numpy as np
 from torch import Tensor
 import torch as th
 import torch.nn.functional as F
@@ -19,7 +20,7 @@ class ConvexLinearModule(nn.Linear):
     
     def forward(self, input: Tensor) -> Tensor:
         w_normalized = nn.functional.softmax(self.weight, dim=1)
-        assert th.allclose(w_normalized, nn.functional.softmax(self.weight))
+        #assert th.allclose(w_normalized, nn.functional.softmax(self.weight))
         #print(w_normalized)
         output = nn.functional.linear(input, w_normalized)
         assert th.all(output >=0)
@@ -31,9 +32,16 @@ class ConvexLinearModule(nn.Linear):
 
 class PositiveBoundedLinearModule(nn.Linear):
     
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None) -> None:
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
         self.use_bias = bias
+
+        with th.no_grad():
+            if data is not None:
+                state_dict = self.state_dict()
+                state_dict['weight'] = th.as_tensor([list(data)]).clone()
+                self.load_state_dict(state_dict)
+
     def forward(self, input: Tensor) -> Tensor:
         w_bounded, b_bounded = self.get_profile()
         if self.use_bias:
@@ -48,7 +56,7 @@ class PositiveBoundedLinearModule(nn.Linear):
     def get_profile(self):
 
         w_bounded = nn.functional.softmax(self.weight, dim=1)
-        assert th.allclose(w_bounded, nn.functional.softmax(self.weight))
+        #assert th.allclose(w_bounded, nn.functional.softmax(self.weight))
         b_bounded = 0.0
         if self.use_bias:
             b_bounded = nn.functional.sigmoid(self.bias)
@@ -64,30 +72,21 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
         
-    def reset_learning_profile(self, new_profile = None, bias=False):
-        self.trained_profile_net = PositiveBoundedLinearModule(self.hid_sizes[-1],1, bias=bias)
-        state_dict = self.trained_profile_net.state_dict()
-        with th.no_grad():
-            if new_profile is None:
-                state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
-                state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
-            else:
-                state_dict['weight'] = th.tensor(new_profile, requires_grad=True).reshape_as(state_dict['weight'])
-                print(state_dict['weight'], new_profile)
-                exit(0)
-        self.trained_profile_net.load_state_dict(state_dict)
+    def reset_learning_profile(self, new_profile: tuple = None, bias=False):
+        self.trained_profile_net = PositiveBoundedLinearModule(self.hid_sizes[-1],1, bias=bias, data=new_profile)
+        self.use_bias = bias
+        
 
     def reset_value_net(self):
         modules = []
         for i in range(1, len(self.activations)):
             linmod = ConvexLinearModule(self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
             
-            if self.activations[i-1] == nn.ReLU or nn.Identity:
+            if self.activations[i-1] == nn.ReLU or self.activations[i-1] == nn.Identity:
                 state_dict = linmod.state_dict()
-                with th.no_grad():
-                    state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
+                state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
                     
-                    state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
+                state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
                 linmod.load_state_dict(state_dict)
                 assert th.all(linmod.state_dict()['weight'] > 0)
             modules.append(linmod)

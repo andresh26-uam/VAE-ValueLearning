@@ -95,9 +95,11 @@ if __name__ == "__main__":
     state_venv = DummyVecEnv([state_env_creator] * 1)
 
     reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
-    reward_net.reset_learning_profile()
+    #reward_net.reset_learning_profile()
     reward_net.set_mode(TrainingModes.PROFILE_LEARNING)
     checkpointed_learned_profile = reward_net.get_learned_profile(with_bias=False)
+    reward_net.reset_learning_profile(checkpointed_learned_profile)
+    reward_net.reset_learning_profile(checkpointed_learned_profile)
     reward_net.reset_learning_profile(checkpointed_learned_profile)
     print("Checkpointed profile: ", checkpointed_learned_profile)
 
@@ -133,9 +135,9 @@ if __name__ == "__main__":
         training_set_mode=TrainingSetModes.PROFILED_SOCIETY
     )
     print("REWARD PARAMS: ")
-    print(list(mce_irl.reward_net.parameters()))
+    print(list(mce_irl.get_reward_net().parameters()))
     print("VALUE_MATRIX: ")
-    print(mce_irl.reward_net.value_matrix())
+    print(mce_irl.get_reward_net().value_matrix())
 
     
     
@@ -166,10 +168,14 @@ if __name__ == "__main__":
     
     # Opcion 1. 70% with 1,0,0, 30% with 0,1,0. Weighting the loss of the 1,0,0 by 0.7 with 70% ODs and 0,1,0 by 0.3 with remaining 30% ODs.
     mce_irl.training_profiles = [NEW_PROFILE, ]
-    mce_irl.training_set_mode = TrainingSetModes.PROFILED_SOCIETY
+    new_reward_net = mce_irl.get_reward_net()
+    new_reward_net.reset_learning_profile(checkpointed_learned_profile)
+    mce_irl.set_reward_net(new_reward_net)
     
-    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, render_partial_plots=False)
-    learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
+    #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
+
+    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.PROFILED_SOCIETY, render_partial_plots=False)
+    learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
     print(learned_profile, learned_bias)
     mce_irl.adapt_policy_to_profile(learned_profile)
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
@@ -185,9 +191,14 @@ if __name__ == "__main__":
     # Opcion 2 (perfect)
 
     mce_irl.training_profiles = [NEW_PROFILE, ]
-    mce_irl.training_set_mode = TrainingSetModes.COST_MODEL_SOCIETY
-    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING)
-    learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
+    new_reward_net = mce_irl.get_reward_net()
+    new_reward_net.reset_learning_profile(checkpointed_learned_profile)
+    mce_irl.set_reward_net(new_reward_net)
+
+    #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
+
+    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.COST_MODEL_SOCIETY, render_partial_plots=False)
+    learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
     print(learned_profile, learned_bias)
     mce_irl.adapt_policy_to_profile(learned_profile)
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)

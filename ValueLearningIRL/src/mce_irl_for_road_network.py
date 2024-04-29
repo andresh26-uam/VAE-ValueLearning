@@ -87,6 +87,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     Based on https://imitation.readthedocs.io/en/latest/algorithms/mce_irl.html
     Adapted for the RoadWorld environment
     """
+    def set_reward_net(self, reward_net: ProfiledRewardFunction):
+
+        self._reward_net = reward_net
+        self.optimizer = self.optimizer_cls(self._reward_net.parameters(), **self.optimizer_kwargs)
+    def get_reward_net(self):
+        return self._reward_net
 
     def __init__(
         self,
@@ -187,9 +193,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             
             self._set_demo_oms_from_trajectories(sampled_expert_trajectories)
         
-        self.reward_net = reward_net
+        self._reward_net = reward_net
+        self.optimizer_cls = optimizer_cls
         optimizer_kwargs = optimizer_kwargs or {"lr": 1e-2}
+        self.optimizer_kwargs = optimizer_kwargs
         self.optimizer = optimizer_cls(reward_net.parameters(), **optimizer_kwargs)
+        
 
         self.mean_vc_diff_eps = mean_vc_diff_eps
         self.grad_l2_eps = grad_l2_eps
@@ -219,7 +228,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         self.training_mode = training_mode
         self.training_set_mode = training_set_mode
-        self.reward_net.set_mode(self.training_mode)
+        self._reward_net.set_mode(self.training_mode)
         
     
     def mce_occupancy_measures(
@@ -441,34 +450,34 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             obs_mat = self.env.observation_matrix
             obs_mat = th.as_tensor(
                 obs_mat,
-                dtype=self.reward_net.dtype,
-                device=self.reward_net.device,
+                dtype=self._reward_net.dtype,
+                device=self._reward_net.device,
             )
 
         if dones is None:
-            dones = th.as_tensor(self.env.done_matrix,dtype=self.reward_net.dtype)
+            dones = th.as_tensor(self.env.done_matrix,dtype=self._reward_net.dtype)
 
         
         state_space_is_1d = isinstance(self.env.state_space, gym.spaces.Discrete)
-        previous_rew_mode = self.reward_net.mode
+        previous_rew_mode = self._reward_net.mode
         with th.no_grad():
-            self.reward_net.set_mode(TrainingModes.VALUE_LEARNING)
-            self.reward_net.set_profile(chosen_profile)
+            self._reward_net.set_mode(TrainingModes.VALUE_LEARNING)
+            self._reward_net.set_profile(chosen_profile)
             if state_space_is_1d:
-                predicted_r = squeeze_r(self.reward_net(None, None, obs_mat, dones[:, destinations[0]]))
+                predicted_r = squeeze_r(self._reward_net(None, None, obs_mat, dones[:, destinations[0]]))
                 
                 assert predicted_r.shape == (obs_mat.shape[0],)
                 predicted_r_np = predicted_r.detach().cpu().numpy()
             else:
                 predicted_r_np = np.zeros_like(self.env.reward_matrix[self.env.last_profile])
                 for d in destinations:
-                    predicted_r = squeeze_r(self.reward_net(None, None, obs_mat[:,d,:], dones[:, d]))
+                    predicted_r = squeeze_r(self._reward_net(None, None, obs_mat[:,d,:], dones[:, d]))
                     #predicted_r/= -th.max(predicted_r)
                     assert predicted_r.shape == (obs_mat.shape[0],)
 
                     predicted_r_np[:,d] = predicted_r.detach().cpu().numpy()
         assert np.all(predicted_r_np[:, destinations] < 0.0)
-        self.reward_net.set_mode(previous_rew_mode)
+        self._reward_net.set_mode(previous_rew_mode)
 
         return predicted_r_np
     
@@ -476,7 +485,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         
         th.autograd.set_detect_anomaly(False)
         
-        learned_policy_profile  = self.reward_net.get_learned_profile()
+        learned_policy_profile  = self._reward_net.get_learned_profile()
         
         predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
         
@@ -524,7 +533,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
             if self.training_mode != TrainingModes.PROFILE_LEARNING:
                 learned_policy_profile = chosen_profile
-                self.reward_net.set_profile(learned_policy_profile)
+                self._reward_net.set_profile(learned_policy_profile)
 
             assert chosen_profile in self.expert_trajectories_per_pr.keys()
 
@@ -549,13 +558,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             visitation_count_diffs = th.as_tensor(
                 np.asarray([
                 visitations[(odpr[0], learned_policy_profile)] - self.demo_state_om_per_profile[odpr] for odpr in od_profiles_of_trajs_train]),
-                    dtype=self.reward_net.dtype,
-                    device=self.reward_net.device,
+                    dtype=self._reward_net.dtype,
+                    device=self._reward_net.device,
                 )
             fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
                                                                     sampled_traj_profile_to_expert_traj_profile_mapping=
                                                                     {learned_policy_profile: chosen_profile})
-            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in od_train_per_profile[chosen_profile]]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in od_train_per_profile[chosen_profile]]), device=self._reward_net.device, dtype=self._reward_net.dtype)
             #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
             mntensor_train_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_train)*profile_ponderation[chosen_profile]).detach().numpy()
 
@@ -564,14 +573,14 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 use_info_real_costs=True, 
                 sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
             
-            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
             #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
             mntensor_test_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_test)*profile_ponderation[chosen_profile]).detach().numpy()
 
             obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
             done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
             
-            rewards =  self.reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
+            rewards =  self._reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
             
             assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
             #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
@@ -582,7 +591,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 visited_states_for_each_od = (
                         th.as_tensor(
                             np.asarray([visitations[(odpr[0], learned_policy_profile)] for odpr in od_profiles_of_trajs_train]),
-                            device=self.reward_net.device, dtype=self.reward_net.dtype) > 0)
+                            device=self._reward_net.device, dtype=self._reward_net.dtype) > 0)
             
                 fd_on_visited_states = th.mul(
                         visited_states_for_each_od, 
@@ -621,13 +630,14 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         self.optimizer.step()
             
         grads = []
-        for p in self.reward_net.parameters():
+        for p in self._reward_net.parameters():
             assert p.grad is not None  # for type checker
             grads.append(p.grad)
             
             print("GRAD: ", p.names, p.grad)
         print("REAL LOSS:", loss)
         print("REWARD NORM:", rewards.norm())
+        # TODO: Loss should be 0 when the profile has converged (?) ... or at least the gradient. Still it converges without problem though shakingly
         grad_norm += util.tensor_iter_norm(grads).item()
         
         grad_norm_per_pr = collections.defaultdict(lambda: grad_norm)
@@ -641,7 +651,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         # w.r.t that reward function
         # TODO(adam): support not just state-only reward?
         th.autograd.set_detect_anomaly(False)
-        learned_policy_profile  = self.reward_net.get_learned_profile() if self.training_mode == TrainingModes.PROFILE_LEARNING else chosen_profile
+        learned_policy_profile  = self._reward_net.get_learned_profile() if self.training_mode == TrainingModes.PROFILE_LEARNING else chosen_profile
         
         predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
         
@@ -681,8 +691,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             loss = th.mean(th.vstack([
                 th.dot(th.as_tensor(
                     np.mean([visitations[(sod, chosen_profile)] - self.demo_state_om_per_profile[(sod, chosen_profile)] for sod in self.env.od_list_int if sod[1] == d], axis=0),
-                    dtype=self.reward_net.dtype,
-                    device=self.reward_net.device,
+                    dtype=self._reward_net.dtype,
+                    device=self._reward_net.device,
                 ), 
                 squeeze_r(self.reward_net(None, None, obs_mat, dones[:, self.destinations_train[0]])) if state_space_is_1d else
                 squeeze_r(self.reward_net(None, None, obs_mat[:,d,:], dones[:, d]))
@@ -712,13 +722,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             visitation_count_diffs = th.as_tensor(
                 np.asarray([
                 visitations[(odpr[0], learned_policy_profile)] - self.demo_state_om_per_profile[odpr] for odpr in od_profiles_of_trajs_train]),
-                    dtype=self.reward_net.dtype,
-                    device=self.reward_net.device,
+                    dtype=self._reward_net.dtype,
+                    device=self._reward_net.device,
                 )
             fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
                                                                  sampled_traj_profile_to_expert_traj_profile_mapping=
                                                                  {learned_policy_profile: chosen_profile})
-            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
             #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
             mntensor_train = th.mean(fd_normed_tensor_train)
 
@@ -727,14 +737,14 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 use_info_real_costs=True, 
                 sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
             
-            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
             #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
             mntensor_test = th.mean(fd_normed_tensor_test)
 
             obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
             done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
             
-            rewards =  self.reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
+            rewards =  self._reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
             
             assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
             #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
@@ -745,7 +755,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 visited_states_for_each_od = (
                         th.as_tensor(
                             np.asarray([visitations[(odpr[0], learned_policy_profile)] for odpr in od_profiles_of_trajs_train]),
-                            device=self.reward_net.device, dtype=self.reward_net.dtype) > 0)
+                            device=self._reward_net.device, dtype=self._reward_net.dtype) > 0)
             
                 fd_on_visited_states = th.mul(
                         visited_states_for_each_od, 
@@ -780,7 +790,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         self.optimizer.step()
             
         grads = []
-        for p in self.reward_net.parameters():
+        for p in self._reward_net.parameters():
             assert p.grad is not None  # for type checker
             grads.append(p.grad)
             
@@ -832,18 +842,18 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         if training_set_mode is not None:
             self.training_set_mode = training_set_mode
 
-        self.reward_net.set_mode(self.training_mode)
+        self._reward_net.set_mode(self.training_mode)
 
         # use the same device and dtype as the rmodel parameters
         obs_mat = self.env.observation_matrix
         
         torch_obs_mat = th.as_tensor(
             obs_mat,
-            dtype=self.reward_net.dtype,
-            device=self.reward_net.device,
+            dtype=self._reward_net.dtype,
+            device=self._reward_net.device,
         )
         
-        dones = th.as_tensor(self.env.done_matrix,dtype=self.reward_net.dtype)
+        dones = th.as_tensor(self.env.done_matrix,dtype=self._reward_net.dtype)
         assert self.demo_state_om is not None or self.demo_state_om_per_profile is not None
         #assert self.demo_state_om.shape == (len(obs_mat),)
         assert self.demo_state_om_per_profile[(self.od_list_train[0], self.env.last_profile)].shape == (len(obs_mat),)
@@ -866,7 +876,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         feature_expectation_differences_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
         feature_expectation_differences_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
 
-        with networks.training(self.reward_net):
+        with networks.training(self._reward_net):
             # switch to training mode (affects dropout, normalization)
             #current_batch_of_destinations = self.rng.permutation(self.destinations)
             for t in range(max_iter):
@@ -1072,7 +1082,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     termination_condition_met = max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps and sum(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]*profile_proportions[pr] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.mean_vc_diff_eps
                 if (self.log_interval is not None and 0 == (t % self.log_interval)) or termination_condition_met:
                     print("Logging")
-                    params = self.reward_net.parameters()
+                    params = self._reward_net.parameters()
                     weight_norm = util.tensor_iter_norm(params).item()
 
                     
@@ -1082,13 +1092,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     self.logger.record("max grad_norm", max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]))
                     #self.logger.record("Linf_delta found in OD, state: ", str((np.asarray(self.env.od_list_int)[mean_absolute_difference_in_visitation_counts_index[pr][0]], mean_absolute_difference_in_visitation_counts_index[pr][1])))
                     
-                    print("PARAMS:", list(self.reward_net.parameters()))
-                    print("Value matrix: ", self.reward_net.value_matrix())
+                    print("PARAMS:", list(self._reward_net.parameters()))
+                    print("Value matrix: ", self._reward_net.value_matrix())
                     if self.training_mode==TrainingModes.PROFILE_LEARNING or TrainingModes.SIMULTANEOUS:
                         print("Previous Profile: ", [f"{p:0.2f}" for p in learned_policy_profile])
-                        print("New Learned Profile: ", [f"{p:0.2f}" for p in self.reward_net.get_learned_profile()])
+                        print("New Learned Profile: ", [f"{p:0.2f}" for p in self._reward_net.get_learned_profile()])
                         self.logger.record("Previous Profile: ", learned_policy_profile)
-                        self.logger.record("New Learned Profile: ", self.reward_net.get_learned_profile())
+                        self.logger.record("New Learned Profile: ", self._reward_net.get_learned_profile())
                     self.logger.dump(t)
 
                     #sorted_state_indices = np.argsort(max_delta_per_state_train)

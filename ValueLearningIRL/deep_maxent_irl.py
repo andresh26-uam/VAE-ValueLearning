@@ -165,7 +165,7 @@ if __name__ == "__main__":
         od_list_test=od_list_test,
         training_mode=TrainingModes.VALUE_LEARNING
     )
-    print(list(mce_irl.reward_net.parameters()))
+    print(list(mce_irl._reward_net.parameters()))
     print("TRAINING STARTED")
 
     predicted_rewards_per_profile, train_stats, test_stats = mce_irl.train(max_iter=1000,render_partial_plots=False)
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     end_time = time.time()
     print("TIME: ", end_time - st)
     print("FINAL PARAMETERS: ")
-    print(list(mce_irl.reward_net.parameters()))
+    print(list(mce_irl._reward_net.parameters()))
 
     reward_net.save_checkpoint(SAVED_REWARD_NET_FILE)
 
