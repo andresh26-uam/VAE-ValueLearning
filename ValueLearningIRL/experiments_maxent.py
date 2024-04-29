@@ -80,20 +80,13 @@ USE_DIJSTRA = False if USE_OM else False if STOCHASTIC else True # change True o
 N_EXPERT_SAMPLES_PER_OD = 1 if USE_OM is True else 30 if STOCHASTIC else 3# change True only when USE_OM is not True.
 FEATURE_SELECTION = FeatureSelection.ONLY_COSTS
 
-# %%
 """inialize road environment"""
-
 
 od_list, od_dist = ini_od_dist(train_p)
 print("DEBUG MODE", __debug__)
 #od_list, od_dist = [od_list[0],], [od_dist[0], ]
-od_list = od_list[0:15] 
+od_list = od_list[0:15] # For debug only
 od_dist = od_dist[0:15]
-
-
-#RoadWorldExpert(network_p, edge_p, node_path=node_p,path_feature_path=path_feature_p, pre_reset=(od_list, od_dist), profile=PROFILE, visualize_example=True, )
-#args: network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False
-
 
 
 env_creator = partial(RoadWorldPOMDPStateAsTuple, network_path=network_p, edge_path=edge_p, node_path=node_p, path_feature_path = path_feature_p, 
@@ -128,7 +121,7 @@ SAVED_REWARD_NET_FILE = "profiled_reward_function_trained.pt"
 for repeat in range(N_EXPERIMENTS):
     od_list_train, od_list_test, _, _= split_od_train_test(od_list, od_dist, split=0.8, to_od_list_int=True)
     # TODO: TESTEAR ESTO.
-    # TODO: INICIALIZAR A PESOS NEGATIVOS LA LINEAR??
+    
     # TODO: PLOT DESVIACIONES TIPICAS en train_stats['op'], train_stats['vc'], train_stats['fd'] y test_stats (similar)
     # TODO: ANOTAR MEAN media de train_stats['op'][-1] y todos esos para ver que tal va.
     # TODO: UTILIZAR OTROS DATOS CADA VEZ (?)

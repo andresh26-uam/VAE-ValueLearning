@@ -224,7 +224,7 @@ class RoadWorld(object):
         self.iterations += 1
         self.state = (self.cur_state, self.cur_des)
         #info = {"moved_to": self.cur_state, "reward": reward}
-        # TODO QUE 
+        
         trunc = self.iterations >= self.max_iter
         return self.state, reward, done, trunc, {}
 
@@ -505,7 +505,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
                 
                 features = torch.cat([feature, torch.eye(self.n_states)[state_des[:,0]], torch.eye(self.n_states)[state_des[:,1]]], -1)
             else:
-                raise ValueError("ONEHOT FEATURES??" + str(feature_selection))
+                raise ValueError("Unknown Feature Selection: " + str(feature_selection))
         else:
             edge_feature, path_feature = self.get_separate_features(state_des[:,0], state_des[:,1], normalized=feature_preprocessing)
             features = torch.cat([path_feature, edge_feature], -1)  # [batch_size, n_path_feature + n_edge_feature]
@@ -799,7 +799,6 @@ class RoadWorldGym(RoadWorld,gym.Env):
         self._get_reward = __get_reward
         self._get_reward_state = __get_reward_state
 
-        # CALCULATE REWARDS GIVEN PATHS_PROFILES??
         
         self.n_features = self.process_features(torch.tensor([(107,413),]), feature_selection=feature_selection, use_real_env_rewards_as_feature=self.use_optimal_reward_per_profile,feature_preprocessing=self.feature_preprocessing).shape[1]
 
@@ -867,11 +866,10 @@ class RoadWorldGym(RoadWorld,gym.Env):
             if from_state is None:
                 good_edges = dict()
                 for key, paths in node_path_or_paths.items():
-                    # [108, 358, 222, 524, 32, 37, 31, 27, 467, 352, 313, 136, 53, 435, 404, 407, 488, 410, 482, 413] ?????
+                    # [108, 358, 222, 524, 32, 37, 31, 27, 467, 352, 313, 136, 53, 435, 404, 407, 488, 410, 482, 413] (shortest for eco)
                     if not flattened:
                         good_edges[key] = []
                         for path in paths:
-                            # por cada punto se coge la ruta mas corta es así xd
                             edge_path = self.node_path_to_edge_path(path, format_list=True)
                             
                             if with_length is False:
@@ -922,9 +920,6 @@ class RoadWorldGym(RoadWorld,gym.Env):
                 
                 good_edges = dict()
                 for key, path in node_path_or_paths.items():
-                    # [108, 358, 222, 524, 32, 37, 31, 27, 467, 352, 313, 136, 53, 435, 404, 407, 488, 410, 482, 413] ?????
-                    
-                    # por cada punto se coge la ruta mas corta es así xd
                     edge_path = self.node_path_to_edge_path(path, format_list=True)
                     
                     if with_length is False:
@@ -983,8 +978,7 @@ class RoadWorldGymObservationState(RoadWorldGym):
 
     def _observation_sample(self):
         ori, des = self._get_random_initial_state()
-        #print("WTF", ori,des)
-        obs, info = self.reset(st=ori,des=des) # ????????????????????????????
+        obs, info = self.reset(st=ori,des=des)
         return obs
 
     def _action_sampler(self, obs):

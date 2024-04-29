@@ -51,7 +51,6 @@ train_p = f"{DATA_FOLDER}/cross_validation/train_CV%d_size%d.csv" % (0, size)
 node_p = f"{DATA_FOLDER}/node.txt"
 
 
-# %%
 """inialize road environment"""
 
 
@@ -96,34 +95,14 @@ if __name__ == "__main__":
     state_venv = DummyVecEnv([state_env_creator] * 1)
 
     reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
-    #reward_net.trained_profile_net = PositiveBoundedLinearModule(3,1, bias=False) # ?? 
+    reward_net.reset_learning_profile()
     reward_net.set_mode(TrainingModes.PROFILE_LEARNING)
-    learned_profile = reward_net.get_learned_profile(with_bias=False)
-    print("Checkpointed profile: ", learned_profile)
+    checkpointed_learned_profile = reward_net.get_learned_profile(with_bias=False)
+    reward_net.reset_learning_profile(checkpointed_learned_profile)
+    print("Checkpointed profile: ", checkpointed_learned_profile)
 
     assert reward_net.action_space == env_single.action_space
     assert reward_net.hid_sizes[0] == env_single.process_features(state_des=torch.tensor([env_single.od_list_int[0], ]), feature_selection=FEATURE_SELECTION, feature_preprocessing=PREPROCESSING, use_real_env_rewards_as_feature=USE_OPTIMAL_REWARD_AS_FEATURE).shape[-1]
-
-
-    """start_vi = time.time()
-    
-    example_vi = ValueIterationPolicy(env_single)
-    example_vi.value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(BASIC_PROFILES[0])))
-    pi_with_d_per_profile = {
-        pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, 
-                                                                                         custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr)), 
-                                                                                         reset_with_values_and_qs=(example_vi.values.copy(), example_vi.q_vals.copy())
-                                                                                         ) for pr in EXAMPLE_PROFILES
-    }
-
-    end_vi = time.time()
-
-    print("VI TIME: ", end_vi - start_vi)
-
-    expert_policyAlgo: PolicyAlgo = PolicyAlgo.from_policy_matrix(pi_with_d_per_profile, real_env = env_single)
-
-    expert_demonstrations_all_profiles = expert_policyAlgo.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
-"""
 
     expert_sampler: SimplePolicy = SimplePolicy.from_environment_expert(env_single, profiles=EXAMPLE_PROFILES)
     expert_demonstrations_all_profiles = expert_sampler.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
@@ -136,8 +115,8 @@ if __name__ == "__main__":
         expert_trajectories=expert_demonstrations_all_profiles, # los rollout no me fio en absoluto.
         env=env_single,
         reward_net=reward_net,
-        log_interval=10,
-        optimizer_kwargs={"lr": 0.1, "weight_decay": 0},
+        log_interval=5,
+        optimizer_kwargs={"lr": 0.1, "weight_decay": 0.00001},
         mean_vc_diff_eps=0.001,
         rng=rng,
         overlaping_percentage=0.99,
@@ -169,7 +148,7 @@ if __name__ == "__main__":
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
     path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
     
-    #mce_irl.expert_policy.fit_to_profile(profile=NEW_PROFILE, new_pi = ValueIterationPolicy(env_single, score_calculator=SumScore()).value_iteration(profile=NEW_PROFILE, reset_with_values=example_vi.values))
+    #mce_irl.expert_policy.fit_to_profile(profile=NEW_PROFILE, new_pi = ValueIterationPolicy(env_single).value_iteration(profile=NEW_PROFILE, reset_with_values=example_vi.values))
     real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
     print(f"INDIRECTLY learned path for profile {NEW_PROFILE}: {edge_path}")
     print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
@@ -188,7 +167,8 @@ if __name__ == "__main__":
     # Opcion 1. 70% with 1,0,0, 30% with 0,1,0. Weighting the loss of the 1,0,0 by 0.7 with 70% ODs and 0,1,0 by 0.3 with remaining 30% ODs.
     mce_irl.training_profiles = [NEW_PROFILE, ]
     mce_irl.training_set_mode = TrainingSetModes.PROFILED_SOCIETY
-    mce_irl.train(1000, training_mode = TrainingModes.PROFILE_LEARNING)
+    
+    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, render_partial_plots=False)
     learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
     print(learned_profile, learned_bias)
     mce_irl.adapt_policy_to_profile(learned_profile)
@@ -198,14 +178,15 @@ if __name__ == "__main__":
     print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
     print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
 
-    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
+    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION)
     
+    df.to_csv(f"statistics_for_new_profile_op1_{NEW_PROFILE}.csv")
 
     # Opcion 2 (perfect)
 
     mce_irl.training_profiles = [NEW_PROFILE, ]
     mce_irl.training_set_mode = TrainingSetModes.COST_MODEL_SOCIETY
-    mce_irl.train(1000, training_mode = TrainingModes.PROFILE_LEARNING)
+    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING)
     learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
     print(learned_profile, learned_bias)
     mce_irl.adapt_policy_to_profile(learned_profile)
@@ -215,8 +196,9 @@ if __name__ == "__main__":
     print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
     print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
 
-    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
+    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION)
     
 
+    df.to_csv(f"statistics_for_new_profile_op2_{NEW_PROFILE}.csv")
 
 

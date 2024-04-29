@@ -18,7 +18,8 @@ from utils import CHECKPOINTS
 class ConvexLinearModule(nn.Linear):
     
     def forward(self, input: Tensor) -> Tensor:
-        w_normalized = nn.functional.softmax(self.weight)
+        w_normalized = nn.functional.softmax(self.weight, dim=1)
+        assert th.allclose(w_normalized, nn.functional.softmax(self.weight))
         #print(w_normalized)
         output = nn.functional.linear(input, w_normalized)
         assert th.all(output >=0)
@@ -34,9 +35,8 @@ class PositiveBoundedLinearModule(nn.Linear):
         super().__init__(in_features, out_features, bias, device, dtype)
         self.use_bias = bias
     def forward(self, input: Tensor) -> Tensor:
-        w_bounded = nn.functional.sigmoid(self.weight)
+        w_bounded, b_bounded = self.get_profile()
         if self.use_bias:
-            b_bounded = nn.functional.sigmoid(self.bias)
             output = nn.functional.linear(input, w_bounded, b_bounded)
         else:
             output = nn.functional.linear(input, w_bounded)
@@ -47,7 +47,8 @@ class PositiveBoundedLinearModule(nn.Linear):
         return output
     def get_profile(self):
 
-        w_bounded = nn.functional.sigmoid(self.weight)
+        w_bounded = nn.functional.softmax(self.weight, dim=1)
+        assert th.allclose(w_bounded, nn.functional.softmax(self.weight))
         b_bounded = 0.0
         if self.use_bias:
             b_bounded = nn.functional.sigmoid(self.bias)
@@ -63,7 +64,38 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
         
-    
+    def reset_learning_profile(self, new_profile = None, bias=False):
+        self.trained_profile_net = PositiveBoundedLinearModule(self.hid_sizes[-1],1, bias=bias)
+        state_dict = self.trained_profile_net.state_dict()
+        with th.no_grad():
+            if new_profile is None:
+                state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
+                state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
+            else:
+                state_dict['weight'] = th.tensor(new_profile, requires_grad=True).reshape_as(state_dict['weight'])
+                print(state_dict['weight'], new_profile)
+                exit(0)
+        self.trained_profile_net.load_state_dict(state_dict)
+
+    def reset_value_net(self):
+        modules = []
+        for i in range(1, len(self.activations)):
+            linmod = ConvexLinearModule(self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
+            
+            if self.activations[i-1] == nn.ReLU or nn.Identity:
+                state_dict = linmod.state_dict()
+                with th.no_grad():
+                    state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
+                    
+                    state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
+                linmod.load_state_dict(state_dict)
+                assert th.all(linmod.state_dict()['weight'] > 0)
+            modules.append(linmod)
+            modules.append(self.activations[i-1]())
+        #modules.append(nn.BatchNorm1d()) ? 
+        
+        self.values_net = nn.Sequential(*modules,        )
+
     def __init__(self, environment: RoadWorldGym, use_state=False, use_action=False, use_next_state=True, use_done=True,
                  activations = [nn.Sigmoid, nn.Tanh],
                  hid_sizes = [3,],
@@ -93,33 +125,19 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
         if self.use_done:
             combined_size += 1
 
-        
+        self.input_size = combined_size
        
         #self.mlp = networks.build_mlp(**full_build_mlp_kwargs)
             
-        modules = [
-        ]
         self.hid_sizes = deepcopy(hid_sizes)
-        self.hid_sizes.insert(0, combined_size)
+        self.hid_sizes.insert(0, self.input_size)
         self.final_activation = activations[-1]()
-        for i in range(1, len(activations)):
-            linmod = ConvexLinearModule(self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
-            
-            if activations[i-1] == nn.ReLU or nn.Identity:
-                state_dict = linmod.state_dict()
-                with th.no_grad():
-                    state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
-                    
-                    state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
-                linmod.load_state_dict(state_dict)
-                assert th.all(linmod.state_dict()['weight'] > 0)
-            modules.append(linmod)
-            modules.append(activations[i-1]())
-        #modules.append(nn.BatchNorm1d()) ? 
+        self.activations = activations
         
-        self.values_net = nn.Sequential(*modules,        )
+        self.reset_value_net()
+
         self.mode = mode
-        self.trained_profile_net = PositiveBoundedLinearModule(hid_sizes[-1],1, bias=False) # ?? 
+        self.reset_learning_profile()
         
         #th.tensor((0,0,0), requires_grad=True,device=self.parameters()[0].device)
         
@@ -140,16 +158,13 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
         print(self.values_net.parameters())"""
 
         if self.mode is None or self.mode == TrainingModes.VALUE_LEARNING:
-
+            self.values_net.requires_grad_(True)
+            self.trained_profile_net.requires_grad_(False)
             x = -self.values_net(features) 
-            #x = F.normalize(x, p=float('inf'), dim=0) 
-            #assert th.all(th.sum(x, dim=1))
-            #assert th.all(x < 0) #and th.all(th.sum(x, dim=1)==1)
             pt = th.tensor(profile, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
             x = F.linear(x, pt)
             x = self.final_activation(x) + self.reward_bias
-            """print(x, x.size())
-            exit(0)"""
+            
             return x
         elif self.mode == TrainingModes.PROFILE_LEARNING:
             self.values_net.requires_grad_(False)
@@ -164,14 +179,15 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
             x = self.final_activation(x) + self.reward_bias
             return x
         elif self.mode == TrainingModes.SIMULTANEOUS:
+            self.values_net.requires_grad_(True)
+            self.trained_profile_net.requires_grad_(True)
             x = -self.values_net(features)  
                 #x = F.normalize(x, p=float('inf'), dim=0) 
             x = self.trained_profile_net(x)
             x = self.final_activation(x) + self.reward_bias
             return x
-        else: 
-            print("WTF?")
-            print(self.mode)
+        else:
+            raise ValueError("Unkown training mode" + str(self.mode))
         
     def set_profile(self, profile: tuple):
         if self.cur_profile != profile:

@@ -50,8 +50,6 @@ train_p = f"{DATA_FOLDER}/cross_validation/train_CV%d_size%d.csv" % (cv, size)
 test_p = f"{DATA_FOLDER}/cross_validation/test_CV%d.csv" % cv
 node_p = f"{DATA_FOLDER}/node.txt"
 
-
-# %%
 """inialize road environment"""
 
 PROFILE = (1,0,0)
@@ -109,7 +107,6 @@ if __name__ == "__main__":
         use_done=False,
         hid_sizes=[3,],
         reward_bias=-0.0,
-        #partial(nn.Softplus, beta=1, threshold=5)
         activations=[nn.Identity, nn.Identity]
     )
     reward_net.set_profile(PROFILE)
@@ -124,12 +121,6 @@ if __name__ == "__main__":
 
     print("VI TIME: ", end_vi - start_vi)
 
-
-    #expert_policyAlgo_eco: PolicyAlgo = PolicyAlgo.from_policy_matrix(equivalent_pi_with_d, real_env = env_single)
-
-    #expert_demonstrations_eco = expert_policyAlgo_eco.sample_trajectories(stochastic=False, repeat_per_od=1, profile=PROFILE)
-
-
     expert_policyAlgo: SimplePolicy = SimplePolicy.from_policy_matrix(pi_with_d_per_profile, real_env = env_single)
 
     expert_demonstrations_all_profiles = expert_policyAlgo.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
@@ -137,7 +128,6 @@ if __name__ == "__main__":
     if __debug__:
         check_policy_gives_optimal_paths(env_single, expert_policyAlgo, profiles=EXAMPLE_PROFILES)
 
-    #assert len(expert_demonstrations_all_profiles) == 3*len(expert_demonstrations_eco)
     print("PATHS CHECKED WITH VI")
 
     #exit(0) # TODO: 
@@ -151,32 +141,6 @@ if __name__ == "__main__":
     print("EXPERT PATH 107 DEST", edge_path)
 
     env_single.render(caminos_by_value={'eco': [path,]}, file="me_expert_policy.png", show=False,show_edge_weights=False)
-
-
-    # ESTO ES VALUE ITERATION PURO CON LA IMPLEMENTACION MIA ANTIGUA NO DEDICADA A ESTO.
-    """EXPERT_FROM_FILE = False
-    vip = ValueIterationPolicy(env_single, score_calculator=SumScore())
-    vip.train(alpha=0.0001, t_max=200, profile=PROFILE)
-    path, edge_path = vip.sample_path(start=107, des = DEST, stochastic=False, profile=PROFILE,t_max=HORIZON)
-    print(edge_path)
-    env_single.render(caminos_by_value={'eco': [path,]}, file="test_mce_expert_vi.png", show=False,show_edge_weights=True)
-    """
-    # ROLLOUTS NO. Sample_trajectories y fuera.
-    #rollouts_custom = create_expert_trajectories(env_creator, from_df_expert_file_or_policy='expert_session_2.csv' if EXPERT_FROM_FILE else vip, profile=PROFILE, repeat_samples=1, only_edges=True)
-
-
-    # FUNCION LINEAL
-    """reward_net = reward_nets.BasicRewardNet(
-        env_single.observation_space,
-        env_single.action_space,
-        hid_sizes=[100,16,3],
-        activation=nn.Tanh,
-        use_action=False,
-        use_done=False,
-        use_next_state=False,
-    )"""
-
-
 
 
     st = time.time()
@@ -224,10 +188,6 @@ if __name__ == "__main__":
     path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=PROFILE,t_max=HORIZON)
 
     env_single.render(caminos_by_value={'eco': [path,]}, file="me_learned_paths.png", show=False,show_edge_weights=True)
-
-
-    #print(mce_irl.policy)
-    #print("PI", mce_irl.policy.pi)
 
     mce_irl.policy.set_profile(PROFILE)
     imitation_trajs = rollout.generate_trajectories(

@@ -132,7 +132,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         self.od_list_test = od_list_test if od_list_test is not None else env.od_list_int
 
 
-        self.destinations = list(set(od[1] for od in env.od_list_int)) # AQUI QUE??
+        self.destinations = list(set(od[1] for od in env.od_list_int))
         self.destinations_train = list(set(od[1] for od in self.od_list_train))
         self.destinations_test = list(set(od[1] for od in self.od_list_test))
 
@@ -160,7 +160,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         if training_profiles == 'auto':
             self.training_profiles = list(set(tuple(t.infos[0]['profile']) for t in self.expert_trajectories))
         else:
-            self.training_profiles = training_profiles
+            self.training_profiles = list(set(training_profiles))
         self.n_repeat_per_od_monte_carlo = 1 if use_expert_policy_oms_instead_of_monte_carlo else n_repeat_per_od_monte_carlo
         self.use_mce_om = use_expert_policy_oms_instead_of_monte_carlo
 
@@ -205,10 +205,10 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         #ones = np.ones((self.env.state_dim, self.env.action_dim))
         #uniform_pi = ones / self.env.action_dim
 
-        self.default_vi_policy = ValueIterationPolicy(self.env, score_calculator=SumScore()) # Starts with random policy
+        self.default_vi_policy = ValueIterationPolicy(self.env) # Starts with random policy
         #self.vi_policy.train(0.001, verbose=True, stochastic=True, custom_reward_function=lambda s,a,d: self.env.reward_matrix[self.env.netconfig[s][a]]) # alpha stands for error tolerance in value_iteration
         self.vi_policy_per_profile = {
-            pr: ValueIterationPolicy(self.env,score_calculator=SumScore()) for pr in self.training_profiles
+            pr: ValueIterationPolicy(self.env) for pr in self.training_profiles
         }
         self._policy = TabularPolicyPerProfile(
             state_space=self.env.state_space,
@@ -472,6 +472,168 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         return predicted_r_np
     
+    def _train_step_ponderated_profiles(self, obs_mat: th.Tensor, dones: th.Tensor = None, od_train_per_profile: dict = None, profile_ponderation: list = None, loss_weighting=1.0) -> Tuple[np.ndarray, np.ndarray]:
+        
+        th.autograd.set_detect_anomaly(False)
+        
+        learned_policy_profile  = self.reward_net.get_learned_profile()
+        
+        predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
+        
+        if self.use_mce_om:
+            pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile) 
+    
+            _, visitations = self.mce_occupancy_measures(
+                reward=predicted_r_np,
+                pi=pi,
+                profile=learned_policy_profile
+            )
+            sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
+            sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
+            
+        else:
+            if self.use_dijkstra:
+                sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, profiles=[learned_policy_profile, ], 
+                                                custom_cost=lambda state_des, profile: (-predicted_r_np[state_des[0], state_des[1]]))
+                
+            else:
+                pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile, 
+                                           #od_list=self.od_list_train
+                                           )
+                sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
+                
+            sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
+            
+            visitations = get_demo_oms_from_trajectories(sampled_trajs, state_dim=self.env.state_dim)
+            
+            
+        # Forward/back/step (grads are zeroed at the top).
+        # weights_th(s) = \pi(s) - D(s)
+
+        self.optimizer.zero_grad()  
+        grad_norm = 0
+        
+        loss_total: th.Tensor = None
+        mntensor_train_per_pr = dict()
+        mntensor_test_per_pr = dict()
+        rewards_per_pr = dict()
+        
+        for chosen_profile in BASIC_PROFILES:
+            if len(od_train_per_profile[chosen_profile]) < 1:
+                continue
+
+            if self.training_mode != TrainingModes.PROFILE_LEARNING:
+                learned_policy_profile = chosen_profile
+                self.reward_net.set_profile(learned_policy_profile)
+
+            assert chosen_profile in self.expert_trajectories_per_pr.keys()
+
+            sampled_trajs_train = []
+            sampled_trajs_test = [] 
+
+            rewards_per_pr[chosen_profile] = predicted_r_np
+            for t in sampled_trajs:
+                if (t.infos[0]['orig'], t.infos[0]['des']) in od_train_per_profile[chosen_profile]:
+                    sampled_trajs_train.append(t)
+                    #od_profiles_of_trajs_train.append((t.infos[0]['orig'], t.infos[0]['des']))
+                if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test:
+                    sampled_trajs_test.append(t)
+
+            
+            chosen_profile_expert_trajs_train = [t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile) and (t.infos[0]['orig'], t.infos[0]['des']) in od_train_per_profile[chosen_profile]]
+            od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
+            #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
+            #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
+
+
+            visitation_count_diffs = th.as_tensor(
+                np.asarray([
+                visitations[(odpr[0], learned_policy_profile)] - self.demo_state_om_per_profile[odpr] for odpr in od_profiles_of_trajs_train]),
+                    dtype=self.reward_net.dtype,
+                    device=self.reward_net.device,
+                )
+            fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
+                                                                    sampled_traj_profile_to_expert_traj_profile_mapping=
+                                                                    {learned_policy_profile: chosen_profile})
+            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in od_train_per_profile[chosen_profile]]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            mntensor_train_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_train)*profile_ponderation[chosen_profile]).detach().numpy()
+
+            fd_test, fd_normed_test = self.feature_differences(
+                sampled_trajs_test, obs_mat, per_state=False, 
+                use_info_real_costs=True, 
+                sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
+            
+            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+            mntensor_test_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_test)*profile_ponderation[chosen_profile]).detach().numpy()
+
+            obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
+            done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
+            
+            rewards =  self.reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
+            
+            assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
+            #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
+            assert th.all(rewards < 0.0)
+            #print(mntensor*rewards, (mntensor*rewards).shape)
+            
+            if self.fd_lambda > 0.0:
+                visited_states_for_each_od = (
+                        th.as_tensor(
+                            np.asarray([visitations[(odpr[0], learned_policy_profile)] for odpr in od_profiles_of_trajs_train]),
+                            device=self.reward_net.device, dtype=self.reward_net.dtype) > 0)
+            
+                fd_on_visited_states = th.mul(
+                        visited_states_for_each_od, 
+                        fd_normed_tensor_train.reshape(-1,1)
+                        )
+                losses = th.mul(
+                        visitation_count_diffs + self.fd_lambda/(2*len(chosen_profile_expert_trajs_train))*fd_on_visited_states,
+                    #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
+                    rewards) 
+            else:
+                losses = th.mul(
+                        visitation_count_diffs,
+                    #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
+                    rewards)
+            #sum_of_all_lengths = np.sum([len(t) for t in chosen_profile_trajs_train])
+            #weights = th.tensor([len(t)/sum_of_all_lengths for t in self.expert_trajectories], dtype=losses.dtype, requires_grad=False)
+            
+            #losses = th.matmul(fd_tensor, losses)
+            # This alost works but vanishes? loss = th.sum(losses)/len(chosen_profile_trajs_train)
+
+            
+
+            with th.no_grad():
+                wheres = th.where(losses != 0.0)
+            if wheres[0].shape[0] <= 1:
+                loss = th.sum(losses)
+            else:
+                #loss = th.sum(losses)/len(chosen_profile_expert_trajs_train)
+                loss = th.sum(losses[wheres])/len(set(wheres[0].tolist()))#/len([odpr for odpr in od_profiles_of_trajs_train if losses[:,odpr[0][1]]]) #/len([t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile)])
+            if loss_total is None:
+                loss_total = loss*profile_ponderation[chosen_profile]
+            else:
+                loss_total += loss*profile_ponderation[chosen_profile]
+
+        loss_total.backward(retain_graph=False)
+        self.optimizer.step()
+            
+        grads = []
+        for p in self.reward_net.parameters():
+            assert p.grad is not None  # for type checker
+            grads.append(p.grad)
+            
+            print("GRAD: ", p.names, p.grad)
+        print("REAL LOSS:", loss)
+        print("REWARD NORM:", rewards.norm())
+        grad_norm += util.tensor_iter_norm(grads).item()
+        
+        grad_norm_per_pr = collections.defaultdict(lambda: grad_norm)
+
+        return rewards_per_pr, visitations, grad_norm_per_pr, mntensor_train_per_pr, mntensor_test_per_pr, learned_policy_profile
+
     def _train_step_agg(self, obs_mat: th.Tensor, dones: th.Tensor = None, chosen_profile=(1,0,0), loss_weighting=1.0) -> Tuple[np.ndarray, np.ndarray]:
         
         # get reward predicted for each state by current model, & compute
@@ -527,7 +689,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 ) 
                 for d in  self.destinations_train]).reshape((len(self.destinations_train),)))
                 #print(predicted_r[0:10])
-                    #print("wtf", loss)
                     # This gives the required gradient:
                     #   E_\pi[\nabla r_\theta(S)] - E_D[\nabla r_\theta(S)].
         else:
@@ -624,8 +785,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             grads.append(p.grad)
             
             print("GRAD: ", p.names, p.grad)
-        print("REAL LOSS???", loss)
-        print("REWARD NORM", rewards.norm())
+        print("REAL LOSS:", loss)
+        print("REWARD NORM:", rewards.norm())
         grad_norm += util.tensor_iter_norm(grads).item()
 
         predicted_r_np_all_states = predicted_r_np
@@ -650,12 +811,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             remaining_elements -= len(group)
             prev_pos = prev_pos + len(group)
 
-            groups[pure_profile] = group
+            groups[pure_profile] = [tuple(od) for od in group]
 
         
         return groups
     
-    def train(self, max_iter: int = 1000,render_partial_plots=True, training_mode = None) -> np.ndarray:
+    def train(self, max_iter: int = 1000,render_partial_plots=True, training_mode = None, training_set_mode = None) -> np.ndarray:
         """Runs MCE IRL.
 
         Args:
@@ -668,7 +829,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         """
         if training_mode is not None:
             self.training_mode = training_mode
-        
+        if training_set_mode is not None:
+            self.training_set_mode = training_set_mode
+
         self.reward_net.set_mode(self.training_mode)
 
         # use the same device and dtype as the rmodel parameters
@@ -679,33 +842,37 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             dtype=self.reward_net.dtype,
             device=self.reward_net.device,
         )
-        #assert th.all(torch_obs_mat > 0)
-        # TODO WTF POR QUE HAY COSTES A 0????????
+        
         dones = th.as_tensor(self.env.done_matrix,dtype=self.reward_net.dtype)
         assert self.demo_state_om is not None or self.demo_state_om_per_profile is not None
         #assert self.demo_state_om.shape == (len(obs_mat),)
         assert self.demo_state_om_per_profile[(self.od_list_train[0], self.env.last_profile)].shape == (len(obs_mat),)
+        
+        self.eval_profiles = self.training_profiles if self.training_set_mode != TrainingSetModes.PROFILED_SOCIETY else BASIC_PROFILES
+        
 
-        mean_absolute_difference_in_visitation_counts_per_profile_test = {pr: [] for pr in self.training_profiles}
-        mean_absolute_difference_in_visitation_counts_per_profile_train = {pr: [] for pr in self.training_profiles}
+        mean_absolute_difference_in_visitation_counts_per_profile_test = {pr: [] for pr in self.eval_profiles}
+        mean_absolute_difference_in_visitation_counts_per_profile_train = {pr: [] for pr in self.eval_profiles}
 
-        grad_norms_per_iteration_per_profile = {pr: [] for pr in self.training_profiles}
+        grad_norms_per_iteration_per_profile = {pr: [] for pr in self.eval_profiles}
 
-        overlapping_proportions_per_iteration_per_profile_test = {pr: [] for pr in self.training_profiles}
-        overlapping_proportions_per_iteration_per_profile_train = {pr: [] for pr in self.training_profiles}
+        overlapping_proportions_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
+        overlapping_proportions_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
 
-        sorted_overlap_indices_test = {pr: [] for pr in self.training_profiles}
-        sorted_overlap_indices_train = {pr: [] for pr in self.training_profiles}
+        sorted_overlap_indices_test = {pr: [] for pr in self.eval_profiles}
+        sorted_overlap_indices_train = {pr: [] for pr in self.eval_profiles}
 
-        pi_per_profile  = {pr: None for pr in self.training_profiles}
-        feature_expectation_differences_per_iteration_per_profile_test = {pr: [] for pr in self.training_profiles}
-        feature_expectation_differences_per_iteration_per_profile_train = {pr: [] for pr in self.training_profiles}
+        pi_per_profile  = {pr: None for pr in self.eval_profiles}
+        feature_expectation_differences_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
+        feature_expectation_differences_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
+
         with networks.training(self.reward_net):
             # switch to training mode (affects dropout, normalization)
             #current_batch_of_destinations = self.rng.permutation(self.destinations)
             for t in range(max_iter):
+                skip_pr = collections.defaultdict(lambda: False) # skip evaluating with a profile not being trained on (PROFILED_SOCIETY)
                 if t%5 == 0 and self.stochastic_expert:
-                    sampled_expert_trajectories = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=self.training_profiles, od_list=self.od_list_train)
+                    sampled_expert_trajectories = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=BASIC_PROFILES if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY else self.training_profiles, od_list=self.od_list_train)
                     self._set_demo_oms_from_trajectories(sampled_expert_trajectories)
 
                 predicted_rewards_per_profile = dict()
@@ -715,29 +882,44 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
                     
                     od_train_per_basic_profile = self.divide_od_list_as_per_profile(self.od_list_train, self.training_profiles[t%len(self.training_profiles)])
+
                     profile_proportions = np.asarray(self.training_profiles[t%len(self.training_profiles)]) / np.sum(self.training_profiles[t%len(self.training_profiles)])
+                    for pr, ods in od_train_per_basic_profile.items():
+                        skip_pr[pr] = len(ods) < 1 # If no examples for a certain profile, we do not eval and train  with it.
                 else:
                     od_train_per_basic_profile = {pr: self.od_list_train for pr in self.training_profiles}
                 
-                for pr in self.rng.permutation(self.training_profiles if self.training_set_mode == TrainingSetModes.COST_MODEL_SOCIETY else BASIC_PROFILES , axis=0):
-                    pr = tuple(pr)
-                    print("Train with ", pr)
+                grad_norm_per_pr = dict()
+                fd_train_per_pr = dict()
+                fd_test_per_pr = dict()
+                predicted_rewards_per_profile = dict()
+                if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
+                    predicted_rewards_per_profile, visitations, grad_norm_per_pr, fd_train_per_pr, fd_test_per_pr, learned_policy_profile = self._train_step_ponderated_profiles(
+                        torch_obs_mat, dones, od_train_per_profile=od_train_per_basic_profile, profile_ponderation={pr: profile_proportions[BASIC_PROFILES.index(pr)] for pr in BASIC_PROFILES})
+                else:
                     
-                    self.od_list_train = od_train_per_basic_profile[pr]
-                    if len(self.od_list_train) > 0:
+                    for pr in self.rng.permutation(self.eval_profiles , axis=0):
+                        pr = tuple(pr)
+                        if skip_pr[pr]:
+                            print("NO DATA FOR PROFILE: ", pr, " skipping...")
+                            continue
+                        print("Train with ", pr)
+                        
+                        self.od_list_train = od_train_per_basic_profile[pr]
                         predicted_r_np_all_od, visitations, grad_norm, fd_train, fd_test, learned_policy_profile = self._train_step_agg(
-                                torch_obs_mat,
-                                dones=dones, chosen_profile=pr, loss_weighting=1.0 if self.training_set_mode == TrainingSetModes.COST_MODEL_SOCIETY else profile_proportions[BASIC_PROFILES.index(pr)])
+                                        torch_obs_mat,
+                                        dones=dones, chosen_profile=pr, loss_weighting=1.0 if self.training_set_mode == TrainingSetModes.COST_MODEL_SOCIETY else profile_proportions[BASIC_PROFILES.index(pr)])
                         self.od_list_train = deepcopy(original_od_train)
-                    else:
-                        print("NO DATA FOR PROFILE: ", pr, " skipping...")
-                        self.od_list_train = deepcopy(original_od_train)
-                        continue
-                    
+                        grad_norm_per_pr[pr] = grad_norm
+                        fd_train_per_pr[pr] = fd_train
+                        fd_test_per_pr[pr] = fd_test
+                        predicted_rewards_per_profile[pr] = predicted_r_np_all_od
+                            
+                for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]:
                     #di+=1
                     # these are just for termination conditions & debug logging
                     # TRAIN
-                    feature_expectation_differences_per_iteration_per_profile_train[pr].append(fd_train)
+                    feature_expectation_differences_per_iteration_per_profile_train[pr].append(fd_train_per_pr[pr])
                     
                     difference_in_visitation_counts_train = np.array([self.demo_state_om_per_profile[(od, pr)] - visitations[(od,learned_policy_profile)] for od in self.od_list_train])
                     absolute_difference_in_visitation_counts_train = np.abs(difference_in_visitation_counts_train)
@@ -747,11 +929,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     mean_absolute_difference_in_visitation_counts_train = np.mean(absolute_difference_in_visitation_counts_per_od_train)
 
-                    grad_norms_per_iteration_per_profile[pr].append(grad_norm)
+                    grad_norms_per_iteration_per_profile[pr].append(grad_norm_per_pr[pr])
                     mean_absolute_difference_in_visitation_counts_per_profile_train[pr].append(mean_absolute_difference_in_visitation_counts_train)
                     
                     # TEST 
-                    feature_expectation_differences_per_iteration_per_profile_test[pr].append(fd_test)
+                    feature_expectation_differences_per_iteration_per_profile_test[pr].append(fd_test_per_pr[pr])
                     
                     difference_in_visitation_counts_test = np.array([self.demo_state_om_per_profile[(od, pr)] - visitations[(od,learned_policy_profile)] for od in self.od_list_test])
                     absolute_difference_in_visitation_counts_test = np.abs(difference_in_visitation_counts_test)
@@ -760,25 +942,15 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     mean_absolute_difference_in_visitation_counts_test = np.mean(absolute_difference_in_visitation_counts_per_od_test)
 
-                    grad_norms_per_iteration_per_profile[pr].append(grad_norm)
                     mean_absolute_difference_in_visitation_counts_per_profile_test[pr].append(mean_absolute_difference_in_visitation_counts_test)
-                    
-                    
-                    #mean_absolute_difference_in_visitation_counts_per_profile_test[pr].append(mean_absolute_difference_in_visitation_counts_test)
-                    
-                    #mean_absolute_difference_in_visitation_counts_index[pr] = np.unravel_index(np.argmax(absolute_delta, axis=None), absolute_delta.shape)
-                    #print(absolute_delta.shape, mean_absolute_difference_in_visitation_counts_index)
-                    #print(absolute_delta[mean_absolute_difference_in_visitation_counts_index])
-
-                    predicted_rewards_per_profile[pr] = predicted_r_np_all_od
                 
                 if self.use_dijkstra:
                     
-                    sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, self.training_profiles, custom_cost=lambda state_des, 
+                    sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, [prs for prs in self.eval_profiles if not skip_pr[prs]], custom_cost=lambda state_des, 
                                                                              pr: (-predicted_rewards_per_profile[pr][state_des[0], state_des[1]]))
                 else:
                     
-                    for pr in self.training_profiles:
+                    for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]:
                         pi_per_profile[pr] = self.mce_partition_fh(
                                                 reward_matrix=predicted_r_np_all_od,
                                                 profile=pr,
@@ -788,18 +960,18 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi_per_profile, real_env=self.env)
                 
                 
-                sampled_trajs = sampler.sample_trajectories(stochastic=False, repeat_per_od=1, with_profiles=self.training_profiles, od_list=self.env.od_list_int)
+                sampled_trajs = sampler.sample_trajectories(stochastic=False, repeat_per_od=1, with_profiles=[prs for prs in self.eval_profiles if not skip_pr[prs]], od_list=self.env.od_list_int)
                 #sampled_trajs_test = sampler.sample_trajectories(stochastic=False, repeat_per_od=1, profile=self.sampling_profiles, od_list=self.od_list_train)
                 
 
                 
-                overlapping_proportion_test = {pr: 0 for pr in self.training_profiles}
-                overlap_sorted_test = {pr: [] for pr in self.training_profiles}
+                overlapping_proportion_test = {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                overlap_sorted_test = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
 
-                overlapping_proportion_train = {pr: 0 for pr in self.training_profiles}
-                overlap_sorted_train = {pr: [] for pr in self.training_profiles}
+                overlapping_proportion_train = {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                overlap_sorted_train = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
 
-                for pr in self.training_profiles:
+                for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]:
                     overlap_per_pr_test = []
                     total_possible_overlaps_per_pr_test = 0
 
@@ -894,9 +1066,10 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     overlapping_proportions_per_iteration_per_profile_train[pr].append(overlapping_proportion_train[pr])
                     
 
-                
-                termination_condition_met = (max(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1] for pr in self.training_profiles) <= self.mean_vc_diff_eps or max(grad_norms_per_iteration_per_profile[pr][-1] for pr in self.training_profiles) <= self.grad_l2_eps) and self.overlaping_percentage <= min(overlapping_proportion_train[pr] for pr in self.training_profiles)
-                
+                if self.training_set_mode != TrainingSetModes.PROFILED_SOCIETY:
+                    termination_condition_met = (max(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.mean_vc_diff_eps or max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps) and self.overlaping_percentage <= min(overlapping_proportion_train[pr] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]])
+                else:
+                    termination_condition_met = max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps and sum(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]*profile_proportions[pr] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.mean_vc_diff_eps
                 if (self.log_interval is not None and 0 == (t % self.log_interval)) or termination_condition_met:
                     print("Logging")
                     params = self.reward_net.parameters()
@@ -904,15 +1077,19 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     
                     self.logger.record("iteration", t)
-                    self.logger.record("mean_absolute_difference_in_visitation_counts", mean_absolute_difference_in_visitation_counts_train)
+                    self.logger.record("max mean_absolute_difference_in_visitation_counts", max(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]))
                     self.logger.record("weight_norm", weight_norm)
-                    self.logger.record("grad_norm", grad_norm)
+                    self.logger.record("max grad_norm", max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]))
                     #self.logger.record("Linf_delta found in OD, state: ", str((np.asarray(self.env.od_list_int)[mean_absolute_difference_in_visitation_counts_index[pr][0]], mean_absolute_difference_in_visitation_counts_index[pr][1])))
-                    self.logger.dump(t)
+                    
                     print("PARAMS:", list(self.reward_net.parameters()))
                     print("Value matrix: ", self.reward_net.value_matrix())
                     if self.training_mode==TrainingModes.PROFILE_LEARNING or TrainingModes.SIMULTANEOUS:
-                        print("Learned Profile: ", self.reward_net.get_learned_profile())
+                        print("Previous Profile: ", [f"{p:0.2f}" for p in learned_policy_profile])
+                        print("New Learned Profile: ", [f"{p:0.2f}" for p in self.reward_net.get_learned_profile()])
+                        self.logger.record("Previous Profile: ", learned_policy_profile)
+                        self.logger.record("New Learned Profile: ", self.reward_net.get_learned_profile())
+                    self.logger.dump(t)
 
                     #sorted_state_indices = np.argsort(max_delta_per_state_train)
                     #print(absolute_delta[sorted_indices])
@@ -945,11 +1122,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     print("FIGURE TEST: ")
                     plt.figure(figsize=[18, 12])
                     #print(mean_absolute_difference_in_visitation_counts_per_profile)
-                    plt.subplot(2, max(3,len(self.training_profiles)), 1)
+                    plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 1)
                     plt.title(f"Average trajectory overlap with profiles")
                     plt.xlabel("Training Iteration")
                     plt.ylabel("Average trajectory overlap proportion")
-                    for _, pr in enumerate(self.training_profiles):
+                    for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #plt.plot(mean_absolute_difference_in_visitation_counts_per_profile[pr], color=mean_absolute_difference_in_visitation_counts_per_profile_colors[pi], label='Maximum difference in visitation counts')
                         #print(overlapping_proportions_per_iteration_per_profile_test[pr])
                         plt.plot(overlapping_proportions_per_iteration_per_profile_test[pr],
@@ -962,15 +1139,15 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     if False:
                         plt.subplot(2, LEN(SELF.TRAINING_PROFILES), 2)
                         plt.title(f"Grad norms per iteration")
-                        for _, pr in enumerate(self.training_profiles):
+                        for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                             plt.plot(grad_norms_per_iteration_per_profile[pr], color=grad_norm_colors.get(pr,'black'))
                         plt.grid()
                     else:
-                        plt.subplot(2, max(3,len(self.training_profiles)), 2)
+                        plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 2)
                         plt.title(f"Mean absolute difference in visitation counts by profile")
                         plt.xlabel("Training Iteration")
                         plt.ylabel("Mean absolute difference in visitation counts")
-                        for _, pr in enumerate(self.training_profiles):
+                        for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                             #print(mean_absolute_difference_in_visitation_counts_per_profile_test[pr])
                             plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_test[pr], 
                                      color=mean_absolute_difference_in_visitation_counts_per_profile_colors.get(pr,'black'), 
@@ -978,11 +1155,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.legend()
                         plt.grid()
 
-                    plt.subplot(2, max(3,len(self.training_profiles)), 3)
+                    plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 3)
                     plt.title(f"Expected trajectory profiled cost difference per iteration")
                     plt.xlabel("Training Iteration")
                     plt.ylabel("Expected trajectory profiled cost difference")
-                    for _, pr in enumerate(self.training_profiles):
+                    for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #print(feature_expectation_differences_per_iteration_per_profile_test[pr])
 
                         plt.plot(feature_expectation_differences_per_iteration_per_profile_test[pr], 
@@ -1003,8 +1180,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.legend()
                         plt.grid()
                     
-                    for pindex, pr in enumerate(self.training_profiles):
-                        plt.subplot(2, max(3,len(self.training_profiles)), pindex+4)
+                    for pindex, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
+                        plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), pindex+4)
                         plt.bar(range(len(overlap_sorted_test[pr])), overlap_sorted_test[pr], color=overlapping_colors.get(pr,'black'))
                         plt.xlabel('OD pairs')
                         plt.ylabel('Best overlap proportion with an expert trajectory')
@@ -1027,12 +1204,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     print("FIGURE TRAIN: ")
                     plt.figure(figsize=[18, 12])
                     #print(mean_absolute_difference_in_visitation_counts_per_profile)
-                    plt.subplot(2, max(3,len(self.training_profiles)), 1)
+                    plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 1)
                     plt.title(f"Average trajectory overlap per profile")
                     plt.xlabel("Training Iteration")
                     plt.ylabel("Average trajectory overlap proportion with expert")
                     plt.ylim(top=1.1)
-                    for _, pr in enumerate(self.training_profiles):
+                    for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #plt.plot(mean_absolute_difference_in_visitation_counts_per_profile[pr], color=mean_absolute_difference_in_visitation_counts_per_profile_colors[pi], label='Maximum difference in visitation counts')
                         #print(overlapping_proportions_per_iteration_per_profile_train[pr])
                         plt.plot(overlapping_proportions_per_iteration_per_profile_train[pr],
@@ -1043,17 +1220,17 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     plt.grid()
 
                     if False:
-                        plt.subplot(2, max(3,len(self.training_profiles)), 2)
+                        plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 2)
                         plt.title(f"Grad norms per iteration")
-                        for _, pr in enumerate(self.training_profiles):
+                        for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                             plt.plot(grad_norms_per_iteration_per_profile[pr], color=grad_norm_colors.get(pr,'black'))
                         plt.grid()
                     else:
-                        plt.subplot(2, max(3,len(self.training_profiles)), 2)
+                        plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 2)
                         plt.title(f"Expected visitation count difference per profile")
                         plt.xlabel("Training Iteration")
                         plt.ylabel("Expected absolute difference in visitation counts")
-                        for _, pr in enumerate(self.training_profiles):
+                        for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                             #print(mean_absolute_difference_in_visitation_counts_per_profile_train[pr])
                             plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_train[pr], 
                                      color=mean_absolute_difference_in_visitation_counts_per_profile_colors.get(pr,'black'), 
@@ -1061,11 +1238,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.legend()
                         plt.grid()
 
-                    plt.subplot(2, max(3,len(self.training_profiles)), 3)
+                    plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 3)
                     plt.title(f"Expected profiled cost difference per profile")
                     plt.xlabel("Training Iteration")
                     plt.ylabel("Expected trajectory profiled cost difference")
-                    for _, pr in enumerate(self.training_profiles):
+                    for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #print(feature_expectation_differences_per_iteration_per_profile_train[pr])
 
                         plt.plot(feature_expectation_differences_per_iteration_per_profile_train[pr], 
@@ -1086,8 +1263,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.legend()
                         plt.grid()
                     
-                    for pindex, pr in enumerate(self.training_profiles):
-                        plt.subplot(2, max(3,len(self.training_profiles)), pindex+4)
+                    for pindex, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
+                        plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), pindex+4)
                         plt.bar(range(len(overlap_sorted_train[pr])), overlap_sorted_train[pr], color=overlapping_colors.get(pr,'black'))
                         plt.xlabel('OD pairs')
                         plt.ylim(top=1.1)
@@ -1108,7 +1285,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     self._policy.set_pi_or_policy(sampler)
 
-                    for pr in self.training_profiles:
+                    for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]:
                         self._policy.set_profile(pr)
 
                         if render_partial_plots: # RENDER WORST OVERLAP

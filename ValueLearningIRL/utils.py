@@ -178,7 +178,7 @@ def create_expert_trajectories(env_creator, from_df_expert_file_or_policy='exper
         
 
         rollouts = imitation.data.types.Transitions(
-            obs=np.array(env.states_to_observation(torch.tensor(np.array(states, dtype=np.int32)))), # ???
+            obs=np.array(env.states_to_observation(torch.tensor(np.array(states, dtype=np.int32)))), 
             acts=np.array(actions, np.int32), 
             infos=np.array(infos), 
             next_obs=np.array(env.states_to_observation(torch.tensor(np.array(next_states, dtype=np.int32)))), 
