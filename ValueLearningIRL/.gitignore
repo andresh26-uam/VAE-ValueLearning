@@ -1,0 +1,6 @@
+_[a-z]*.py
+_[a-z]*
+__pycache__*
+runs/
+checkpoints/
+irlvenv/
