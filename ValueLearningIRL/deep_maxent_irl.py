@@ -118,29 +118,11 @@ if __name__ == "__main__":
 
     start_vi = time.time()
     pi_with_d_per_profile = {
-        pr: ValueIterationPolicy(env_single,score_calculator=SumScore()).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
+        pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
     }
     end_vi = time.time()
 
     print("VI TIME: ", end_vi - start_vi)
-
-    if False:
-        start_mce = time.time()
-        _, _, pi = mce_partition_fh(env_single, reward=env_single.reward_matrix, verbose=True)
-
-        print("MCE TIME: ", time.time() - start_mce)
-
-        equivalent_pi = equivalent_pi_with_d[413,:,:]
-
-        print(list(equivalent_pi[0:5] - pi[0:5]))
-        dif = equivalent_pi - pi 
-        w = np.where(dif != 0)
-        print(w)
-        print(dif[w].tolist())
-        # TODO WTF por que mce partition tarda muchisimo mas que value iteration?????
-        assert np.allclose(equivalent_pi - pi, 0.0)
-
-    print("mce partition done")
 
 
     #expert_policyAlgo_eco: PolicyAlgo = PolicyAlgo.from_policy_matrix(equivalent_pi_with_d, real_env = env_single)
@@ -158,14 +140,6 @@ if __name__ == "__main__":
     #assert len(expert_demonstrations_all_profiles) == 3*len(expert_demonstrations_eco)
     print("PATHS CHECKED WITH VI")
 
-    #_, precise_stochastic_expert_om = mce_occupancy_measures(env_single, pi=pi, expert_demonstrations=expert_demonstrations)
-    #print("OC done")
-    #print(precise_stochastic_expert_om)
-
-    #print(om[(107,DEST)]-demo_om[(107, DEST)])
-    #assert np.allclose(np.abs(om[(107,DEST)]-demo_om[(107, DEST)]), 1e-2)
-
-    #print(env_single.reward_matrix)
     #exit(0) # TODO: 
     # OPCION 1: Probar mce_occupancy measures con experto estocástico de VI. USar mce_occupancy para las policies internas.
     # OPCION 1.2: Probar mce_occupancy measures con experto estocástico sampleado de get_demo_oms_from_trajectories
@@ -176,7 +150,7 @@ if __name__ == "__main__":
     path, edge_path = expert_policyAlgo.sample_path(start=107, des = DEST, stochastic=False, profile=EXAMPLE_PROFILES[0],t_max=1000)
     print("EXPERT PATH 107 DEST", edge_path)
 
-    env_single.render(caminos_by_value={'eco': [path,]}, file="test_mce_expert_partition.png", show=False,show_edge_weights=False)
+    env_single.render(caminos_by_value={'eco': [path,]}, file="me_expert_policy.png", show=False,show_edge_weights=False)
 
 
     # ESTO ES VALUE ITERATION PURO CON LA IMPLEMENTACION MIA ANTIGUA NO DEDICADA A ESTO.

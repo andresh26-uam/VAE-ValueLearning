@@ -184,21 +184,6 @@ if __name__ == "__main__":
 
     # LEARNING.
 
-    # Opcion 2 (perfect)
-
-    mce_irl.training_profiles = [NEW_PROFILE, ]
-    mce_irl.training_set_mode = TrainingSetModes.COST_MODEL_SOCIETY
-    mce_irl.train(1000, training_mode = TrainingModes.PROFILE_LEARNING)
-    learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
-    print(learned_profile, learned_bias)
-    mce_irl.adapt_policy_to_profile(learned_profile)
-    sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
-    path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=learned_profile,t_max=HORIZON)
-    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
-    print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
-    print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
-
-    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
     
     # Opcion 1. 70% with 1,0,0, 30% with 0,1,0. Weighting the loss of the 1,0,0 by 0.7 with 70% ODs and 0,1,0 by 0.3 with remaining 30% ODs.
     mce_irl.training_profiles = [NEW_PROFILE, ]
@@ -216,6 +201,22 @@ if __name__ == "__main__":
     df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
     
 
+    # Opcion 2 (perfect)
+
+    mce_irl.training_profiles = [NEW_PROFILE, ]
+    mce_irl.training_set_mode = TrainingSetModes.COST_MODEL_SOCIETY
+    mce_irl.train(1000, training_mode = TrainingModes.PROFILE_LEARNING)
+    learned_profile, learned_bias = mce_irl.reward_net.get_learned_profile(with_bias=True)
+    print(learned_profile, learned_bias)
+    mce_irl.adapt_policy_to_profile(learned_profile)
+    sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
+    path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=learned_profile,t_max=HORIZON)
+    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
+    print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
+    print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
+
+    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
+    
 
 
 

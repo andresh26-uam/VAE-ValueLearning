@@ -434,8 +434,8 @@ class SimplePolicy(object):
 RESET_VAL = -1.0
 
 class ValueIterationPolicy(SimplePolicy):
-    def __init__(self, env: RoadWorldGym, score_calculator: Score):
-        super().__init__(env, score_calculator)
+    def __init__(self, env: RoadWorldGym):
+        super().__init__(env)
         self.values = defaultdict(lambda: np.zeros(1))
         self.all_states = []
         self.policy = defaultdict(lambda: np.zeros(1))

@@ -635,7 +635,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     def divide_od_list_as_per_profile(self, od_list, pr):
         total_elements = len(od_list)
         
-        groups = [[]]*len(pr)
+        groups = dict()
         prev_pos = 0
         shuffled_od = np.random.permutation(od_list)
         remaining_elements = total_elements
@@ -652,7 +652,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
             groups[pure_profile] = group
 
-        
         
         return groups
     
@@ -674,7 +673,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         # use the same device and dtype as the rmodel parameters
         obs_mat = self.env.observation_matrix
-        #print(obs_mat[np.where(obs_mat<=0)])
+        
         torch_obs_mat = th.as_tensor(
             obs_mat,
             dtype=self.reward_net.dtype,
@@ -715,7 +714,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                 if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
                     
-                    #print("TRAIN STEP WITH: ", current_batch_of_destinations[di])
                     od_train_per_basic_profile = self.divide_od_list_as_per_profile(self.od_list_train, self.training_profiles[t%len(self.training_profiles)])
                     profile_proportions = np.asarray(self.training_profiles[t%len(self.training_profiles)]) / np.sum(self.training_profiles[t%len(self.training_profiles)])
                 else:
@@ -726,12 +724,15 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     print("Train with ", pr)
                     
                     self.od_list_train = od_train_per_basic_profile[pr]
-                    predicted_r_np_all_od, visitations, grad_norm, fd_train, fd_test, learned_policy_profile = self._train_step_agg(
-                            torch_obs_mat,
-                            dones=dones, chosen_profile=pr, loss_weighting=1.0 if self.training_set_mode == TrainingSetModes.COST_MODEL_SOCIETY else profile_proportions[BASIC_PROFILES.index(pr)])
-                    self.od_list_train = deepcopy(original_od_train)
-                    # hOLY fucking shit TODO probar opcion 1 a ver que pasa (en cada t, random 70 ods para 1 perfil, 30 para el otro y multiplicar 0.7 el loss y 0.3 el loss en cada caso. Se plotean los 1,0,0, 0,1,0 y 0,0,1 en teoria)
-                    # TODO: Problema: checkear termination condition ahora (?)
+                    if len(self.od_list_train) > 0:
+                        predicted_r_np_all_od, visitations, grad_norm, fd_train, fd_test, learned_policy_profile = self._train_step_agg(
+                                torch_obs_mat,
+                                dones=dones, chosen_profile=pr, loss_weighting=1.0 if self.training_set_mode == TrainingSetModes.COST_MODEL_SOCIETY else profile_proportions[BASIC_PROFILES.index(pr)])
+                        self.od_list_train = deepcopy(original_od_train)
+                    else:
+                        print("NO DATA FOR PROFILE: ", pr, " skipping...")
+                        self.od_list_train = deepcopy(original_od_train)
+                        continue
                     
                     #di+=1
                     # these are just for termination conditions & debug logging
@@ -770,8 +771,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     #print(absolute_delta[mean_absolute_difference_in_visitation_counts_index])
 
                     predicted_rewards_per_profile[pr] = predicted_r_np_all_od
-                    
-                print("samping expert")
+                
                 if self.use_dijkstra:
                     
                     sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, self.training_profiles, custom_cost=lambda state_des, 
@@ -894,10 +894,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     overlapping_proportions_per_iteration_per_profile_train[pr].append(overlapping_proportion_train[pr])
                     
 
-                print("Logging")
+                
                 termination_condition_met = (max(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1] for pr in self.training_profiles) <= self.mean_vc_diff_eps or max(grad_norms_per_iteration_per_profile[pr][-1] for pr in self.training_profiles) <= self.grad_l2_eps) and self.overlaping_percentage <= min(overlapping_proportion_train[pr] for pr in self.training_profiles)
                 
                 if (self.log_interval is not None and 0 == (t % self.log_interval)) or termination_condition_met:
+                    print("Logging")
                     params = self.reward_net.parameters()
                     weight_norm = util.tensor_iter_norm(params).item()
 
@@ -909,6 +910,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     #self.logger.record("Linf_delta found in OD, state: ", str((np.asarray(self.env.od_list_int)[mean_absolute_difference_in_visitation_counts_index[pr][0]], mean_absolute_difference_in_visitation_counts_index[pr][1])))
                     self.logger.dump(t)
                     print("PARAMS:", list(self.reward_net.parameters()))
+                    print("Value matrix: ", self.reward_net.value_matrix())
+                    if self.training_mode==TrainingModes.PROFILE_LEARNING or TrainingModes.SIMULTANEOUS:
+                        print("Learned Profile: ", self.reward_net.get_learned_profile())
 
                     #sorted_state_indices = np.argsort(max_delta_per_state_train)
                     #print(absolute_delta[sorted_indices])
@@ -1120,7 +1124,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                             print(f"Learned path from {orig} to {des}", edge_path)
                             print(f"Expert path from {orig} to {des}", expert_edge_path)
                             #print("PRNP", predicted_r_np)
-                            self.env.render(caminos_by_value={'eco': [path,], 'eff': [expert_path]}, file=f"test_mce_partial_{t}_{pr}_train.png", show=False,show_edge_weights=False)
+                            self.env.render(caminos_by_value={'eco': [path,], 'eff': [expert_path]}, file=f"test_me_partial_{t}_{pr}_train.png", show=False,show_edge_weights=False)
                             
 
                 if termination_condition_met:
