@@ -5,10 +5,10 @@ import numpy as np
 
 BASIC_PROFILES = [(1,0,0), (0,1,0), (0,0,1)]
 
-BASIC_PROFILE_NAMES = {(1,0,0): 'eco', (0,1,0): 'sec', (0,0,1): 'eff'}
-PROFILE_NAMES_TO_TUPLE = {'eco': (1,0,0), 'sec': (0,0,1), 'eff': (0,0,1)}
+BASIC_PROFILE_NAMES = {(1,0,0): 'sus', (0,1,0): 'sec', (0,0,1): 'eff'}
+PROFILE_NAMES_TO_TUPLE = {'sus': (1,0,0), 'sec': (0,1,0), 'eff': (0,0,1)}
 
-PROFILE_COLORS = {(1,0,0): 'green', (0,1,0): 'cyan', (0,0,1): 'magenta'} 
+PROFILE_COLORS = {(1,0,0): 'green', (0,1,0): 'blue', (0,0,1): 'red'} 
 
 
 def eco_cost(feature_vector, path_feature_vector=None):
@@ -28,7 +28,7 @@ def eff_cost(feature_vector, path_feature_vector=None):
     #normalized_speed = speed_estimate/np.max(speed_estimate)
     return feature_vector[0]/np.dot(speed_estimate, feature_vector[1:])
 
-VALUE_COSTS = OrderedDict({'eco': eco_cost, 'sec': sec_cost, 'eff': eff_cost})
+VALUE_COSTS = OrderedDict({'sus': eco_cost, 'sec': sec_cost, 'eff': eff_cost})
 
 def eco_cost_precomputed(link_features, path_features=None):
     #print(link_features)
@@ -44,4 +44,4 @@ def sec_cost_precomputed(link_features, path_features=None):
 def eff_cost_precomputed(link_features, path_features=None):
     return link_features[3]
 
-VALUE_COSTS_PRE_COMPUTED_FEATURES = OrderedDict({'eco': eco_cost_precomputed, 'sec': sec_cost_precomputed, 'eff': eff_cost_precomputed})
+VALUE_COSTS_PRE_COMPUTED_FEATURES = OrderedDict({'sus': eco_cost_precomputed, 'sec': sec_cost_precomputed, 'eff': eff_cost_precomputed})

@@ -4,6 +4,7 @@ import os
 from typing import Iterator
 from gymnasium import Space
 from imitation.rewards import reward_nets
+from matplotlib import pyplot as plt
 import numpy as np
 from torch import Tensor
 import torch as th
@@ -35,15 +36,16 @@ class PositiveBoundedLinearModule(nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
         self.use_bias = bias
-
         with th.no_grad():
             if data is not None:
                 state_dict = self.state_dict()
-                state_dict['weight'] = th.as_tensor([list(data)]).clone()
+                state_dict['weight'] = th.log(th.as_tensor([list(data)]).clone())
+                
                 self.load_state_dict(state_dict)
 
     def forward(self, input: Tensor) -> Tensor:
         w_bounded, b_bounded = self.get_profile()
+        
         if self.use_bias:
             output = nn.functional.linear(input, w_bounded, b_bounded)
         else:
@@ -195,6 +197,7 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
     def value_matrix(self):
         with th.no_grad():
             params = th.tensor(list(p.data for name, p in self.values_net.named_parameters(recurse=True))[-1])
+            assert params.dim() == 2
             return nn.functional.softmax(params)
 
     def get_learned_profile(self, with_bias=False):
@@ -228,3 +231,36 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
     def from_checkpoint(file="reward_function_checkpoint.pt"):
         
         return th.load(os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
+
+
+
+
+def plot_avg_value_matrix(avg_matrix, std_matrix, file='value_matrix_demo.pdf'):
+    X, Y = np.meshgrid(np.arange(avg_matrix.shape[1]), np.arange(avg_matrix.shape[0]))
+
+    # Plotting the average matrix as bars
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    for i in range(avg_matrix.shape[0]):
+        for j in range(avg_matrix.shape[1]):
+            ax.bar3d(j, i, 0, 1, 1, avg_matrix[i, j], color=plt.cm.viridis(avg_matrix[i, j] / avg_matrix.max()),  alpha=0.5)
+
+    # Overlaying the standard deviation as black segments
+    for i in range(avg_matrix.shape[0]):
+        for j in range(avg_matrix.shape[1]):
+            ax.plot3D([j+0.5, j+0.5], [i+0.5, i+0.5], [avg_matrix[i, j] - std_matrix[i, j], avg_matrix[i, j] + std_matrix[i, j]], color='k')
+
+    ax.set_xlabel('Input real costs')
+    ax.set_ylabel('Learned linear combination')
+    ax.set_zlabel('Coefficients')
+    ax.set_title('Learned correlation between real and learned costs')
+    ax.set_xticks(np.arange(avg_matrix.shape[1])+0.5)
+    ax.set_yticks(np.arange(avg_matrix.shape[0])+0.5)
+    BASIC_VALUES = ['sus', 'sec', 'eff']
+    ax.set_xticklabels(BASIC_VALUES)
+    ax.set_yticklabels(['sus\'', 'sec\'', 'eff\''])
+    
+    fig.savefig(file)
+    plt.show()
+    plt.close()

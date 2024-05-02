@@ -11,7 +11,7 @@ from torch.functional import F
 from gymnasium.spaces import Discrete, MultiDiscrete, Box
 from gymnasium import spaces
 
-from src.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_NAMES_TO_TUPLE, VALUE_COSTS, VALUE_COSTS_PRE_COMPUTED_FEATURES
+from src.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS, PROFILE_NAMES_TO_TUPLE, VALUE_COSTS, VALUE_COSTS_PRE_COMPUTED_FEATURES
 from src.network_utils import angle_between
 
 from src.utils.load_data import load_link_feature, load_path_feature, minmax_normalization, minmax_normalization01
@@ -320,7 +320,7 @@ def get_color_gradient(c1, c2, mix):
     
     return ((1-mix)*c1_rgb + (mix*c2_rgb))
 
-def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'eco': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None):
+def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None):
     
     #posiciones = {node: node for node in self.graph.nodes()}
     
@@ -339,8 +339,8 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
 
     if custom_weights is None:
         
-        max_eco = np.max([graph.get_edge_data(edge[0], edge[1])['eco'] for edge in edgelist])
-        eco_vals = [graph.get_edge_data(edge[0], edge[1])['eco'] for edge in edgelist]
+        max_eco = np.max([graph.get_edge_data(edge[0], edge[1])['sus'] for edge in edgelist])
+        eco_vals = [graph.get_edge_data(edge[0], edge[1])['sus'] for edge in edgelist]
 
         max_sec = np.max([graph.get_edge_data(edge[0], edge[1])['sec'] for edge in edgelist])
         sec_vals = [graph.get_edge_data(edge[0], edge[1])['sec'] for edge in edgelist]
@@ -348,8 +348,8 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
         max_eff = np.max([graph.get_edge_data(edge[0], edge[1])['eff'] for edge in edgelist])
         eff_vals = [graph.get_edge_data(edge[0], edge[1])['eff'] for edge in edgelist]
     else:
-        max_eco = np.max([custom_weights[PROFILE_NAMES_TO_TUPLE['eco']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist])
-        eco_vals = [custom_weights[PROFILE_NAMES_TO_TUPLE['eco']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist]
+        max_eco = np.max([custom_weights[PROFILE_NAMES_TO_TUPLE['sus']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist])
+        eco_vals = [custom_weights[PROFILE_NAMES_TO_TUPLE['sus']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist]
         
         max_sec = np.max([custom_weights[PROFILE_NAMES_TO_TUPLE['sec']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist])
         sec_vals = [custom_weights[PROFILE_NAMES_TO_TUPLE['sec']][graph.get_edge_data(edge[0], edge[1])['id'], custom_weights_dest] for edge in edgelist]
@@ -367,10 +367,10 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
     min_eco = 0
     nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eco, edge_cmap = plt.cm.Greens_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.3}')
     nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_sec, edge_cmap = plt.cm.Blues_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.15}')
-    nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eff, edge_cmap = plt.cm.Reds, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0}')
+    nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eff, edge_cmap = plt.cm.Reds_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0}')
     #nx.draw_networkx_edges(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=[float(eco_val/max_eco) for eco_val in eco_vals], edge_cmap = plt.cm.Reds)
     if show_edge_weights:
-        edge_labels = {edge: f"Eco: {eco_val:.2f}\nSec: {sec_val:.2f}\nEff: {eff_val:.2f}" for edge, eco_val, sec_val, eff_val in zip(graph.edges(), eco_vals, sec_vals, eff_vals)}
+        edge_labels = {edge: f"Sus: {eco_val:.2f}\nSec: {sec_val:.2f}\nEff: {eff_val:.2f}" for edge, eco_val, sec_val, eff_val in zip(graph.edges(), eco_vals, sec_vals, eff_vals)}
         nx.draw_networkx_edge_labels(graph, pos=posiciones, edge_labels=edge_labels, font_size=8, font_color='black', horizontalalignment='left')
         
     else:
@@ -384,7 +384,7 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
         edge_color_by_value[value] = []
         edge_size_by_value[value] = []
         edge_list_by_value[value] = []
-        arc_rad = 0.0 if value == 'eco' else 0.15 if value == 'eff' else 0.0 if value == 'sec' else 0.3
+        arc_rad = 0.0 if value == 'sus' else 0.15 if value == 'eff' else 0.0 if value == 'sec' else 0.3
         for camino in caminos:
             if camino is not None:
                 
@@ -400,10 +400,9 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
                                     break
                         if valid:
                             edge_list_by_value[value].append(edge)
-                            edge_color_by_value[value].append('cyan' if value == 'sec' else 'tab:green' if value == 'eco' else 'magenta' if value == 'eff' else 'tab:black')
+                            edge_color_by_value[value].append(PROFILE_COLORS.get(PROFILE_NAMES_TO_TUPLE.get(value, 'unk'),'tab:black'))
                             edge_size_by_value[value].append(5)
-        """print("Printing ", value)
-        print(edge_list_by_value)"""
+       
         nx.draw_networkx_nodes(graph, posiciones, nodelist=nodelist, node_size=node_size, node_color=node_color)
         nx.draw_networkx_edges(graph, posiciones, edge_list_by_value[value], connectionstyle=f'arc3, rad = {arc_rad}', width=edge_size_by_value[value], edge_color=edge_color_by_value[value], label='Shortest path for ' + str(value))
     
@@ -602,7 +601,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             self.graph.add_node(node_to)
             self.graph.add_edge(node_from, 
                                 node_to, 
-                                eco=VALUE_COSTS['eco'](self.edge_feature_old_no_norm[edge_id]),
+                                sus=VALUE_COSTS['sus'](self.edge_feature_old_no_norm[edge_id]),
                                 sec=VALUE_COSTS['sec'](self.edge_feature_old_no_norm[edge_id]),
                                 eff=VALUE_COSTS['eff'](self.edge_feature_old_no_norm[edge_id]), 
                                 id=edge_id, )
@@ -619,7 +618,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
         #  edge features = [length, fuel, insec, time]
         edge_feature_real_no_norm = np.zeros((edge_feature.shape[0], 4))
         edge_feature_real_no_norm[:,0] = edge_feature_no_norm[:, 0]
-        edge_feature_real_no_norm[:,1] = np.array([VALUE_COSTS.get('eco')(ef) for ef in edge_feature_no_norm]) # fuel
+        edge_feature_real_no_norm[:,1] = np.array([VALUE_COSTS.get('sus')(ef) for ef in edge_feature_no_norm]) # fuel
         edge_feature_real_no_norm[:,2] = np.array([VALUE_COSTS.get('sec')(ef) for ef in edge_feature_no_norm]) # insec
         edge_feature_real_no_norm[:,3] = np.array([VALUE_COSTS.get('eff')(ef) for ef in edge_feature_no_norm]) # time
 
@@ -816,7 +815,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
                 paths_sec = [self.shortest_paths_nodes(profile=[0,1,0], to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]
                 paths_eff = [self.shortest_paths_nodes(profile=[0,0,1], to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]"""
                 visualize_graph(self.graph,self.node_positions, show_edge_weights=False, caminos_by_value={
-                    'eco': [self.shortest_paths_nodes(profile=[1,0,0], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
+                    'sus': [self.shortest_paths_nodes(profile=[1,0,0], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
                     'sec': [self.shortest_paths_nodes(profile=[0,1,0], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
                     'eff': [self.shortest_paths_nodes(profile=[0,0,1], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),]})
 
@@ -866,7 +865,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             if from_state is None:
                 good_edges = dict()
                 for key, paths in node_path_or_paths.items():
-                    # [108, 358, 222, 524, 32, 37, 31, 27, 467, 352, 313, 136, 53, 435, 404, 407, 488, 410, 482, 413] (shortest for eco)
+                    # [108, 358, 222, 524, 32, 37, 31, 27, 467, 352, 313, 136, 53, 435, 404, 407, 488, 410, 482, 413] (shortest for sus)
                     if not flattened:
                         good_edges[key] = []
                         for path in paths:
@@ -936,7 +935,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
                 else:
                     return (edge_path, sum([self.profile_cost_minimization_path(to_state, profile,reverse=False,custom_cost=custom_cost)(self.edge_to_source_dest[st]['source'], self.edge_to_source_dest[st]['dest'],None) for st in edge_path]))
 
-    def render(self, caminos_by_value={'eco': [], 'sec': [], 'eff': []}, file='dummy.png', show=True, show_edge_weights=False, custom_weights: dict = None, custom_weights_dest: int = None):
+    def render(self, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, file='dummy.png', show=True, show_edge_weights=False, custom_weights: dict = None, custom_weights_dest: int = None):
         visualize_graph(self.graph,self.node_positions, caminos_by_value=caminos_by_value, save_to=NETWORK_PLOTS_DIR + file, show_edge_weights=show_edge_weights, show=show, custom_weights=custom_weights, custom_weights_dest = custom_weights_dest)
             
     def states_to_observation(states):

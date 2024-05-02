@@ -54,7 +54,7 @@ node_p = f"{DATA_FOLDER}/node.txt"
 """inialize road environment"""
 
 
-NEW_PROFILE = (0.7, 0.3, 0.0)
+NEW_PROFILE = (0.5, 0.3, 0.2)
 
 HORIZON = 100 # Maximum trajectory length
 
@@ -69,12 +69,19 @@ PROFILE_VARIETY_TEST = 2
 
 USE_OM = False
 STOCHASTIC = False
-USE_DIJSTRA = False if USE_OM else False if STOCHASTIC else True # change True only when USE_OM is not True.
+USE_DIJKSTRA = False if USE_OM else False if STOCHASTIC else True # change True only when USE_OM is not True.
 
-N_EXPERT_SAMPLES_PER_OD = 1 if USE_OM is True else 30 if STOCHASTIC else 3# change True only when USE_OM is not True.
+N_EXPERT_SAMPLES_PER_OD = 1 if USE_OM is True else 30 if STOCHASTIC else 1# change True only when USE_OM is not True.
 FEATURE_SELECTION = FeatureSelection.ONLY_COSTS
 
+LEARNING_ITERATIONS = 100
+BATCH_SIZE_PS = 100 # In profile society, batch size is vital, for sampling routes with random profiles and destinations with enough variety
+
+N_OD_SPLITS_FOR_SIMULATING_SOCIETY = 10
+
 if __name__ == "__main__":
+    reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
+
     od_list, od_dist = ini_od_dist(train_p)
     print("DEBUG MODE", __debug__)
     print("Learning/using profiles: ", EXAMPLE_PROFILES)
@@ -94,24 +101,22 @@ if __name__ == "__main__":
 
     state_venv = DummyVecEnv([state_env_creator] * 1)
 
-    reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
+    
     #reward_net.reset_learning_profile()
     reward_net.set_mode(TrainingModes.PROFILE_LEARNING)
     checkpointed_learned_profile = reward_net.get_learned_profile(with_bias=False)
     reward_net.reset_learning_profile(checkpointed_learned_profile)
-    reward_net.reset_learning_profile(checkpointed_learned_profile)
-    reward_net.reset_learning_profile(checkpointed_learned_profile)
-    print("Checkpointed profile: ", checkpointed_learned_profile)
+    print("Checkpointed profile: ", reward_net.get_learned_profile(), np.sum(reward_net.get_learned_profile()), reward_net.get_learned_profile())
 
     assert reward_net.action_space == env_single.action_space
     assert reward_net.hid_sizes[0] == env_single.process_features(state_des=torch.tensor([env_single.od_list_int[0], ]), feature_selection=FEATURE_SELECTION, feature_preprocessing=PREPROCESSING, use_real_env_rewards_as_feature=USE_OPTIMAL_REWARD_AS_FEATURE).shape[-1]
 
     expert_sampler: SimplePolicy = SimplePolicy.from_environment_expert(env_single, profiles=EXAMPLE_PROFILES)
     expert_demonstrations_all_profiles = expert_sampler.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
-    st = time.time()
+    
 
     od_list_train, od_list_test, _, _= split_od_train_test(od_list, od_dist, split=0.8, to_od_list_int=True)
-    
+    # TODO : probar 0.5 0.3 0.2 y luego ir a por el algoritmo holger: hacer un visitation loss por cada agente de una sociedad, sumar y dividir por numero de samples, samplear rutas aleatoriamente elegiendo destinos y perfiles todo a lo loco. 
     mce_irl = MCEIRL_RoadNetwork(
         expert_policy=expert_sampler,
         expert_trajectories=expert_demonstrations_all_profiles, # los rollout no me fio en absoluto.
@@ -127,7 +132,7 @@ if __name__ == "__main__":
         training_profiles=EXAMPLE_PROFILES,
         grad_l2_eps=0.0000001,
         fd_lambda=0.0,
-        use_dijkstra=USE_DIJSTRA,
+        use_dijkstra=USE_DIJKSTRA,
         stochastic_expert=STOCHASTIC,
         od_list_test=od_list_test,
         od_list_train=od_list_train,
@@ -140,55 +145,34 @@ if __name__ == "__main__":
     print(mce_irl.get_reward_net().value_matrix())
 
     
-    
 
-    # NOW TRAINING ON PROFILED AGENT
 
     # Without retraining, check whether the sampled trajs are consistent with the profile.
     mce_irl.adapt_policy_to_profile(NEW_PROFILE)
+
     # TODO: Sacar a funcion los graficos guapos esos de overlapping proportion y tambien los correspondientes para FEATURE DIFF Y VISITATION COUNT DIFFS.
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
-    path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
+    path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
     
     #mce_irl.expert_policy.fit_to_profile(profile=NEW_PROFILE, new_pi = ValueIterationPolicy(env_single).value_iteration(profile=NEW_PROFILE, reset_with_values=example_vi.values))
-    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
+    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
     print(f"INDIRECTLY learned path for profile {NEW_PROFILE}: {edge_path}")
     print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
 
-    env_single.render(caminos_by_value={'eco': [path,], 'eff': [real_path]}, file="me_learned_paths.png", show=False,show_edge_weights=True)
+    env_single.render(caminos_by_value={'sus': [path,], 'eff': [real_path]}, file="me_learned_paths.png", show=False,show_edge_weights=True)
     
     
     
-    df, train_data, test_data = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=None)
+    df_train, df_test, train_data, test_data = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, target_profile=NEW_PROFILE, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION)
     
-    df.to_csv("statistics_for_new_profiles.csv")
+    df_train.to_csv(f"results/profile_learning/statistics_for_unseen_profile_{NEW_PROFILE}_train.csv")
+    df_test.to_csv(f"results/profile_learning/statistics_for_unseen_profile_{NEW_PROFILE}_test.csv")
 
     # LEARNING.
 
-    
-    # Opcion 1. 70% with 1,0,0, 30% with 0,1,0. Weighting the loss of the 1,0,0 by 0.7 with 70% ODs and 0,1,0 by 0.3 with remaining 30% ODs.
-    mce_irl.training_profiles = [NEW_PROFILE, ]
-    new_reward_net = mce_irl.get_reward_net()
-    new_reward_net.reset_learning_profile(checkpointed_learned_profile)
-    mce_irl.set_reward_net(new_reward_net)
-    
-    #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
 
-    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.PROFILED_SOCIETY, render_partial_plots=False)
-    learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
-    print(learned_profile, learned_bias)
-    mce_irl.adapt_policy_to_profile(learned_profile)
-    sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
-    path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=learned_profile,t_max=HORIZON)
-    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
-    print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
-    print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
 
-    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION)
-    
-    df.to_csv(f"statistics_for_new_profile_op1_{NEW_PROFILE}.csv")
-
-    # Opcion 2 (perfect)
+    # Opcion 2 (learn from a single expert with a mixed profile)
 
     mce_irl.training_profiles = [NEW_PROFILE, ]
     new_reward_net = mce_irl.get_reward_net()
@@ -197,19 +181,51 @@ if __name__ == "__main__":
 
     #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
 
-    mce_irl.train(200, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.COST_MODEL_SOCIETY, render_partial_plots=False)
+    mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.PROFILED_EXPERT, render_partial_plots=False, batch_size=None)
     learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
     print(learned_profile, learned_bias)
     mce_irl.adapt_policy_to_profile(learned_profile)
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
-    path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=learned_profile,t_max=HORIZON)
-    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=107, des = 413, stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
+    path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=learned_profile,t_max=HORIZON)
+    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
     print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
     print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
 
-    df_l, train_data_l, test_data_l = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION)
     
+    df_train, df_test, train_data, test_data = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, target_profile=NEW_PROFILE, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, repeat_society=N_OD_SPLITS_FOR_SIMULATING_SOCIETY)
+    
+    df_train.to_csv(f"results/profile_learning/statistics_learning_from_expert_{NEW_PROFILE}_train.csv")
+    df_test.to_csv(f"results/profile_learning/statistics_learning_from_expert_{NEW_PROFILE}_test.csv")
 
-    df.to_csv(f"statistics_for_new_profile_op2_{NEW_PROFILE}.csv")
+    
+    # Opcion 1. probabilities 70% with 1,0,0, 30% with 0,1,0. (A "Society")
+    
+    # TODO: Support for unknown societies... Define a society only with a list of profiles and the probability of choosing one or the other. 
+    mce_irl.training_profiles = [NEW_PROFILE, ]
+    new_reward_net = mce_irl.get_reward_net()
+    new_reward_net.reset_learning_profile(checkpointed_learned_profile)
+    mce_irl.set_reward_net(new_reward_net)
+    
+    #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
+
+    mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.PROFILE_LEARNING, training_set_mode=TrainingSetModes.PROFILED_SOCIETY, render_partial_plots=False, batch_size=BATCH_SIZE_PS)
+    learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
+    print(learned_profile, learned_bias)
+    mce_irl.adapt_policy_to_profile(learned_profile)
+    sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
+    path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=learned_profile,t_max=HORIZON)
+    real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=NEW_PROFILE,t_max=HORIZON)
+    print(f"Learned path with learned profile {learned_profile} (from profile {NEW_PROFILE}) : {edge_path}")
+    print(f"Real path for profile {NEW_PROFILE}: {real_edge_path}")
+
+    earned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
+    print(learned_profile, learned_bias)
+    
+    df_train, df_test, train_data, test_data = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, target_profile=NEW_PROFILE, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, repeat_society=N_OD_SPLITS_FOR_SIMULATING_SOCIETY)
+    
+    df_train.to_csv(f"results/profile_learning/statistics_learning_from_society_{NEW_PROFILE}_train.csv")
+    df_test.to_csv(f"results/profile_learning/statistics_learning_from_society_{NEW_PROFILE}_test.csv")
+
+
 
 

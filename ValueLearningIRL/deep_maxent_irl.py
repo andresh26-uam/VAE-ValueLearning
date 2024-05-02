@@ -1,5 +1,3 @@
-# %%
-
 from functools import partial
 import time
 
@@ -55,7 +53,9 @@ node_p = f"{DATA_FOLDER}/node.txt"
 PROFILE = (1,0,0)
 HORIZON = 100
 DEST = 413
-DEST2 = 107
+
+BATCH_SIZE = None # If None, use the whole training set in each iteration
+
 USE_OPTIMAL_REWARD_AS_FEATURE = False
 SINGLE_DEST = False
 EXAMPLE_PROFILES: list = BASIC_PROFILES
@@ -63,11 +63,12 @@ EXAMPLE_PROFILES: list = BASIC_PROFILES
 PREPROCESSING = FeaturePreprocess.NORMALIZATION
 USE_OM = False
 STOCHASTIC = False
-USE_DIJSTRA = False if USE_OM else False if STOCHASTIC else True # change True only when USE_OM is not True.
+USE_DIJKSTRA = False if USE_OM else False if STOCHASTIC else True # change True only when USE_OM is not True.
 
 N_EXPERT_SAMPLES_PER_OD = 1 if USE_OM is True else 10 if STOCHASTIC else 3# change True only when USE_OM is not True.
 FEATURE_SELECTION = FeatureSelection.ONLY_COSTS
 
+EXPERT_USE_DIJKSTRA = True
 
 SAVED_REWARD_NET_FILE = "profiled_reward_function_trained.pt"
 
@@ -113,22 +114,26 @@ if __name__ == "__main__":
 
     print(reward_net.values_net)
 
-    start_vi = time.time()
-    pi_with_d_per_profile = {
-        pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
-    }
-    end_vi = time.time()
+    if EXPERT_USE_DIJKSTRA:
+        expert_sampler: SimplePolicy = SimplePolicy.from_environment_expert(env_single, profiles=EXAMPLE_PROFILES)
+        expert_demonstrations_all_profiles = expert_sampler.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
+    else:
+        start_vi = time.time()
+        pi_with_d_per_profile = {
+            pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
+        }
+        end_vi = time.time()
 
-    print("VI TIME: ", end_vi - start_vi)
+        print("VI TIME: ", end_vi - start_vi)
 
-    expert_policyAlgo: SimplePolicy = SimplePolicy.from_policy_matrix(pi_with_d_per_profile, real_env = env_single)
+        expert_sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi_with_d_per_profile, real_env = env_single)
 
-    expert_demonstrations_all_profiles = expert_policyAlgo.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
+        expert_demonstrations_all_profiles = expert_sampler.sample_trajectories(stochastic=False, repeat_per_od=N_EXPERT_SAMPLES_PER_OD, with_profiles=EXAMPLE_PROFILES)
 
     if __debug__:
-        check_policy_gives_optimal_paths(env_single, expert_policyAlgo, profiles=EXAMPLE_PROFILES)
+        check_policy_gives_optimal_paths(env_single, expert_sampler, profiles=EXAMPLE_PROFILES)
 
-    print("PATHS CHECKED WITH VI")
+    print("PATHS CHECKED WITH EXPERT")
 
     #exit(0) # TODO: 
     # OPCION 1: Probar mce_occupancy measures con experto estocástico de VI. USar mce_occupancy para las policies internas.
@@ -137,15 +142,15 @@ if __name__ == "__main__":
     # 2.a. Todo estocastico (stochastic True, repeat_per_od > 1)
     # 2.b: todo deterministico (stochastic False, repeat_per_od = 1)
 
-    path, edge_path = expert_policyAlgo.sample_path(start=107, des = DEST, stochastic=False, profile=EXAMPLE_PROFILES[0],t_max=1000)
+    path, edge_path = expert_sampler.sample_path(start=107, des = DEST, stochastic=False, profile=EXAMPLE_PROFILES[0],t_max=1000)
     print("EXPERT PATH 107 DEST", edge_path)
 
-    env_single.render(caminos_by_value={'eco': [path,]}, file="me_expert_policy.png", show=False,show_edge_weights=False)
+    env_single.render(caminos_by_value={'sus': [path,]}, file="me_expert_policy.png", show=False,show_edge_weights=False)
 
 
     st = time.time()
     mce_irl = MCEIRL_RoadNetwork(
-        expert_policy=expert_policyAlgo,
+        expert_policy=expert_sampler,
         expert_trajectories=expert_demonstrations_all_profiles, # los rollout no me fio en absoluto.
         env=env_single,
         reward_net=reward_net,
@@ -159,7 +164,7 @@ if __name__ == "__main__":
         #sampling_profiles=EXAMPLE_PROFILES,
         grad_l2_eps=0.0000001,
         fd_lambda=0.0,
-        use_dijkstra=USE_DIJSTRA,
+        use_dijkstra=USE_DIJKSTRA,
         stochastic_expert=STOCHASTIC,
         od_list_train=od_list_train,
         od_list_test=od_list_test,
@@ -168,13 +173,13 @@ if __name__ == "__main__":
     print(list(mce_irl._reward_net.parameters()))
     print("TRAINING STARTED")
 
-    predicted_rewards_per_profile, train_stats, test_stats = mce_irl.train(max_iter=1000,render_partial_plots=False)
+    predicted_rewards_per_profile, train_stats, test_stats = mce_irl.train(max_iter=1000,render_partial_plots=False,  batch_size=BATCH_SIZE)
 
 
     end_time = time.time()
     print("TIME: ", end_time - st)
-    print("FINAL PARAMETERS: ")
-    print(list(mce_irl._reward_net.parameters()))
+    print("FINAL VALUE MATRIX: ")
+    print(mce_irl._reward_net.value_matrix())
 
     reward_net.save_checkpoint(SAVED_REWARD_NET_FILE)
 
@@ -187,7 +192,7 @@ if __name__ == "__main__":
     sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
     path, edge_path = sampler.sample_path(start=107, des = 413, stochastic=False, profile=PROFILE,t_max=HORIZON)
 
-    env_single.render(caminos_by_value={'eco': [path,]}, file="me_learned_paths.png", show=False,show_edge_weights=True)
+    env_single.render(caminos_by_value={'sus': [path,]}, file="me_learned_paths.png", show=False,show_edge_weights=True)
 
     mce_irl.policy.set_profile(PROFILE)
     imitation_trajs = rollout.generate_trajectories(
