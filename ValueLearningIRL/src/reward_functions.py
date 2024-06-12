@@ -2,7 +2,6 @@ from copy import deepcopy
 import enum
 import os
 from typing import Iterator
-from gymnasium import Space
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
 import numpy as np
@@ -15,6 +14,7 @@ from src.network_env import RoadWorldGym
 from stable_baselines3.common import preprocessing
 from itertools import chain
 
+from src.values_and_costs import BASIC_PROFILES, VALUE_COSTS_PRE_COMPUTED_FEATURES
 from utils import CHECKPOINTS
 
 class ConvexLinearModule(nn.Linear):
@@ -65,8 +65,8 @@ class PositiveBoundedLinearModule(nn.Linear):
         return w_bounded, b_bounded
     
 class TrainingModes(enum.Enum):
-    PROFILE_LEARNING = 'profile_learning'
-    VALUE_LEARNING = 'value_learning'
+    VALUE_SYSTEM_IDENTIFICATION = 'value_system_identification'
+    VALUE_GROUNDING_LEARNING = 'value_grounding_learning'
     SIMULTANEOUS = 'sim_learning'
 
 class ProfiledRewardFunction(reward_nets.RewardNet):
@@ -100,7 +100,7 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
     def __init__(self, environment: RoadWorldGym, use_state=False, use_action=False, use_next_state=True, use_done=True,
                  activations = [nn.Sigmoid, nn.Tanh],
                  hid_sizes = [3,],
-                 mode = TrainingModes.VALUE_LEARNING,
+                 mode = TrainingModes.VALUE_GROUNDING_LEARNING,
                  reward_bias = 0,
                  **kwargs):
         observation_space = environment.observation_space
@@ -144,21 +144,21 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
         
         assert hid_sizes[-1] == 3
     def parameters(self, recurse: bool = True) -> Iterator:
-        if self.mode == TrainingModes.VALUE_LEARNING:
+        if self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             return self.values_net.parameters(recurse)
-        elif self.mode == TrainingModes.PROFILE_LEARNING:
+        elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             return self.trained_profile_net.parameters(recurse)
         else:
             return chain(self.trained_profile_net.parameters(recurse), self.values_net.parameters(recurse))
     
-    def _forward(self, features, profile=[1,0,0]):
+    def _forward(self, features, profile=(1.0,0.0,0.0)):
         
         """print(x, x.size())"""
         
         """print("VALUES", x, x.size())
         print(self.values_net.parameters())"""
 
-        if self.mode is None or self.mode == TrainingModes.VALUE_LEARNING:
+        if self.mode is None or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             self.values_net.requires_grad_(True)
             self.trained_profile_net.requires_grad_(False)
             x = -self.values_net(features) 
@@ -167,7 +167,7 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
             x = self.final_activation(x) + self.reward_bias
             
             return x
-        elif self.mode == TrainingModes.PROFILE_LEARNING:
+        elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             self.values_net.requires_grad_(False)
             self.trained_profile_net.requires_grad_(True)
             x = -self.values_net(features)
@@ -264,3 +264,56 @@ def plot_avg_value_matrix(avg_matrix, std_matrix, file='value_matrix_demo.pdf'):
     fig.savefig(file)
     plt.show()
     plt.close()
+
+def squeeze_r(r_output: th.Tensor) -> th.Tensor:
+    """Squeeze a reward output tensor down to one dimension, if necessary.
+
+    Args:
+         r_output (th.Tensor): output of reward model. Can be either 1D
+            ([n_states]) or 2D ([n_states, 1]).
+
+    Returns:
+         squeezed reward of shape [n_states].
+    """
+    if r_output.ndim == 2:
+        return th.squeeze(r_output, 1)
+    assert r_output.ndim == 1
+    return r_output
+def cost_model_from_reward_net(reward_net: ProfiledRewardFunction, env: RoadWorldGym, precalculated_rewards_per_pure_pr=None):
+                
+    def apply(profile, normalization):
+        # TODO get features primero boludo xd.
+        if np.allclose(list(reward_net.get_learned_profile()), list(profile)):
+            def call(state_des):
+                data = th.tensor(
+        [[VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*env.get_separate_features(state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],],
+            dtype=reward_net.dtype)
+                
+                return -squeeze_r(reward_net.forward(None, None, data, th.tensor([state_des[0] == state_des[1], ])))
+            return call
+        else:
+            if precalculated_rewards_per_pure_pr is not None:
+                
+                def call(state_des):
+                    if profile in BASIC_PROFILES:
+                        return -precalculated_rewards_per_pure_pr[profile][state_des[0],state_des[1]]
+                    
+                    final_cost = 0.0
+                    for i, pr in enumerate(BASIC_PROFILES):
+                        final_cost += profile[i]*precalculated_rewards_per_pure_pr[pr][state_des[0], state_des[1]]
+                    return -final_cost
+                return call
+            else:
+                def call(state_des):
+                    prev_mode = reward_net.mode
+                    reward_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
+                    reward_net.set_profile(profile)
+                    data = th.tensor(
+        [[VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*env.get_separate_features(state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],],
+            dtype=reward_net.dtype)
+                    result = squeeze_r(reward_net.forward(None, None, data, th.tensor([state_des[0] == state_des[1], ])))
+                    reward_net.set_mode(prev_mode)
+                    return -result
+                return call
+
+    return apply

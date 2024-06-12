@@ -3,13 +3,14 @@
 from collections import OrderedDict
 import numpy as np
 
-BASIC_PROFILES = [(1,0,0), (0,1,0), (0,0,1)]
+BASIC_PROFILES = [(1.0,0.0,0.0), (0.0,1.0,0.0), (0.0,0.0,1.0)]
 
-BASIC_PROFILE_NAMES = {(1,0,0): 'sus', (0,1,0): 'sec', (0,0,1): 'eff'}
-PROFILE_NAMES_TO_TUPLE = {'sus': (1,0,0), 'sec': (0,1,0), 'eff': (0,0,1)}
+BASIC_PROFILE_NAMES = {(1.0,0.0,0.0): 'sus', (0.0,1.0,0.0): 'sec', (0.0,0.0,1.0): 'eff'}
+PROFILE_NAMES_TO_TUPLE = {'sus': (1.0,0.0,0.0), 'sec': (0.0,1.0,0.0), 'eff': (0.0,0.0,1.0)}
 
-PROFILE_COLORS = {(1,0,0): 'green', (0,1,0): 'blue', (0,0,1): 'red'} 
+PROFILE_COLORS = {(1.0,0.0,0.0): 'green', (0.0,1.0,0.0): 'blue', (0.0,0.0,1.0): 'red'} 
 
+FULL_NAME_VALUES = OrderedDict({'sus': 'Sustainability', 'sec': 'Security', 'eff': 'Efficiency'} )
 
 def eco_cost(feature_vector, path_feature_vector=None):
     # feature_vector = residential, primary, unclassified, tertiary, living street, secondary

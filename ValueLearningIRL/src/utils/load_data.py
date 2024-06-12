@@ -39,10 +39,10 @@ def load_link_feature(edge_path):
 
 def minmax_normalization(feature, xmax, xmin):
     feature = (feature - xmin) / (xmax - xmin + 1e-8)
-    feature = 2 * feature - 1
+    feature = feature 
     return feature
 def minmax_normalization01(feature, xmax, xmin):
-    feature = feature / (xmax + 1e-8)
+    feature = feature / (xmax)
     #feature = 2 * feature - 1
     return feature
 

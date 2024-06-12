@@ -1,17 +1,14 @@
-
-from copy import deepcopy
 import signal
 from typing import Dict, Iterable, List, Mapping, NoReturn, Optional, Tuple, Union
 import gymnasium as gym
+from matplotlib import pyplot as plt
 import numpy as np
 import sys
 
 import torch
 
-from src.network_env import RoadWorldGym
-from src.src_rl.aggregations import Score
+from src.network_env import FeaturePreprocess, RoadWorldGym
 from src.values_and_costs import BASIC_PROFILES
-from utils import LearningUtils, VectorToIndexConverter
 
 from imitation.data.types import Trajectory
 import torch.nn as nn
@@ -27,16 +24,265 @@ from collections import defaultdict
 
 from stable_baselines3.common.policies import BasePolicy
 
+from scipy.spatial import distance
 
-def calculate_expected_cost_and_std(cost_model, profile_for_cost_model, trajectories, preprocessing = None):
-    total_costs = []
-    for traj in trajectories:
-        cost_vector = np.asarray([cost_model(profile_for_cost_model, 
-                                             normalization=preprocessing)(traj.obs[i]) for i in range(len(traj))])
-        total_costs.append(np.sum(cost_vector))
-    avg_cost = np.mean(total_costs)
-    std_dev = np.std(total_costs)
-    return avg_cost, std_dev
+def profiled_similarity_Agourogiannis_et_al_2023(traj1, traj2, cost_model, preference_weights=(1,1,1), profiles=BASIC_PROFILES, preprocessing=None):
+    traj1_cost_per_profile = np.asarray([np.sum([cost_model(pr, normalization=preprocessing)(traj1.obs[i]) for i in range(len(traj1))]) for pr in profiles])
+    traj2_cost_per_profile = np.asarray([np.sum([cost_model(pr, normalization=preprocessing)(traj2.obs[i]) for i in range(len(traj2))]) for pr in profiles])
+    np_prefs = np.asarray(preference_weights)
+    assert np.allclose(np.asarray([1.0,]), np.array([np.sum(np_prefs),]))
+    return 1 - np.abs(1 - len(profiles)/np.dot(traj1_cost_per_profile/traj2_cost_per_profile, np_prefs))
+
+def jensen_shannon_distance_at_weighted_criteria(sample_costs, expert_costs, preference_weights, bins=100):
+
+    range_bins = (min([np.min(sample_costs), np.min(expert_costs)]), max([np.max(sample_costs), np.max(expert_costs)]))
+
+    jsd_per_criterion = np.asarray([0]*len(preference_weights))
+    jsd_final = 0.0
+    assert np.allclose(np.sum(preference_weights) , 1.0)
+
+    for j, prw in enumerate(preference_weights):
+        cost_distribution_sample = np.histogram(bins=len(sample_costs[:,j]), a = sample_costs[:,j],density=True)[0]
+        cost_distribution_expert = np.histogram(bins=len(expert_costs[:,j]), a = expert_costs[:,j],density=True)[0]
+
+        """print(cost_distribution_sample)
+        print(cost_distribution_expert)
+        print(np.histogram(bins=bins, a = sample_costs[:,j], range=range_bins,density=True))
+        print(distance.jensenshannon(cost_distribution_sample, cost_distribution_expert))
+        exit(0)"""
+        jsd_per_criterion[j] = distance.jensenshannon(cost_distribution_sample, cost_distribution_expert)
+        
+        jsd_final += jsd_per_criterion[j]*prw # NUMPY MAL ESTO TODO
+
+    return jsd_final, jsd_per_criterion
+
+
+def profiled_aggregated_similarity_Agourogiannis_et_al_2023(sample_costs, expert_costs, preference_weights=(1,1,1)):
+
+    if isinstance(preference_weights, tuple):
+        np_prefs = np.array(preference_weights, dtype=np.float64)/np.sum(preference_weights)
+        assert np.allclose(np.asarray([1.0,]), np.array([np.sum(np_prefs),]))
+        
+        res =  1.0 - np.abs(1.0- 1.0/np.dot(np.maximum(sample_costs,expert_costs)/np.minimum(expert_costs, sample_costs), np_prefs))
+        assert np.all(res >= 0.0)
+        return res
+    if isinstance(preference_weights, torch.Tensor):
+        assert torch.allclose(torch.as_tensor([1.0,]), torch.tensor([torch.sum(preference_weights),]))
+        
+        res = 1.0 - torch.abs(1.0- 1.0/torch.dot(torch.maximum(sample_costs,expert_costs)/torch.minimum(sample_costs, expert_costs), preference_weights))
+        assert torch.all(res >= 0.0)
+        return res
+def jaccard(traj, traj2, cost_model, profile, preprocessing):
+    t1, t2 = set(traj.obs), set(traj2.obs)
+    intersection = t1.intersection(t2)
+    union = t1.union(t2)
+    intersection_cost = np.sum([cost_model(profile, normalization=preprocessing)(obs) for obs in intersection])
+    union_cost = np.sum([cost_model(profile, normalization=preprocessing)(obs) for obs in union])
+
+    return intersection, union, len(intersection)/len(union), intersection_cost/union_cost
+
+def jaccard_similarity(cost_model, profile_for_cost_model, sample_trajs, expert_trajs, profile_criteria, preprocessing= FeaturePreprocess.NORMALIZATION, return_per_od=False):
+    trajs_per_od = dict()
+    n_trajs_per_od = dict()
+    
+    jaccard_per_pr = dict()
+
+    jaccard_normal = 0.0
+
+    jaccard_cost = 0.0
+
+    jacc_per_od_normal = dict()
+    jacc_per_od_cost = dict()
+    jacc_per_od_pr = dict()
+
+    jaccs_normal = []
+    jaccs_cost = []
+    jaccs_per_pr = {pr: [] for pr in profile_criteria}
+
+    for sampled_traj in sample_trajs:
+        od_sampled_traj = (sampled_traj.infos[0]['orig'], sampled_traj.infos[0]['des'])
+        if od_sampled_traj not in trajs_per_od.keys():
+            trajs_per_od[od_sampled_traj] = {'sample': [], 'expert': []}
+        trajs_per_od[od_sampled_traj]['sample'].append(sampled_traj)
+    
+    for expert_traj in expert_trajs:
+        od_expert_traj = (expert_traj.infos[0]['orig'], expert_traj.infos[0]['des'])
+        if od_expert_traj not in trajs_per_od.keys():
+            continue
+        trajs_per_od[od_expert_traj]['expert'].append(expert_traj)
+
+    ods= []
+    for od, sampled_and_experts in trajs_per_od.items():
+        ods.append(od)
+        jacc_per_od_normal[od] = []
+        jacc_per_od_cost[od] = []
+        jacc_per_od_pr[od] = {pr: [] for pr in profile_criteria}
+        for t in sampled_and_experts['sample']:
+            t_to_experts_normal = []
+            t_to_experts_cost = []
+            t_to_experts_per_pr = {pr: [] for pr in profile_criteria}
+            for e in sampled_and_experts['expert']:
+                intersection, union, normal_jaccard, cost_jaccard = jaccard(t,e,cost_model=cost_model, profile=profile_for_cost_model, preprocessing=preprocessing)
+                for pr in profile_criteria:
+                    cost_jaccard_pr = np.sum([cost_model(pr, normalization=preprocessing)(obs) for obs in intersection])/ np.sum([cost_model(pr, normalization=preprocessing)(obs) for obs in union])
+                    t_to_experts_per_pr[pr].append(cost_jaccard_pr)
+                t_to_experts_cost.append(cost_jaccard)
+                t_to_experts_normal.append(normal_jaccard)
+            jacc_per_od_normal[od].append(np.mean(t_to_experts_normal))
+            jacc_per_od_cost[od].append(np.mean(t_to_experts_cost))
+            for pr in profile_criteria:
+                jacc_per_od_pr[od][pr].append(np.mean(t_to_experts_per_pr[pr]))
+        jaccs_normal.append(np.mean(jacc_per_od_normal[od]))
+        jaccs_cost.append(np.mean(jacc_per_od_cost[od]))
+        for pr in profile_criteria:
+            jaccs_per_pr[pr].append(np.mean(jacc_per_od_pr[od][pr]))
+
+    for pr in profile_criteria:
+        jaccard_per_pr[pr] = np.mean(jaccs_per_pr[pr])
+    jaccard_normal = np.mean(jaccs_normal)
+    jaccard_cost = np.mean(jaccs_cost)
+    if return_per_od:
+        return jaccs_per_pr, jaccs_normal, jaccs_cost, ods
+    return jaccard_per_pr, jaccard_normal, jaccard_cost
+def calculate_expected_similarities_and_std(cost_model, profile_for_cost_model, sample_trajs, expert_trajs, profile_criteria, preprocessing= FeaturePreprocess.NORMALIZATION, standarize_cumulative_costs=False, return_ods=False):
+    
+    jensen_distances_per_od = dict()
+    agourogiannis_similarity_per_od = dict()
+
+    trajs_costs_per_od = dict()
+    
+    n_trajs_per_od = dict()
+    for sampled_traj in sample_trajs:
+        od_sampled_traj = (sampled_traj.infos[0]['orig'], sampled_traj.infos[0]['des'])
+        if od_sampled_traj not in trajs_costs_per_od.keys():
+            trajs_costs_per_od[od_sampled_traj] = {'sample': np.asarray([0.0 for pr in profile_criteria]), 'expert': np.asarray([0.0 for pr in profile_criteria])}
+            n_trajs_per_od[od_sampled_traj] = {'sample': 0, 'expert': 0}
+            
+
+        trajs_costs_per_od[od_sampled_traj]['sample'] += np.asarray([np.sum(
+            np.asarray([cost_model(pr, normalization=preprocessing)(
+                sampled_traj.obs[i]) for i in range(len(sampled_traj))], dtype=np.float64)) for pr in profile_criteria])
+        n_trajs_per_od[od_sampled_traj]['sample'] += 1
+    
+    for expert_traj in expert_trajs:
+        od_expert_traj = (expert_traj.infos[0]['orig'], expert_traj.infos[0]['des'])
+        if od_expert_traj not in trajs_costs_per_od.keys():
+            continue
+        trajs_costs_per_od[od_expert_traj]['expert'] += np.asarray([np.sum(
+            np.asarray([cost_model(pr, normalization=preprocessing)(
+                expert_traj.obs[i]) for i in range(len(expert_traj))], dtype=np.float64)) for pr in profile_criteria])
+        n_trajs_per_od[od_expert_traj]['expert'] += 1
+
+    """if society_trajs is not None:
+        for soc_traj in society_trajs:
+            od_soc_traj = (society_trajs.infos[0]['orig'], soc_traj.infos[0]['des'])
+            if od_soc_traj not in trajs_costs_per_od.keys():
+                continue
+            trajs_costs_per_od[od_soc_traj]['society'] += np.asarray([np.sum(
+                np.asarray([cost_model(pr, normalization=preprocessing)(
+                    soc_traj.obs[i]) for i in range(len(soc_traj))], dtype=np.float64)) for pr in profile_criteria])
+            n_trajs_per_od[od_soc_traj]['society'] += 1"""
+    
+    all_costs = {'sample': [], 'expert': []}
+    ods = []
+    for od, sample_and_expert_trajs in trajs_costs_per_od.items():
+        ods.append(od)
+        if n_trajs_per_od[od]['expert'] == 0 or n_trajs_per_od[od]['sample'] == 0:
+            trajs_costs_per_od.pop(od)
+            
+            continue
+        all_costs['sample'].append(np.asarray(sample_and_expert_trajs['sample'])/n_trajs_per_od[od]['sample'])
+        all_costs['expert'].append(np.asarray(sample_and_expert_trajs['expert'])/n_trajs_per_od[od]['expert']) # coste medio de ecologia de todas las rutas.
+    
+    all_costs['sample'] = np.asarray(all_costs['sample'])
+    all_costs['expert'] = np.asarray(all_costs['expert'])
+    # TODO: como agrupar estas medidas. Media de agou y std, pero de jensen shannon?
+    agourogiannis_similarity = profiled_aggregated_similarity_Agourogiannis_et_al_2023(all_costs['sample'] , all_costs['expert'] , preference_weights=profile_for_cost_model)
+    
+    #jensen_distance, jsd_per_criterion = jensen_shannon_distance_at_weighted_criteria(all_costs['sample'] , all_costs['expert'] , preference_weights=profile_for_cost_model)
+    
+    if standarize_cumulative_costs:
+        for pr in range(len(profile_criteria)):
+            all_costs['sample'][:,pr] = (all_costs['sample'][:,pr]-np.min(all_costs['sample'][:,pr]))/(np.max(all_costs['sample'][:,pr])-np.min(all_costs['sample'][:,pr]))
+            all_costs['expert'][:,pr] = (all_costs['expert'][:,pr]-np.min(all_costs['expert'][:,pr]))/(np.max(all_costs['expert'][:,pr])-np.min(all_costs['expert'][:,pr]))
+    
+    if return_ods:
+        return all_costs, agourogiannis_similarity, ods
+    return all_costs, agourogiannis_similarity
+
+def calculate_expected_cost_and_std(cost_model, profile_for_cost_model, trajectories, preprocessing = None, mode='cost_model', bins=30, file_name='expected_costs', plot_histogram=False, standarize_cumulative_costs=False):
+    
+    if mode == 'cost_model':
+        total_costs = []
+        total_costs_by_od = dict()
+        n_trajs_per_od = dict()
+
+
+        for traj in trajectories:
+            cost_vector = np.asarray([cost_model(profile_for_cost_model, 
+                                                normalization=preprocessing)(traj.obs[i]) for i in range(len(traj))])
+            total_costs.append(np.sum(cost_vector))
+            od = (traj.infos[0]['orig'], traj.infos[0]['des'])
+            if od not in total_costs_by_od.keys():
+                total_costs_by_od[od] = 0
+                n_trajs_per_od[od] = 0 
+            total_costs_by_od[od] += np.sum(cost_vector)
+            n_trajs_per_od[od] += 1
+
+        allcosts = []
+        for od in total_costs_by_od.keys():
+            total_costs_by_od[od] /= n_trajs_per_od[od]
+            allcosts.append(total_costs_by_od[od])
+        allcosts = np.asarray(allcosts)
+    elif mode == 'societal_cost':
+
+
+        total_costs = []
+        total_costs_by_odpr = dict()
+        n_trajs_per_odpr = dict()
+
+
+        for traj in trajectories:
+            cost_vector = np.asarray([cost_model(tuple(traj.infos[0]['profile']), 
+                                                normalization=preprocessing)(traj.obs[i]) for i in range(len(traj))])
+            total_costs.append(np.sum(cost_vector))
+            odpr = ((traj.infos[0]['orig'], traj.infos[0]['des']), tuple(traj.infos[0]['profile'])) 
+            if odpr not in total_costs_by_odpr.keys():
+                total_costs_by_odpr[odpr] = 0
+                n_trajs_per_odpr[odpr] = 0 
+            total_costs_by_odpr[odpr] += np.sum(cost_vector)
+            n_trajs_per_odpr[odpr] += 1
+
+        total_costs_group_by_od = dict()
+        for odpr in total_costs_by_odpr.keys():
+            #proportion = float(np.asarray(profile_for_cost_model)[np.where(np.asarray(odpr[1], dtype=np.float64)==1.0)])
+            
+            total_costs_by_odpr[odpr] /= n_trajs_per_odpr[odpr]
+            od = odpr[0]
+            if od not in total_costs_group_by_od.keys():
+                total_costs_group_by_od[od] = []
+            total_costs_group_by_od[od].append(total_costs_by_odpr[odpr])
+        allcosts = []
+        for od in total_costs_group_by_od.keys():
+            allcosts.append(sum(total_costs_group_by_od[od])/len(total_costs_group_by_od[od]))
+
+        allcosts = np.asarray(allcosts)
+
+    #avg_cost = np.mean(allcosts)
+    #std_dev = np.std(allcosts)
+
+    if standarize_cumulative_costs:
+        allcosts = (allcosts)/(np.max(allcosts))
+    
+    avg_cost = np.mean(allcosts)
+    std_dev = np.std(allcosts)
+
+    if plot_histogram:
+        plt.hist(allcosts, bins=bins)
+        plt.savefig('results/value_system_identification/cost_distribution_plots/'+file_name+f'_cost_calculated_assuming_profile_{profile_for_cost_model}.png')
+        plt.close()
+
+    return avg_cost, std_dev, allcosts
 
 
 class TabularPolicyPerProfile(BasePolicy):
@@ -159,13 +405,68 @@ class SimplePolicy(object):
     def fit_to_profile(self, profile, *args, **kwargs):
         return self.train(profile=profile, *args, **kwargs)
     
-    def from_environment_expert(environment: RoadWorldGym, profiles = BASIC_PROFILES, custom_cost= None):
+    def from_environment_expert(environment: RoadWorldGym, profiles = BASIC_PROFILES, custom_cost= None, on_od_list=None):
+        pol = SimplePolicy(environment)
+        _state_to_action = dict()
+        
+        def _sample_actions(state, exploration=0, training=False, with_probabilities=False, with_logits=False, profile=None,stochastic=False):
+            
+            assert with_logits is False and with_probabilities is False and stochastic is False
+            #print(len(_state_to_action.keys()))
+            edge_state = environment.get_edge_to_edge_state(state, to_tuple=True)
+            
+            av_actions = np.asarray(environment.get_available_actions_from_state(edge_state))
+            
+            if np.random.rand() >= exploration:
+                actions = _state_to_action.get((edge_state, profile), None)
+                if actions is None:
+                    if edge_state[0] == edge_state[1]:
+                        actions =  environment.get_available_actions_from_state((edge_state[1], edge_state[1]))
+                        _state_to_action[((edge_state[1], edge_state[1]),profile)] = actions
+                        
+                    else:
+                        actions = []
+                        path = environment.shortest_path_edges(profile=profile, to_state=edge_state[1], from_state=edge_state[0], with_length=False, all_alternatives=False, 
+                                                                        custom_cost=custom_cost, flattened=False)
+                        for iedge in range(1,len(path)):
+                            prev_edge = path[iedge-1]
+                            edge = path[iedge]
+                            prev_state = (prev_edge, edge_state[1])
+                            av_actions_prev = np.asarray(environment.get_available_actions_from_state(prev_state))
+                            av_states = [environment.get_state_des_transition(prev_state, av_c) for av_c in av_actions_prev]
+                            estate = (edge, edge_state[1])
+                            istate_or_act = av_states.index(estate)
+                            optimal_action = av_actions_prev[istate_or_act]
+
+                            if iedge == 1:
+                                actions.append(optimal_action)
+
+                            _state_to_action[(prev_state, profile)] = [optimal_action,]
+                if actions is not None or len(actions) > 0:
+                    probs = np.zeros_like(np.asarray(av_actions), dtype=np.float64)
+                    for a in actions:
+                        probs[np.where(av_actions==a)[0][0]] = 1.0/float(len(actions))
+                else: 
+                    actions = [np.random.choice(av_actions),]
+                    probs = np.ones_like(av_actions)/av_actions.shape[0]
+
+            else: 
+                actions = [np.random.choice(av_actions),]
+                probs = np.ones_like(av_actions)/av_actions.shape[0]
+
+            return actions, av_actions, probs 
+        pol.sample_actions = _sample_actions
+        return pol
+        
+    def from_environment_expert_old(environment: RoadWorldGym, profiles = BASIC_PROFILES, custom_cost= None, on_od_list=None):
         expert_trajs = list()
-        for od in environment.od_list_int:
+        for od in (environment.od_list_int if on_od_list is None else on_od_list):
+            #print("new od", od)
             for pr in profiles:
+                #print(pr)
                 paths = environment.shortest_path_edges(profile=pr, to_state=od[1], from_state=od[0], with_length=False, all_alternatives=True, 
                                                                     custom_cost=custom_cost, flattened=False)
-                
+                #print("done", len(paths))
                 for path in paths:
                     len_traj = len(path)
                     actions = [0]*(len_traj-1)
@@ -204,6 +505,7 @@ class SimplePolicy(object):
         _state_to_action = dict()
 
         def _sample_actions(state, exploration=0, training=False, with_probabilities=False, with_logits=False, profile=None,stochastic=False):
+            print("FT???")
             assert with_logits is False and with_probabilities is False and stochastic is False
             edge_state = real_env.get_edge_to_edge_state(state, to_tuple=True)
             
@@ -221,7 +523,18 @@ class SimplePolicy(object):
                             if estate == edge_state:
                                 actions.append(act)
                                 break
-                    
+                    if len(actions) == 0:
+                        print(state)
+                        print(profile)
+                        print(set(traj.infos[0]['profile'] for traj in expert_trajectories))
+                        print(profile in set(traj.infos[0]['profile'] for traj in expert_trajectories))
+                        
+                        m = min(len(traj) for traj in expert_trajectories)
+                        for traj in expert_trajectories:
+                            if m == len(traj):
+                                print(traj)
+                                print(traj.infos[0]['orig'], traj.infos[0]['des'])
+
                     _state_to_action[(edge_state, profile)] = actions
                 if actions is not None or len(actions) > 0:
                     probs = np.zeros_like(np.asarray(av_actions), dtype=np.float64)
@@ -257,6 +570,8 @@ class SimplePolicy(object):
                 else:
                     probs = pi[profile][edge_state[1], edge_state[0],:]
                     av_action_probs = pi[profile][edge_state[1], edge_state[0], av_actions]
+                #print(av_action_probs)
+                assert len(av_action_probs) > 0
                 av_action_probs/=np.sum(av_action_probs)
                 if stochastic:
                     action = np.random.choice(av_actions, p=av_action_probs)
@@ -267,6 +582,8 @@ class SimplePolicy(object):
                     max_prob = np.max(av_action_probs)
                     max_q = np.where(av_action_probs == max_prob)[0]
                     actions = av_actions[max_q]
+                    #print(actions)
+                    assert len(actions) > 0
                     if tuple(edge_state) == (226, 591) and False:
                         print(av_action_probs)
                         print(av_actions)
@@ -414,7 +731,7 @@ class SimplePolicy(object):
                 t+=1
             
             return Trajectory(obs=obs, acts=acts, infos = infos, terminal=terminal)
-    def sample_trajectories(self, stochastic=False, repeat_per_od = 1, with_profiles=[(1,0,0),], t_max=100, od_list=None):
+    def sample_trajectories(self, stochastic=False, repeat_per_od = 1, with_profiles=[(1.0,0.0,0.0),], t_max=100, od_list=None):
         trajs = []
         od_list = od_list if od_list is not None else self.environ.od_list_int
         for r in range(repeat_per_od):
@@ -661,7 +978,7 @@ class ValueIterationPolicy(SimplePolicy):
             return sampled_actions, av_Actions, action_probs
 
 
-def check_policy_gives_optimal_paths(env_single, policy, profiles = [(1,0,0), (0,1,0), (0,0,1)]):
+def check_policy_gives_optimal_paths(env_single, policy, profiles = [(1.0,0.0,0.0), (0.0,1.0,0.0), (0.0,0.0,1.0)]):
     for od in env_single.od_list_int:
         for p in profiles:
             path_p, edge_path_p = policy.sample_path(start=od[0], des=od[1], t_max=1000, profile=p, stochastic=False)

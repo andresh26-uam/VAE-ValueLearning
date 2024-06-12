@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from src.values_and_costs import BASIC_PROFILES
+
 MODULE_PATH = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINTS = os.path.join(MODULE_PATH, "checkpoints/")
 
@@ -248,6 +250,10 @@ def sample_example_profiles(profile_variety, n_values=3) -> set:
 
         profile_combinations = [set(itertools.permutations(ratios[i] for i in idx)) for idx in recursFind(len(ratios)-1, n_values)]
 
-        
-    profile_set = set(a for l in profile_combinations for a in l)
+    
+    
+    profile_set = list(set(tuple(float(f"{a_i:0.3f}") for a_i in a) for l in profile_combinations for a in l))
+    [profile_set.remove(pr) for pr in BASIC_PROFILES]
+    for pr in reversed(BASIC_PROFILES):
+        profile_set.insert(0, pr)
     return profile_set

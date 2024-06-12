@@ -28,7 +28,7 @@ class FeatureSelection(enum.Enum):
     ONE_HOT_ALL = 'all'
     ONE_HOT_ORIGIN_AND_DEST = 'origin_and_dest'
     ONLY_COSTS = 'only_costs'
-    NO_ONE_HOT = None
+    DEFAULT = None
 
 
 
@@ -474,13 +474,13 @@ class RoadWorldGym(RoadWorld,gym.Env):
         return torch.tensor([[self._get_reward_state(int(s[0]), int(s[1]),profile=pr) for pr in BASIC_PROFILES] for s in state_des], dtype=torch.float16)
 
     def process_features(self, state_des: torch.Tensor, 
-                         feature_selection: Union[FeatureSelection, tuple]=FeatureSelection.NO_ONE_HOT, 
+                         feature_selection: Union[FeatureSelection, tuple]=FeatureSelection.DEFAULT, 
                          use_real_env_rewards_as_feature: bool = False, 
                          feature_preprocessing: FeaturePreprocess =FeaturePreprocess.NORMALIZATION):
         # print('state', state.shape, 'des', des.shape)
         #print(state_des[:,0], state_des[:,1])
         
-        if feature_selection is not None:
+        if feature_selection != FeatureSelection.DEFAULT:
             if feature_selection == FeatureSelection.ONLY_COSTS:
                 edge_feature, path_feature = self.get_separate_features(state_des[:,0], state_des[:,1], normalized=feature_preprocessing)
                 
@@ -521,7 +521,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
         return lambda state_des: torch.tensor(profile, dtype=torch.float32).dot(torch.tensor(
                     [VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*self.get_separate_features(state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],
                      dtype=torch.float32))
-    def profile_cost_minimization_path(self, des, profile=(1,0,0), reverse=False, custom_cost=None):
+    def profile_cost_minimization_path(self, des, profile=(1.0,0.0,0.0), reverse=False, custom_cost=None):
            
         def cost(u,v, weight_dict=None):
             
@@ -617,12 +617,13 @@ class RoadWorldGym(RoadWorld,gym.Env):
         
         #  edge features = [length, fuel, insec, time]
         edge_feature_real_no_norm = np.zeros((edge_feature.shape[0], 4))
-        edge_feature_real_no_norm[:,0] = edge_feature_no_norm[:, 0]
+        edge_feature_real_no_norm[:,0] = edge_feature_no_norm[:, 0] # length
         edge_feature_real_no_norm[:,1] = np.array([VALUE_COSTS.get('sus')(ef) for ef in edge_feature_no_norm]) # fuel
         edge_feature_real_no_norm[:,2] = np.array([VALUE_COSTS.get('sec')(ef) for ef in edge_feature_no_norm]) # insec
         edge_feature_real_no_norm[:,3] = np.array([VALUE_COSTS.get('eff')(ef) for ef in edge_feature_no_norm]) # time
 
-        edge_feature_max, edge_feature_min = np.max(edge_feature_real_no_norm, 0), np.min(edge_feature_real_no_norm, 0)
+        edge_feature_max, edge_feature_min = np.max(edge_feature_real_no_norm, axis=0), np.min(edge_feature_real_no_norm, axis=0)
+        self.edge_feature_max = edge_feature_max
         edge_feature_real = minmax_normalization01(edge_feature_real_no_norm.copy(), edge_feature_max, edge_feature_min)
         self.link_feature = torch.from_numpy(edge_feature_real).float()
         self.link_feature_no_norm = torch.from_numpy(edge_feature_real_no_norm).float()
@@ -642,6 +643,50 @@ class RoadWorldGym(RoadWorld,gym.Env):
         self.path_feature = torch.zeros((self.state_dim, self.state_dim,len(BASIC_PROFILES)))
         self.path_feature_no_norm = torch.zeros((self.state_dim, self.state_dim,len(BASIC_PROFILES)))
         self.path_feature_standarized = torch.zeros((self.state_dim, self.state_dim,len(BASIC_PROFILES)))
+        
+        path_feature_no_norm, path_max, path_min = load_path_feature(path_feature_p)
+        
+        def calculate_profiled_dist(d):
+                dists = np.full((path_feature_no_norm.shape[0], len(BASIC_PROFILES)),fill_value=1e6, dtype=np.float32)
+                max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-1000000.0, dtype=np.float32)
+
+                for i, bpf in enumerate(BASIC_PROFILES):
+                    max_dist_per_pf[i] = float('-inf')
+                    paths_to_d = {edge: self.shortest_path_edges(profile=bpf, to_state=d, from_state=edge, with_length=True) for edge in self.valid_edges}
+                    for edge, (path, path_len) in paths_to_d.items():
+                        dists[edge, i] = path_len 
+                        max_dist_per_pf[i] = max(max_dist_per_pf[i], path_len)
+                    dists[:, i] = np.minimum(max_dist_per_pf[i], dists[:, i])
+
+                return dists, max_dist_per_pf
+            
+        try:
+            dist_by_pf = np.load(PATH_FEATURES_PATH)
+            max_dists = np.load(MAX_PATH_FEATURES_PATH)
+        except EOFError as e:
+            dist_by_pf = np.zeros((path_feature.shape[0], path_feature.shape[1],len(BASIC_PROFILES)))
+            max_dists = np.ones((path_feature.shape[1],len(BASIC_PROFILES)))
+            for d in self.valid_edges:
+                dist_by_pf[:,d,:], max_dists[d,:] = calculate_profiled_dist(d)
+                #print(d)
+                
+            np.save( PATH_FEATURES_PATH,dist_by_pf)
+            np.save( MAX_PATH_FEATURES_PATH,max_dists)
+            dists_file = np.load(PATH_FEATURES_PATH)
+            max_dists_f = np.load(MAX_PATH_FEATURES_PATH)
+
+            assert np.allclose(dists_file,  dist_by_pf), (dists_file,dist_by_pf)
+            assert np.allclose(max_dists,  max_dists_f)
+        
+        max_per_pf = np.max(max_dists, axis=0)
+        #print(max_per_pf)
+        assert max_per_pf.shape == (len(BASIC_PROFILES),) # TODO SEGUIR
+        
+        
+        #  edge features = [length, fuel, insec, time]
+        # TODO: NORMALIZATION CON ESTO?
+        for i in range(max_per_pf.shape[0]):
+            self.link_feature[:,i+1] = self.link_feature[:,i+1]/(max_per_pf[i]/self.edge_feature_max[i+1])
         
 
         if self.need_path_features:
@@ -678,7 +723,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             self.path_feature_no_norm = torch.from_numpy(path_feature_real_no_norm).float()
             
             def calculate_profiled_dist(d):
-                dists = np.full((path_feature.shape[0], len(BASIC_PROFILES)),fill_value=1e6, dtype=np.float32)
+                dists = np.full((path_feature_no_norm.shape[0], len(BASIC_PROFILES)),fill_value=1e6, dtype=np.float32)
                 max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-1000000.0, dtype=np.float32)
 
                 for i, bpf in enumerate(BASIC_PROFILES):
@@ -726,7 +771,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             self.path_feature_standarized = torch.from_numpy((path_feature_standarized - m) / v)
         
         
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0,714],], origins=None, destinations=None, profile=[1,0,0],feature_selection=FeatureSelection.NO_ONE_HOT, use_optimal_reward_per_profile=False, feature_preprocesssing=FeaturePreprocess.NORMALIZATION,visualize_example=False):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0,714],], origins=None, destinations=None, profile=(1.0,0.0,0.0),feature_selection=FeatureSelection.DEFAULT, use_optimal_reward_per_profile=False, feature_preprocesssing=FeaturePreprocess.NORMALIZATION,visualize_example=False):
         super().__init__(network_path, edge_path, pre_reset, origins, destinations, 8)
         
         
@@ -811,11 +856,11 @@ class RoadWorldGym(RoadWorld,gym.Env):
             origin_dest_pairs = [(int(od.split('_')[0]), int(od.split('_')[1])) for od in self.od_list]
         
             if visualize_example:
-                """paths_eco = [self.shortest_paths_nodes(profile=[1,0,0], to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]
+                """paths_eco = [self.shortest_paths_nodes(profile=(1.0,0.0,0.0), to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]
                 paths_sec = [self.shortest_paths_nodes(profile=[0,1,0], to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]
                 paths_eff = [self.shortest_paths_nodes(profile=[0,0,1], to_state=od[1], from_state=od[0]) for od in origin_dest_pairs]"""
                 visualize_graph(self.graph,self.node_positions, show_edge_weights=False, caminos_by_value={
-                    'sus': [self.shortest_paths_nodes(profile=[1,0,0], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
+                    'sus': [self.shortest_paths_nodes(profile=(1.0,0.0,0.0), to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
                     'sec': [self.shortest_paths_nodes(profile=[0,1,0], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),], 
                     'eff': [self.shortest_paths_nodes(profile=[0,0,1], to_state=origin_dest_pairs[0][1], from_state=origin_dest_pairs[0][0]),]})
 
@@ -952,7 +997,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
 class RoadWorldGymObservationState(RoadWorldGym):
     # TODO: Unused for now, though much cleaner possibly
     def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=False):
-        super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile, visualize_example, feature_selection=FeatureSelection.NO_ONE_HOT)
+        super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile, visualize_example, feature_selection=FeatureSelection.DEFAULT)
 
         self.state_space = deepcopy(self.observation_space)
         self.feature_observation_space = spaces.Box(low=0.0, high=1.0, shape=(self.n_features, ), dtype=np.float32)

@@ -5,6 +5,8 @@ Adapted for the RoadWorld environment
 
 import collections
 import enum
+import random
+import re
 import warnings
 from typing import (
     Any,
@@ -32,21 +34,20 @@ from imitation.util import networks, util
 from copy import deepcopy
 
 from src.network_env import FeaturePreprocess, RoadWorldPOMDPStateAsTuple
-from src.policies import SimplePolicy, TabularPolicyPerProfile, calculate_expected_cost_and_std
+from src.policies import SimplePolicy, TabularPolicyPerProfile, calculate_expected_cost_and_std, calculate_expected_similarities_and_std, jaccard, jaccard_similarity, profiled_aggregated_similarity_Agourogiannis_et_al_2023
 from src.policies import ValueIterationPolicy
-from src.reward_functions import TrainingModes, ProfiledRewardFunction
+from src.reward_functions import TrainingModes, ProfiledRewardFunction, cost_model_from_reward_net, squeeze_r
 from src.src_rl.aggregations import SumScore
 from src.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS
 
 import pandas as pd
 
-def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim, discount =1, reference_experts: Dict[tuple, List[types.Trajectory]] = None) -> dict:
-
+def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim, discount =1, reference_experts: Dict[tuple, List[types.Trajectory]] = None, groupby='odpr') -> dict:
         demo_om = dict()
         num_demos = dict()
         for traj in trajs:
             
-            orig_des_profile = ((traj.infos[0]['orig'], traj.infos[0]['des']), traj.infos[0]['profile'])
+            orig_des_profile = ((traj.infos[0]['orig'], traj.infos[0]['des']), traj.infos[0]['profile'])# if groupby == 'odpr' else (traj.infos[0]['orig'], traj.infos[0]['des'])
            
             if orig_des_profile not in num_demos.keys():
                 num_demos[orig_des_profile] = 0
@@ -61,22 +62,24 @@ def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim,
         for orig_des_profile, num_demos_od in num_demos.items():
             demo_om[orig_des_profile] /= num_demos_od
 
-        return demo_om
-
-def squeeze_r(r_output: th.Tensor) -> th.Tensor:
-    """Squeeze a reward output tensor down to one dimension, if necessary.
-
-    Args:
-         r_output (th.Tensor): output of reward model. Can be either 1D
-            ([n_states]) or 2D ([n_states, 1]).
-
-    Returns:
-         squeezed reward of shape [n_states].
-    """
-    if r_output.ndim == 2:
-        return th.squeeze(r_output, 1)
-    assert r_output.ndim == 1
-    return r_output
+        if groupby == 'odpr':
+            return demo_om
+        
+        elif groupby == 'od':
+            demos_by_od = dict()
+            n_demos_per_od = dict()
+            for odpr, demo_om in demo_om.items():
+                od, pr = odpr
+                if od not in demos_by_od:
+                    n_demos_per_od[od] = 1
+                    demos_by_od[od] = demo_om
+                else:
+                    n_demos_per_od[od] += 1
+                    demos_by_od[od] += demo_om
+            for od in demos_by_od.keys():
+                demos_by_od[od] /= n_demos_per_od[od]
+            return demos_by_od
+        raise ValueError(groupby)
 
 
 class TrainingSetModes(enum.Enum):
@@ -118,8 +121,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         stochastic_expert = None,
         od_list_train = None,
         od_list_test = None,
-        training_mode = TrainingModes.VALUE_LEARNING,
+        training_mode = TrainingModes.VALUE_GROUNDING_LEARNING,
         training_set_mode = TrainingSetModes.PROFILED_EXPERT,
+        name_method='',
         *,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
     ) -> None:
@@ -206,7 +210,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         self.log_interval = log_interval
         self.rng = rng
 
-
+        self.name_method = name_method
         # Initialize policy to be uniform random. We don't use this for MCE IRL
         # training, but it gives us something to return at all times with `policy`
         # property, similar to other algorithms.
@@ -229,6 +233,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         self.training_mode = training_mode
         self.training_set_mode = training_set_mode
+
+        self.policies_per_profile = dict()
         self._reward_net.set_mode(self.training_mode)
         
     
@@ -237,7 +243,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         *,
         reward: Optional[np.ndarray] = None,
         pi: Optional[np.ndarray] = None,
-        profile = (1,0,0),
+        profile = (1.0,0.0,0.0),
         od_list = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         
@@ -292,17 +298,28 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory],Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
         pass
 
-    def adapt_policy_to_profile(self, profile=(0.5,0.5,0)):
-        reward_matrix = self.calculate_rewards_for_destinations_and_profile(self.destinations, profile)
+    def adapt_policy_to_profile(self, profile=(0.5,0.5,0), use_cached_policies=False, on_destinations=None):
         #print(np.where(reward_matrix >= 0.0))
         #print(reward_matrix[:,413])
-        
         if self.use_dijkstra:
-            sampler = SimplePolicy.from_environment_expert(self.env, profiles=[profile,], 
+            if use_cached_policies:
+                if profile not in self.policies_per_profile.keys():
+                    reward_matrix = self.calculate_rewards_for_destinations_and_profile(self.destinations if on_destinations is None else on_destinations, profile) 
+                    sampler = SimplePolicy.from_environment_expert(self.env, profiles=[profile,], 
+                                                            custom_cost = lambda st_des, pr: -reward_matrix[st_des[0], st_des[1]])
+                    self.policies_per_profile[profile] = sampler
+                else:
+                    sampler = self.policies_per_profile[profile]
+            else:
+                reward_matrix = self.calculate_rewards_for_destinations_and_profile(self.destinations if on_destinations is None else on_destinations, profile) 
+                    
+                sampler = SimplePolicy.from_environment_expert(self.env, profiles=[profile,], 
                                                          custom_cost = lambda st_des, pr: -reward_matrix[st_des[0], st_des[1]])
             
             adapted_policy = sampler
         else:
+            reward_matrix = self.calculate_rewards_for_destinations_and_profile(self.destinations if on_destinations is None else on_destinations, profile)
+        
             self.default_vi_policy.value_iteration(error=0.1, 
                                             profile=self.env.last_profile if profile is None else tuple(profile),
                                             custom_reward=self.reward_from_matrix(reward_matrix), expert_paths_per_od_profile=self.expert_trajectories_per_odpr,
@@ -312,6 +329,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         self.policy.set_pi_or_policy(adapted_policy)
         self.policy.set_profile(profile) 
+
+        return adapted_policy
 
         
 
@@ -343,115 +362,533 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 return reward_matrix[next_state[0]]
         return _reward_from_matrix
     
-    def expected_trajectory_cost_calculation(self, on_profiles, target_profile, stochastic_sampling = False, n_samples_per_od=None, custom_cost_preprocessing=None, repeat_society=10):
+    def expected_trajectory_cost_calculation(self, on_profiles, learned_profiles, costs_measured_with_profiles=BASIC_PROFILES, stochastic_sampling = False, n_samples_per_od=None, custom_cost_preprocessing=None, repeat_society=10, bins=30, new_test_data=0, name_method='', plot_histograms=False, plot_learned_profiles_as_probabilities=False):
         
         # TODO: Show costs of the 3 tyoes not only the ideal one for each profile.
+        if new_test_data is not None:
+            od_list_test_new = set(new_test_data)
+            od_list_all = deepcopy(od_list_test_new)
+            od_list_all.update(self.od_list_train)
+            od_list_all = list(od_list_all)
+
+            od_list_test_new = list(od_list_test_new)
+            #expert_policy = SimplePolicy.from_environment_expert(profiles=on_profiles, environment=self.env, on_od_list=od_list_all)
+            expert_policy = self.expert_policy
+        else:
+            expert_policy = self.expert_policy
+        
+        destinations_all = list(set([od[1] for od in od_list_all]))
         n_samples_per_od = self.n_repeat_per_od_monte_carlo if n_samples_per_od is None else int(n_samples_per_od)
         cost_preprocessing = FeaturePreprocess.NORMALIZATION if custom_cost_preprocessing is None else custom_cost_preprocessing
         
-        train_rows = {'expert': {pr: (0,0) for pr in on_profiles}, 
-                      'learned': {pr: (0,0) for pr in on_profiles}, 
-                      'learned_profile': {pr: (0,0) for pr in on_profiles},
-                      'expert_profile': {pr: (0,0) for pr in on_profiles},
-                      'society_profile':{pr: (0,0) for pr in on_profiles}}
-        test_rows = {'expert': {pr: (0,0) for pr in on_profiles}, 
-                     'learned': {pr: (0,0) for pr in on_profiles}, 
-                     'learned_profile': {pr: (0,0) for pr in on_profiles},
-                     'expert_profile': {pr: (0,0) for pr in on_profiles},
-                     'society_profile':{pr: (0,0) for pr in on_profiles}
-                    }
 
-        learned_pr = self.get_reward_net().get_learned_profile()
-        self.adapt_policy_to_profile(learned_pr)
-        assert self._reward_net.cur_profile == learned_pr
-        # Profile learned.
-        sampler_learned_profile: SimplePolicy = SimplePolicy.from_sb3_policy(policy=self.policy, real_env=self.env)
-        learned_profile_trajs_train = sampler_learned_profile.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[learned_pr,], od_list=self.od_list_train)
-        learned_profile_trajs_test = sampler_learned_profile.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[learned_pr,], od_list=self.od_list_test)
+        measure_profiles = []
+        measure_profiles.extend(costs_measured_with_profiles)
+        #measure_profiles.extend('societal_cost')
 
+        """'expert_profile': {pr: (0,0) for pr in on_profiles_with_societal_cost},'society_profile':{pr: (0,0) for pr in on_profiles_with_societal_cost},"""
+        train_rows = {
+            'expert': {pr: (0,0) for pr in measure_profiles},
+                      'learned': {pr: (0,0) for pr in measure_profiles},
+                      #'learned_profile': {pr: (0,0) for pr in on_profiles_with_societal_cost},
+                      #'learned_profile_probability': {pr: (0,0) for pr in on_profiles_with_societal_cost}
+                      }
+        train_rows.update({f'expert_pr_{tuple(float(f"{t:0.2f}") for t in pr)}': {pr_2: (0,0) for pr_2 in measure_profiles} for pr in on_profiles})
+        train_rows.update({f'society_pr_{tuple(float(f"{t:0.2f}") for t in pr)}': {pr_2: (0,0) for pr_2 in measure_profiles} for pr in on_profiles})
+        train_rows.update({f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}': {pr_2: (0,0) for pr_2 in measure_profiles} for learned_pr, target_pr in learned_profiles})
+        if plot_learned_profiles_as_probabilities:
+            train_rows.update({f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}': {pr_2: (0,0) for pr_2 in measure_profiles} for learned_pr, target_pr in learned_profiles})
+        
+
+        test_rows = deepcopy(train_rows)
+        box_plots_train = deepcopy(train_rows)
+        box_plots_test = deepcopy(test_rows)
+
+
+        similarity_columns = ['Learned Profile', 'Target Profile', ]
+        for pr in measure_profiles:
+            name = f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr, tuple(float(f"{t:0.2f}") for t in pr)))}'
+            similarity_columns.append(name)
+        for pr in measure_profiles:
+            name = f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr, tuple(float(f"{t:0.2f}") for t in pr)))} expert'
+            similarity_columns.append(name)
+        similarity_columns.append('Similarity with target profile agent')
+        similarity_columns.append('Similarity with target profile society')
+        
+        similarity_metrics = ['agou', 'jaccard', 'visitation_count']
+        similarity_data_train = {m: [] for m in similarity_metrics}
+
+        similarity_data_test = deepcopy(similarity_data_train)
+
+
+        for learned_pr, target_pr in learned_profiles:
+        
+            #learned_pr = self.get_reward_net().get_learned_profile()
+            self.adapt_policy_to_profile(learned_pr, use_cached_policies=True, on_destinations=destinations_all)
+            #assert self._reward_net.cur_profile == learned_pr
+            # Profile learned.
+            sampler_learned_profile: SimplePolicy = SimplePolicy.from_sb3_policy(policy=self.policy, real_env=self.env)
+            learned_profile_trajs_train = sampler_learned_profile.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[learned_pr,], od_list=self.od_list_train)
+            learned_profile_trajs_test = sampler_learned_profile.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[learned_pr,], od_list=od_list_test_new)
+            learned_profile_as_probs_trajs_train = []
+            learned_profile_as_probs_trajs_test = []
+            society_trajs_train = []
+            society_trajs_test = []
+
+
+            expert_trajs_train = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[target_pr,], od_list=self.od_list_train)
+            assert len(expert_trajs_train) > 0
+            
+            expert_trajs_test = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[target_pr,], od_list=od_list_test_new)
+            assert len(expert_trajs_test) > 0
+
+            for _ in range(repeat_society):
+                od_per_pr_train= self.divide_od_list_as_per_profile(self.od_list_train, target_pr)
+                od_per_pr_test = self.divide_od_list_as_per_profile(od_list_test_new, target_pr)
+                for bpr in od_per_pr_test.keys():
+                    #society_profile_trajs_train.extend(expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_per_pr_train[pr]))
+                    #society_profile_trajs_test.extend(expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_per_pr_test[pr]))
+                    society_trajs_train.extend(expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[bpr,], od_list=od_per_pr_train[bpr]))
+                    society_trajs_test.extend(expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[bpr,], od_list=od_per_pr_test[bpr]))
+                    
+                if plot_learned_profiles_as_probabilities:
+                    for bpr in od_per_pr_test.keys():    
+                        self.adapt_policy_to_profile(bpr, use_cached_policies=True, on_destinations=destinations_all)
+                        sampler: SimplePolicy = SimplePolicy.from_sb3_policy(policy=self.policy, real_env=self.env)
+                    
+                        learned_profile_as_probs_trajs_train.extend(sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[bpr,], od_list=od_per_pr_train[bpr]))
+                        learned_profile_as_probs_trajs_test.extend(sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[bpr,], od_list=od_per_pr_test[bpr]))
+                        
+            #costs_learned_and_expert_train, agou_learned_and_expert_train_target, jensen_learned_and_expert_train_target, jensen_learned_and_expert_train_per_pr = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr, 
+            costs_learned_and_expert_train, agou_learned_and_expert_train_target = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr, 
+                                                                                                                                                                                                               sample_trajs=learned_profile_trajs_train, 
+                                                                                                                                                                                                           expert_trajs=expert_trajs_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            #costs_learned_and_expert_test, agou_learned_and_expert_test_target, jensen_learned_and_expert_test_target, jensen_learned_and_expert_test_per_pr = calculate_expected_similarities_and_std(self.env.cost_model,profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_test, expert_trajs=expert_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            costs_learned_and_expert_test, agou_learned_and_expert_test_target = calculate_expected_similarities_and_std(self.env.cost_model,profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_test, expert_trajs=expert_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            
+            """costs_learned_and_society_train, agou_learned_and_society_train_target, jensen_learned_and_society_train_target, jensen_learned_and_society_train_per_pr = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr, 
+                                                                                                                                                                                                               sample_trajs=learned_profile_trajs_train, 
+                                                                                                                                                                                                               expert_trajs=society_trajs_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            """
+            
+            costs_learned_and_society_train, agou_learned_and_society_train_target = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr, 
+                                                                                                                                                                                                               sample_trajs=learned_profile_trajs_train, 
+                                                                                                                                                                                                               expert_trajs=society_trajs_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            """costs_learned_and_society_test, agou_learned_and_society_test_target, jensen_learned_and_society_test_target, jensen_learned_and_society_test_per_pr = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr,
+                                                                                                                                                                                                           sample_trajs=learned_profile_trajs_test, 
+                                                                                                                                                                                                           expert_trajs=society_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            """
+            costs_learned_and_society_test, agou_learned_and_society_test_target = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr,
+                                                                                                                                                                                                           sample_trajs=learned_profile_trajs_test, 
+                                                                                                                                                                                                           expert_trajs=society_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+            
+            jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, _ = jaccard_similarity(self.env.cost_model, profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing,return_per_od=True)
+            jaccard_per_pr_expert_test, jaccard_expert_test_normal, jaccard_expert_test_costs, _ = jaccard_similarity(self.env.cost_model, profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_test, expert_trajs=expert_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing, return_per_od=True)
+            
+            jaccard_per_pr_society_train, jaccard_society_train_normal, jaccard_society_train_costs, _ = jaccard_similarity(self.env.cost_model, profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_train, expert_trajs=society_trajs_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing, return_per_od=True)
+            jaccard_per_pr_society_test, jaccard_society_test_normal, jaccard_society_test_costs, _ = jaccard_similarity(self.env.cost_model, profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_test, expert_trajs=society_trajs_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing, return_per_od=True)
+            
+            
+            demo_oms_learned_profile_trajs = get_demo_oms_from_trajectories(learned_profile_trajs_train,state_dim=self.env.state_dim, groupby='od')
+            demo_oms_expert_trajs = get_demo_oms_from_trajectories(expert_trajs_train, state_dim=self.env.state_dim,groupby='od')
+            demo_oms_society_trajs = get_demo_oms_from_trajectories(society_trajs_train, state_dim=self.env.state_dim,groupby='od')
+            keys_vc = demo_oms_learned_profile_trajs.keys()
+            
+            visitation_diff_expert_train = np.sum([np.abs(demo_oms_learned_profile_trajs[od] - demo_oms_expert_trajs[od]) for od in keys_vc],axis=1)
+            visitation_diff_society_train = np.sum([np.abs(demo_oms_learned_profile_trajs[od] - demo_oms_society_trajs[od]) for od in keys_vc],axis=1)
+            
+            demo_oms_learned_profile_trajs = get_demo_oms_from_trajectories(learned_profile_trajs_test,state_dim=self.env.state_dim, groupby='od')
+            demo_oms_expert_trajs = get_demo_oms_from_trajectories(expert_trajs_test, state_dim=self.env.state_dim,groupby='od')
+            demo_oms_society_trajs = get_demo_oms_from_trajectories(society_trajs_test, state_dim=self.env.state_dim,groupby='od')
+            keys_vc = demo_oms_learned_profile_trajs.keys()
+            visitation_diff_expert_test = np.sum([np.abs(demo_oms_learned_profile_trajs[od] - demo_oms_expert_trajs[od]) for od in keys_vc], axis=1)
+            visitation_diff_society_test = np.sum([np.abs(demo_oms_learned_profile_trajs[od] - demo_oms_society_trajs[od]) for od in keys_vc], axis=1)
+            
+
+            similarity_agou_now_train = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_agou_now_test = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_agou_now_train['Similarity with target profile agent'] = np.mean(agou_learned_and_expert_train_target),np.std(agou_learned_and_expert_train_target)
+            similarity_agou_now_test['Similarity with target profile agent'] = np.mean(agou_learned_and_expert_test_target),np.std(agou_learned_and_expert_test_target)
+            similarity_agou_now_train['Similarity with target profile society'] = np.mean(agou_learned_and_society_train_target),np.std(agou_learned_and_society_train_target)
+            similarity_agou_now_test['Similarity with target profile society'] = np.mean(agou_learned_and_society_test_target),np.std(agou_learned_and_society_test_target)
+
+            similarity_vc_now_train = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_vc_now_test = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_vc_now_train['Similarity with target profile agent'] = np.mean(visitation_diff_expert_train), np.std(visitation_diff_expert_train)
+            similarity_vc_now_test['Similarity with target profile agent'] = np.mean(visitation_diff_expert_test), np.std(visitation_diff_expert_test)
+            similarity_vc_now_train['Similarity with target profile society'] = np.mean(visitation_diff_society_train), np.std(visitation_diff_society_train)
+            similarity_vc_now_test['Similarity with target profile society'] = np.mean(visitation_diff_society_test), np.std(visitation_diff_society_test)
+
+            similarity_jaccard_now_train = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_jaccard_now_test = {'Learned Profile': learned_pr, 'Target Profile': target_pr,}
+            similarity_jaccard_now_train['Similarity with target profile agent'] = np.mean(jaccard_expert_train_costs), np.std(jaccard_expert_train_costs)
+            similarity_jaccard_now_test['Similarity with target profile agent'] = np.mean(jaccard_expert_test_costs), np.std(jaccard_expert_test_costs)
+            similarity_jaccard_now_train['Similarity with target profile society'] = np.mean(jaccard_society_train_costs), np.std(jaccard_society_train_costs)
+            similarity_jaccard_now_test['Similarity with target profile society'] = np.mean(jaccard_society_test_costs), np.std(jaccard_society_test_costs)
+
+
+
+            for ipr_2, pr_2 in enumerate(measure_profiles):
+                assert np.allclose(costs_learned_and_expert_train['sample'][:,ipr_2], np.dot(costs_learned_and_expert_train['sample'], np.asarray(pr_2)))
+                #jensen_pr_2_train, agou_pr_2_train = np.dot(jensen_learned_and_expert_train_per_pr, pr_2), profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_learned_and_expert_train['sample'], costs_learned_and_expert_train['expert'], preference_weights=pr_2)
+                #jensen_pr_2_test, agou_pr_2_test = np.dot(jensen_learned_and_expert_test_per_pr, pr_2), profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_learned_and_expert_test['sample'], costs_learned_and_expert_test['expert'], preference_weights=pr_2)
+                agou_pr_2_train =profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_learned_and_expert_train['sample'], costs_learned_and_expert_train['expert'], preference_weights=pr_2)
+                agou_pr_2_test = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_learned_and_expert_test['sample'], costs_learned_and_expert_test['expert'], preference_weights=pr_2)
+                
+                jaccard_pr_2_train = jaccard_per_pr_expert_train[pr_2]
+                jaccard_pr_2_test = jaccard_per_pr_expert_test[pr_2]
+            
+
+
+                similarity_agou_now_train[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] = np.mean(agou_pr_2_train),np.std(agou_pr_2_train)
+                similarity_agou_now_test[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] = np.mean(agou_pr_2_test),np.std(agou_pr_2_test)
+                
+                #similarity_vc_now_train[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] = np.ma
+                #similarity_vc_now_test[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] = jensen_pr_2_test
+               
+                similarity_jaccard_now_train[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] = np.mean(jaccard_pr_2_train),np.std(jaccard_pr_2_train)
+                similarity_jaccard_now_test[f'Similarity in terms of {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))}'] =  np.mean(jaccard_pr_2_test),np.std(jaccard_pr_2_test)
+                
+                #self.adapt_policy_to_profile(pr_2, use_cached_policies=True, on_destinations=destinations_all)
+                if pr_2 in BASIC_PROFILES:
+                    expert_mpr_train = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr_2,], od_list=self.od_list_train)
+                    expert_mpr_test = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr_2,], od_list=od_list_test_new)
+                    
+                    costs_mpr_train, agou_mpr_train = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr, sample_trajs=learned_profile_trajs_train, expert_trajs=expert_mpr_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+                    costs_mpr_test, agou_mpr_test = calculate_expected_similarities_and_std(self.env.cost_model, profile_for_cost_model=target_pr,
+                                                                                                                                                                                                            sample_trajs=learned_profile_trajs_test, 
+                                                                                                                                                                                                            expert_trajs=expert_mpr_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing)
+                
+                    agou_mpr_train =profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_mpr_train['sample'], costs_mpr_train['expert'], preference_weights=pr_2)
+                    agou_mpr_test = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_mpr_test['sample'], costs_mpr_test['expert'], preference_weights=pr_2)
+                    similarity_agou_now_train[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(agou_mpr_train), np.std(agou_mpr_train))
+                    similarity_agou_now_test[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(agou_mpr_test), np.std(agou_mpr_test))
+                    
+
+                    demo_oms_learned_profile_trajs_test = get_demo_oms_from_trajectories(learned_profile_trajs_test,state_dim=self.env.state_dim, groupby='od')
+                    demo_oms_learned_profile_trajs_train = get_demo_oms_from_trajectories(learned_profile_trajs_train,state_dim=self.env.state_dim, groupby='od')
+                    
+                    demo_oms_expert_trajs_train = get_demo_oms_from_trajectories(expert_trajs_train, state_dim=self.env.state_dim,groupby='od')
+                    demo_oms_expert_trajs_test = get_demo_oms_from_trajectories(society_trajs_test, state_dim=self.env.state_dim,groupby='od')
+                    keys_vc_train = demo_oms_learned_profile_trajs_train.keys()
+                    keys_vc_test = demo_oms_learned_profile_trajs_test.keys()
+                    visitation_diff_expert_test = np.sum([np.abs(demo_oms_learned_profile_trajs_test[od] - demo_oms_expert_trajs_test[od]) for od in keys_vc_test],axis=1)
+                    visitation_diff_expert_train = np.sum([np.abs(demo_oms_learned_profile_trajs_train[od] - demo_oms_expert_trajs_train[od]) for od in keys_vc_train],axis=1)
+                    
+                    
+                    similarity_vc_now_train[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(visitation_diff_expert_train), np.std(visitation_diff_expert_train))
+                    similarity_vc_now_test[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(visitation_diff_expert_test), np.std(visitation_diff_expert_test))
+                    
+                    jaccard_per_pr_expert, _, jaccard_expert_cost_train, _= jaccard_similarity(self.env.cost_model, profile_for_cost_model=pr_2, sample_trajs=learned_profile_trajs_train, expert_trajs=expert_mpr_train, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing, return_per_od=True)
+                    jaccard_per_pr_expert, _, jaccard_expert_cost_test, _= jaccard_similarity(self.env.cost_model, profile_for_cost_model=pr_2, sample_trajs=learned_profile_trajs_test, expert_trajs=expert_mpr_test, profile_criteria=costs_measured_with_profiles, preprocessing =custom_cost_preprocessing, return_per_od=True)
+                    
+                    similarity_jaccard_now_train[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(jaccard_expert_cost_train), np.std(jaccard_expert_cost_train))
+                    similarity_jaccard_now_test[f'Similarity with {str.capitalize(BASIC_PROFILE_NAMES.get(pr_2, tuple(float(f"{t:0.2f}") for t in pr_2)))} expert'] = (np.mean(jaccard_expert_cost_test), np.std(jaccard_expert_cost_test))
+                    
+                avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train = np.mean(costs_learned_and_expert_train['sample'][:,ipr_2]), np.std(costs_learned_and_expert_train['sample'][:,ipr_2])
+                avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test = np.mean(costs_learned_and_expert_test['sample'][:,ipr_2]), np.std(costs_learned_and_expert_test['sample'][:,ipr_2])
+
+                """avg_cost_learned_profile_trajs_train_2, std_learned_profile_trajs_train_2, allcosts_lpttr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else learned_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=learned_profile_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                                                        bins=bins, file_name=name_method + f'value_system_identification_profile_{learned_pr}', plot_histogram=plot_histograms)
+                """
+                #assert np.allclose(avg_cost_learned_profile_trajs_train, avg_cost_learned_profile_trajs_train_2)
+                #assert np.allclose(std_learned_profile_trajs_train_2,std_learned_profile_trajs_train)
+
+                """avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test , allcosts_lptte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else learned_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=learned_profile_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                                    bins=bins, file_name=name_method + f'value_system_identification_profile_{learned_pr}_test', plot_histogram=plot_histograms)"""
+                
+                box_plots_train[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = costs_learned_and_expert_train['sample'][:,ipr_2]
+                box_plots_test[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = costs_learned_and_expert_test['sample'][:,ipr_2]
+
+                train_rows[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train)
+                test_rows[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test)
+
+                """avg_train, std_train , allcosts_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model',  trajectories=expert_trajs_train, preprocessing = cost_preprocessing,
+                                                                       bins=bins, file_name=name_method + f'expert_choosing_with_profile_{target_pr}', plot_histogram=plot_histograms)
+                avg_test, std_test , allcosts_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=expert_trajs_test, preprocessing = cost_preprocessing,
+                                                                     bins=bins, file_name=name_method + f'expert_choosing_with_profile_{target_pr}_test', plot_histogram=plot_histograms)"""
+                """if ipr_2 != 'societal_cost':
+                    
+                    print(costs['expert'].shape)
+                    print(costs['expert'][ipr_2].shape)
+                    print(agou)
+                    print(jensen)
+                    print(allcosts_train.shape)
+                    print(allcosts_train)
+                    print("0",costs['expert'][:,0], measure_profiles[0], ipr_2, pr_2)
+                    print("1",costs['expert'][:,1], measure_profiles[1], ipr_2, pr_2)
+                    print("2",costs['expert'][:,2], measure_profiles[2], ipr_2, pr_2)
+                    assert np.allclose(sorted(costs['expert'][:,ipr_2]), sorted(allcosts_train))"""
+                
+                # TODO: SEGUIR CON LAS SIMILARITIES A VER QUE TAL VAN. Optimizar lo de calcular dos veces el coste (?)
+                # TODO: HACER LAS GRAFICAS DE 3 EN 3 box plots.
+                # TODO: Plottear duramte aprendizaje en vez de Edit distance, la de Jaccard. Y en vez de feature differences la de Agou y la Jensen.
+                avg_train, std_train = np.mean(costs_learned_and_expert_train['expert'][:,ipr_2]), np.std(costs_learned_and_expert_train['expert'][:,ipr_2])
+                avg_test, std_test = np.mean(costs_learned_and_expert_test['expert'][:,ipr_2]), np.std(costs_learned_and_expert_test['expert'][:,ipr_2])
+
+                box_plots_train[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = costs_learned_and_expert_train['expert'][:,ipr_2]
+                box_plots_test[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = costs_learned_and_expert_test['expert'][:,ipr_2]
+
+                train_rows[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_train, std_train)
+                test_rows[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_test, std_test)
+
+                """avg_train, std_train , allcosts_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=society_trajs_train, preprocessing = cost_preprocessing,
+                                                                       bins=bins, file_name=name_method + f'society_choosing_with_profile_{target_pr}', plot_histogram=plot_histograms)
+                avg_test, std_test , allcosts_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=society_trajs_test, preprocessing = cost_preprocessing,
+                                                                     bins=bins, file_name=name_method + f'society_choosing_with_profile_{target_pr}_test', plot_histogram=plot_histograms)
+                """
+                avg_train, std_train = np.mean(costs_learned_and_society_train['expert'][:,ipr_2]), np.std(costs_learned_and_society_train['expert'][:,ipr_2])
+                avg_test, std_test = np.mean(costs_learned_and_society_test['expert'][:,ipr_2]), np.std(costs_learned_and_society_test['expert'][:,ipr_2])
+
+                box_plots_train[f'society_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = costs_learned_and_society_train['expert'][:,ipr_2]
+                box_plots_test[f'society_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = costs_learned_and_society_test['expert'][:,ipr_2]
+
+                train_rows[f'society_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_train, std_train)
+                test_rows[f'society_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_test, std_test)
+
+
+                if plot_learned_profiles_as_probabilities:
+                    avg_cost_learned_probs_profile_trajs_train, std_learned_probs_profile_trajs_train , allcosts_lpptr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=learned_profile_as_probs_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                                    bins=bins, file_name=name_method + f'learned_profile_as_probs_{learned_pr}', plot_histogram=plot_histograms)
+                    avg_cost_learned_probs_profile_trajs_test, std_learned_probs_profile_trajs_test , allcosts_lppte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=learned_profile_as_probs_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                                        bins=bins, file_name=name_method + f'learned_profile_as_probs_{learned_pr}_test', plot_histogram=plot_histograms)
+                    
+
+                    train_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_probs_profile_trajs_train, std_learned_probs_profile_trajs_train)
+                    test_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_probs_profile_trajs_test, std_learned_probs_profile_trajs_test)
+                    box_plots_train[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = allcosts_lpptr
+                    box_plots_test[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = allcosts_lppte
+            
+                """avg_societal_train_lr, std_societal_train_lr , allcosts_str_lr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=learned_pr, mode='societal_cost', trajectories=learned_profile_as_probs_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                                    bins=bins, file_name=name_method + f'societal_costs_learned_profile_{learned_pr}', plot_histogram=plot_histograms)
+                avg_societal_test_lr, std_societal_test_lr , allcosts_ste_lr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=learned_pr, mode='societal_cost', trajectories=learned_profile_as_probs_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                                    bins=bins, file_name=name_method + f'societal_costs_learned_profile_{learned_pr}_test', plot_histogram=plot_histograms)
+                
+
+                train_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = (avg_societal_train_lr, std_societal_train_lr)
+                test_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = (avg_societal_test_lr, std_societal_test_lr)
+                box_plots_train[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = allcosts_str_lr
+                box_plots_test[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = allcosts_ste_lr"""
+            # ENDED learned, target current
+            similarity_data_train['agou'].append(similarity_agou_now_train)
+            similarity_data_train['visitation_count'].append(similarity_vc_now_train)
+            similarity_data_train['jaccard'].append(similarity_jaccard_now_train)
+
+            similarity_data_test['agou'].append(similarity_agou_now_test)
+            similarity_data_test['visitation_count'].append(similarity_vc_now_test)
+            similarity_data_test['jaccard'].append(similarity_jaccard_now_test)
+            
         # Expert with fixed target profile
-        expert_profile_trajs_train = self.expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profile,], od_list=self.od_list_train)
-        expert_profile_trajs_test = self.expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profile,], od_list=self.od_list_test)
-
+        """expert_profile_trajs_train = expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profiles,], od_list=self.od_list_train)
+        expert_profile_trajs_test = expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profiles,], od_list=od_list_test_new)
+        """
         # SOCIETY with target profile (proportions several times)
 
-        society_profile_trajs_train = []
-        society_profile_trajs_test = []
-        for _ in range(repeat_society):
-            od_per_pr_train = self.divide_od_list_as_per_profile(self.od_list_train, target_profile)
-            od_per_pr_test = self.divide_od_list_as_per_profile(self.od_list_test, target_profile)
-            
-            for pr in BASIC_PROFILES:
-                society_profile_trajs_train.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_per_pr_train[pr]))
-                society_profile_trajs_test.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_per_pr_test[pr]))
-
-        for pr in on_profiles:
-            self.adapt_policy_to_profile(pr)
+        for pr in measure_profiles:
+            self.adapt_policy_to_profile(pr, use_cached_policies=True, on_destinations=destinations_all)
             sampler: SimplePolicy = SimplePolicy.from_sb3_policy(policy=self.policy, real_env=self.env)
             
-            learned_trajs_train = sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_train)
+            value_learned_trajs_train = sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_train)
             
-            learned_trajs_test = sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_test)
-            if not self.stochastic_expert:
+            value_learned_trajs_test = sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_list_test_new)
+            
+            
+            """if not self.stochastic_expert:
                 expert_trajs_train = [t for t in self.expert_trajectories_per_pr[pr] if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train]
-                expert_trajs_test = [t for t in self.expert_trajectories_per_pr[pr] if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
             else:
-                expert_trajs_train = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_train)
-                expert_trajs_test = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_test)
-
-            avg_cost_learned_trajs_train, std_learned_trajs_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=learned_trajs_train, preprocessing = cost_preprocessing)
-            avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=learned_profile_trajs_train, preprocessing = cost_preprocessing)
-            avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_train, preprocessing = cost_preprocessing)
-            avg_cost_society_profile_trajs_train, std_society_profile_trajs_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_train, preprocessing = cost_preprocessing)
-            
+                """
+            expert_trajs_train_pr = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_train)
+            expert_trajs_test_pr = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_list_test_new)
             
 
-            avg_cost_learned_trajs_test, std_learned_trajs_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=learned_trajs_test, preprocessing = cost_preprocessing)
-            avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=learned_profile_trajs_test, preprocessing = cost_preprocessing)
-            avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_test, preprocessing = cost_preprocessing)
-            avg_cost_society_profile_trajs_test, std_society_profile_trajs_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_test, preprocessing = cost_preprocessing)
-            
-            
+                
 
-            avg_cost_expert_trajs_train, std_expert_trajs_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_train, preprocessing = cost_preprocessing)
-            avg_cost_expert_trajs_test, std_expert_trajs_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_test, preprocessing = cost_preprocessing)
+            avg_cost_learned_trajs_train, std_learned_trajs_train , allcosts_lttr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=value_learned_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                    bins=bins, file_name=name_method + f'value_learning_with_profile_{pr}', plot_histogram=plot_histograms)
+            
+            """avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train , allcosts_epttr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                                  bins=bins, file_name=name_method + f'expert_with_target_profile_{target_profiles}', plot_histogram=plot_histograms)
+            avg_cost_society_profile_trajs_train, std_society_profile_trajs_train , allcosts_sptr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_train, preprocessing = cost_preprocessing,
+                                                                                                                    bins=bins, file_name=name_method + f'society_with_target_profile_{target_profiles}', plot_histogram=plot_histograms)
+            """
+            
+            avg_cost_learned_trajs_test, std_learned_trajs_test , allcosts_ltte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=value_learned_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                  bins=bins, file_name=name_method + f'value_learning_with_profile_{pr}_test', plot_histogram=plot_histograms)
+            """
+            avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test , allcosts_eptte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                                bins=bins, file_name=name_method + f'expert_with_target_profile_{target_profiles}_test', plot_histogram=plot_histograms)
+            avg_cost_society_profile_trajs_test, std_society_profile_trajs_test , allcosts_spte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_test, preprocessing = cost_preprocessing,
+                                                                                                                  bins=bins, file_name=name_method + f'society_with_target_profile_{target_profiles}_test', plot_histogram=plot_histograms)
+            
+            """
+
+            avg_cost_expert_trajs_train, std_expert_trajs_train , allcosts_ettr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_train_pr, preprocessing = cost_preprocessing,
+                                                                                                  bins=bins, file_name=name_method + f'optimal_expert_with_profile_{pr}', plot_histogram=plot_histograms)
+            avg_cost_expert_trajs_test, std_expert_trajs_test , allcosts_ette = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_test_pr, preprocessing = cost_preprocessing,
+                                                                                                bins=bins, file_name=name_method + f'optimal_expert_with_profile_{pr}_test', plot_histogram=plot_histograms)
             
             train_rows['expert'][pr] = (avg_cost_expert_trajs_train, std_expert_trajs_train)
+            box_plots_train['expert'][pr] = allcosts_ettr
+
             train_rows['learned'][pr] = (avg_cost_learned_trajs_train, std_learned_trajs_train)
+            box_plots_train['learned'][pr] = allcosts_lttr
             test_rows['expert'][pr] = (avg_cost_expert_trajs_test, std_expert_trajs_test)
+            box_plots_test['expert'][pr] = allcosts_ette
             test_rows['learned'][pr] = (avg_cost_learned_trajs_test, std_learned_trajs_test)
-            
-            train_rows['learned_profile'][pr] = (avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train)
+            box_plots_test['learned'][pr] = allcosts_ltte
+
+            """train_rows['learned_profile'][pr] = (avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train)
+            box_plots_train['learned_profile'][pr] = allcosts_lpttr
             test_rows['learned_profile'][pr] = (avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test)
+            box_plots_test['learned_profile'][pr] = allcosts_lptte"""
+            
+            #train_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_train, std_society_profile_trajs_train)
+            #test_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_test, std_society_profile_trajs_test)
+            #box_plots_train['society_profile'][pr] = allcosts_sptr
+            #box_plots_test['society_profile'][pr] = allcosts_spte
 
-            train_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_train, std_society_profile_trajs_train)
-            test_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_test, std_society_profile_trajs_test)
+            
 
-            train_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train)
-            test_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test)
+            #train_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train)
+            #test_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test)
+            #box_plots_train['expert_profile'][pr] = allcosts_epttr
+            #box_plots_test['expert_profile'][pr] = allcosts_eptte
+
+
         
         df_data = []
-        for pr in on_profiles:
-            df_data.append(
-                {'Sustainability': pr[0], 'Security': pr[1], 
-                 'Efficiency': pr[2], 'Expert + given profile': train_rows['expert'][pr], 
-                 'Value learning + given profile': train_rows['learned'][pr], 
-                 f'Society with profile: {tuple(f"{t:0.3f}" for t in target_profile)}': train_rows['society_profile'][pr],
-                 f'Expert with profile: {tuple(f"{t:0.3f}" for t in target_profile)}': train_rows['expert_profile'][pr],
-                 f'Profile learning + Value Learning: {tuple(f"{t:0.3f}" for t in learned_pr)}': train_rows['learned_profile'][pr]})
+        
+        def get_key_name(key):
+            """elif 'learned_profile_probability' in key:
+                keyname = f'Profile Learning (as probs): {tuple(float(f"{t:0.2f}") for t in learned_pr)}'"""
+            """elif 'learned_profile' in key:
+                keyname = f'Profile Learning (as weights): {tuple(float(f"{t:0.2f}") for t in learned_pr)}'"""
+            keyname = None
+            if 'expert_pr' in key:
+                keyname = 'Expert ' + key.split('expert_pr_')[1]
+            elif 'society_pr' in key:
+                keyname = 'Society ' + key.split('society_pr_')[1]
+            elif 'expert' in key:
+                keyname = 'Exp + P'
+
+            elif 'learned_pr' in key:
+                keyname = 'Learning' + key.split('learned_pr_')[1]
+            elif 'learned' in key:
+                keyname = 'VL + P'
+            else:
+                print("UNKNOWN key", key)
+                keyname = key
+            return keyname
+        
+
+
+        plt.figure(figsize=(30, 10))
+        labels = []
+            
+        for key in box_plots_train.keys():
+            labels.append(get_key_name(key))
+        
+        xlabels = [re.sub("(.{32})", "\\1\n", label, 0, re.DOTALL) for label in labels]
+
+        for i, pr in enumerate(measure_profiles):
+            boxes = [box_plots_train[k][pr] for k in box_plots_train.keys()]
+            positions = np.array(list((range(len(boxes))))) + i*1.0/len(measure_profiles)
+            bp = plt.boxplot(boxes, positions=positions,patch_artist=True,widths=0.7*1.0/len(measure_profiles))
+            for patch in bp['boxes']:
+                #color2 = 'r' if color == 'red' else 'g' if color == 'green' else 'b' if color == 'blue' else 'w'
+                patch.set_facecolor(PROFILE_COLORS.get(pr, 'w'))
+                #patch.set_edgecolor(PROFILE_COLORS.get(pr, 'w'))
+            if i == len(measure_profiles)-1:
+                for p in positions:
+                    plt.axvline(x=(p+ p +1.0/len(measure_profiles))/2, color='blue', linestyle='--')  # Highlighting the minimum value
+                        
+        title = f"Test set: Boxplot (cost distribution calculated with different measure_profiles)"
+        plt.title(title)
+        plt.xticks(np.asarray(range(len(box_plots_train))) + (len(measure_profiles)-1)/2.0/len(measure_profiles), labels=xlabels, rotation=75)
+        plt.tight_layout()
+        plt.savefig(f'results/value_system_identification/{name_method}_boxplot_train.pdf', bbox_inches="tight")
+        #plt.show()
+        plt.close()
+
+        plt.figure(figsize=(30, 10))
+        for i, pr in enumerate(measure_profiles):
+            boxes = [box_plots_test[k][pr] for k in box_plots_test.keys()]
+
+            bp = plt.boxplot(boxes, positions=np.array(list((range(len(boxes))))) + i*1.0/len(measure_profiles),patch_artist=True, widths=0.7*1.0/len(measure_profiles))
+            for patch in bp['boxes']:
+                #color2 = 'r' if color == 'red' else 'g' if color == 'green' else 'b' if color == 'blue' else 'w'
+                patch.set_facecolor(PROFILE_COLORS.get(pr, 'w'))
+                #patch.set_edgecolor(PROFILE_COLORS.get(pr, 'w'))
+                if i == len(measure_profiles)-1:
+                    for p in positions:
+                        plt.axvline(x=(p+ p +1.0/len(measure_profiles))/2, color='blue', linestyle='--')  # Highlighting the minimum value
+                
+        title = f"Test set: Boxplot (cost distribution calculated with different measure_profiles)"
+        plt.title(title)
+        plt.xticks(np.asarray(range(len(box_plots_test))) + (len(measure_profiles)-1)/2.0/len(measure_profiles), labels=xlabels, rotation=75)
+        plt.tight_layout()
+        plt.savefig(f'results/value_system_identification/{name_method}_boxplot_test.pdf', bbox_inches="tight")
+        #plt.show()
+        plt.close()
+
+        
+
+        for iprk, prkey in enumerate(measure_profiles):
+            boxplot_train_of_prkey = []
+            boxplot_test_of_prkey = []
+            labels = []
+            for key in box_plots_train.keys():
+                boxplot_train_of_prkey.append(list(box_plots_train[key][prkey]))
+                boxplot_test_of_prkey.append(list(box_plots_test[key][prkey]))
+                labels.append(get_key_name(key))
+
+            
+            xlabels = [re.sub("(.{32})", "\\1\n", label, 0, re.DOTALL) for label in labels]
+
+            plt.figure(figsize=(14,10))
+            plt.boxplot(boxplot_test_of_prkey)
+            title = f"Test set: boxplot {name_method}_(cost distribution calculated as with {prkey})"
+            plt.title(title)
+            plt.xticks(list(i + 0.5 for i in range(len(xlabels))), labels=xlabels, rotation=75)
+            plt.tight_layout()
+            plt.savefig(f'results/value_system_identification/{name_method}_boxplot_test_costs_calculated_with_{prkey}.pdf', bbox_inches="tight")
+            plt.close()
+
+            plt.figure(figsize=(14,10))
+            plt.boxplot(boxplot_train_of_prkey)
+            title = f"Train set: boxplot {name_method}_(cost distribution calculated as with {prkey})"
+            plt.title(title)
+            plt.xticks(list(i + 0.5 for i in range(len(xlabels))), labels=xlabels, rotation=75)
+            plt.tight_layout()
+            plt.savefig(f'results/value_system_identification/{name_method}_boxplot_train_costs_calculated_with_{prkey}.pdf', bbox_inches="tight")
+            plt.close()
+            
+        for key in train_rows.keys():
+            keyname = get_key_name(key)
+            profile_data = {'Policy': keyname}
+            profile_data.update({BASIC_PROFILE_NAMES.get(pr, tuple(float(f"{t:0.2f}") for t in pr)): train_rows[key][pr] for pr in measure_profiles})
+            #profile_data.update({'Societal cost': train_rows[key]['societal_cost']})
+            df_data.append(profile_data)
+
         df_train = pd.DataFrame(df_data)
         df_data = []
-        for pr in on_profiles:
-            df_data.append(
-                {'Sustainability': pr[0], 'Security': pr[1], 
-                 'Efficiency': pr[2], 'Expert + given profile': test_rows['expert'][pr], 
-                 'Value learning + given profile': test_rows['learned'][pr], 
-                 f'Society with profile: {tuple(f"{t:0.3f}" for t in target_profile)}': test_rows['society_profile'][pr],
-                 f'Expert with profile: {tuple(f"{t:0.3f}" for t in target_profile)}': test_rows['expert_profile'][pr],
-                 f'Profile learning + Value Learning: {tuple(f"{t:0.3f}" for t in learned_pr)}': test_rows['learned_profile'][pr]})
-        
+        for key in test_rows.keys():
+            
+            keyname = get_key_name(key)
+
+            profile_data = {'Policy': keyname}
+            profile_data.update({BASIC_PROFILE_NAMES.get(pr, tuple(float(f"{t:0.2f}") for t in pr)): test_rows[key][pr] for pr in measure_profiles})
+            
+            df_data.append(profile_data)
+       
         df_test = pd.DataFrame(df_data)
-        return df_train, df_test, train_rows, test_rows
+
+        for metric in similarity_metrics:
+            similarity_data_test[metric] = pd.DataFrame(data=similarity_data_test[metric], columns=similarity_columns)
+            similarity_data_train[metric] = pd.DataFrame(data=similarity_data_train[metric], columns=similarity_columns)
+
+        return df_train, df_test, train_rows, test_rows, similarity_data_train, similarity_data_test
+    
     
     def feature_differences(self, sampled_trajs, obs_matrix, per_state=False, visitations=None, use_info_real_costs=True, sampled_traj_profile_to_expert_traj_profile_mapping={}):
         fd_per_traj = dict()
@@ -507,7 +944,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 fd_norm = np.linalg.norm(traj_obs - expected_expert_traj_obs, axis=-1)
                 fd = np.mean(traj_obs - expected_expert_traj_obs, axis=-1)
                 assert fd_norm.shape == (obs_matrix_np.shape[0],)
-            #exit(0)  
+             
             fd_per_traj[corresponding_odpr_of_expert_trajs] = fd
             fd_norm_per_traj[corresponding_odpr_of_expert_trajs] = fd_norm
         return fd_per_traj, fd_norm_per_traj
@@ -529,7 +966,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         previous_rew_mode = self._reward_net.mode
         
         with th.no_grad():
-            self._reward_net.set_mode(TrainingModes.VALUE_LEARNING)
+            self._reward_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
             self._reward_net.set_profile(chosen_profile)
             if state_space_is_1d:
                 predicted_r = squeeze_r(self._reward_net(None, None, obs_mat, dones[:, destinations[0]]))
@@ -537,7 +974,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 assert predicted_r.shape == (obs_mat.shape[0],)
                 predicted_r_np = predicted_r.detach().cpu().numpy()
             else:
-                predicted_r_np = np.zeros_like(self.env.reward_matrix[self.env.last_profile])
+                predicted_r_np = np.zeros_like(self.env.reward_matrix[list(self.env.reward_matrix.keys())[0]])
                 for d in destinations:
                     predicted_r = squeeze_r(self._reward_net(None, None, obs_mat[:,d,:], dones[:, d]))
                     #predicted_r/= -th.max(predicted_r)
@@ -545,6 +982,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     predicted_r_np[:,d] = predicted_r.detach().cpu().numpy()
             assert np.all(predicted_r_np[:, destinations] < 0.0)
+
             self._reward_net.set_mode(previous_rew_mode)
 
         return predicted_r_np
@@ -599,7 +1037,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             if len(od_train_per_profile[chosen_profile]) < 1:
                 continue
 
-            if self.training_mode != TrainingModes.PROFILE_LEARNING:
+            if self.training_mode != TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
                 learned_policy_profile = chosen_profile
                 self._reward_net.set_profile(learned_policy_profile)
 
@@ -716,126 +1154,211 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     def _train_step_sampling_trajectories(self, obs_mat: th.Tensor, dones: th.Tensor = None, society_profiles: list = [], society_profile_distribution: np.ndarray = np.array([]), batch_size = 100) -> Tuple[np.ndarray, np.ndarray]:
         
         th.autograd.set_detect_anomaly(False)
-        
-        learned_policy_profile  = self._reward_net.get_learned_profile()
-        
-        predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
-        
-        if self.use_mce_om:
-            pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile) 
-    
-            _, visitations = self.mce_occupancy_measures(
-                reward=predicted_r_np,
-                pi=pi,
-                profile=learned_policy_profile
-            )
-            sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
-            #sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
+        with th.no_grad():
+            learned_policy_profile  = self._reward_net.get_learned_profile()
             
-        else:
-            if self.use_dijkstra:
-                sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, profiles=[learned_policy_profile, ], 
-                                                custom_cost=lambda state_des, profile: (-predicted_r_np[state_des[0], state_des[1]]))
+            predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
+            pure_rewards_per_pure_pr = dict()
+            for pr in BASIC_PROFILES:
+                pure_rewards_per_pure_pr[pr] = self.calculate_rewards_for_destinations_and_profile(self.destinations, pr, obs_mat=obs_mat, dones=dones)
+            
+            if self.use_mce_om:
+                pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile) 
+        
+                _, visitations = self.mce_occupancy_measures(
+                    reward=predicted_r_np,
+                    pi=pi,
+                    profile=learned_policy_profile
+                )
+                sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
+                #sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
                 
             else:
-                pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile, 
-                                           #od_list=self.od_list_train
-                                           )
-                sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
+                if self.use_dijkstra:
+                    sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, profiles=[learned_policy_profile, ], 
+                                                    custom_cost=lambda state_des, profile: (-predicted_r_np[state_des[0], state_des[1]]))
+                    
+                else:
+                    pi = self.mce_partition_fh(predicted_r_np, profile=learned_policy_profile, 
+                                            #od_list=self.od_list_train
+                                            )
+                    sampler: SimplePolicy = SimplePolicy.from_policy_matrix(pi, real_env=self.env)
+                    
+                #sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
                 
-            #sampled_trajs= sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,])
-            
-            #visitations = get_demo_oms_from_trajectories(sampled_trajs, state_dim=self.env.state_dim)
-            
-            
+                #visitations = get_demo_oms_from_trajectories(sampled_trajs, state_dim=self.env.state_dim)
+                
+                
         # Forward/back/step (grads are zeroed at the top).
         # weights_th(s) = \pi(s) - D(s)
 
+        
+            mntensor_train_per_pr = dict()
+            mntensor_test_per_pr = dict()
+            rewards_per_pr = dict()
+            
+            od_list_array = np.array(self.od_list_train)
+            od_list_array_test = np.array(self.od_list_test)
+            society_array = np.asarray(society_profiles)
+
+                
+            ods_index = np.random.choice(len(self.od_list_train), size=batch_size, replace=True)
+            ods = [(od[0], od[1]) for od in od_list_array[ods_index].tolist()]
+            profiles_index = np.random.choice(len(society_profiles), size=batch_size, p=society_profile_distribution, replace=True)
+            
+            profiles = [tuple(pr) for pr in society_array[profiles_index].tolist()]
+
+            ods_index_test = np.random.choice(len(self.od_list_test), size=batch_size, replace=True)
+            ods_test = [(od[0], od[1]) for od in od_list_array_test[ods_index_test].tolist()]
+            profiles_index_test = np.random.choice(len(society_profiles), size=batch_size, p=society_profile_distribution, replace=True)
+            
+            profiles_test = [tuple(pr) for pr in society_array[profiles_index_test].tolist()]
+
+            assert len(profiles) == len(ods)
+            learned_policy_trajs = []
+            expert_policy_trajs = []
+
+            learned_policy_trajs_test = []
+            expert_policy_trajs_test = []
+
+            visitations = dict()
+            expert_visitations = dict()
+            for od, pr in zip(ods, profiles):
+                learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=[od,]))
+                """if odpr in self.expert_trajectories_per_odpr.keys():
+                    expert_policy_trajs_per_odpr[odpr] = self.expert_trajectories_per_odpr[odpr]                 
+                else:
+
+                    self.expert_trajectories_per_odpr[odpr] = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,])
+                    if pr not in self.expert_trajectories_per_pr.keys():
+                        self.expert_trajectories_per_pr[pr] = []
+                    self.expert_trajectories_per_pr[pr].extend(self.expert_trajectories_per_odpr[odpr])"""
+                expert_policy_trajs.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,]))
+            
+            for od, pr in zip(ods_test, profiles_test):
+                learned_policy_trajs_test.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=[od,]))
+                """if odpr in self.expert_trajectories_per_odpr.keys():
+                    expert_policy_trajs_per_odpr[odpr] = self.expert_trajectories_per_odpr[odpr]                 
+                else:
+
+                    self.expert_trajectories_per_odpr[odpr] = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,])
+                    if pr not in self.expert_trajectories_per_pr.keys():
+                        self.expert_trajectories_per_pr[pr] = []
+                    self.expert_trajectories_per_pr[pr].extend(self.expert_trajectories_per_odpr[odpr])"""
+                expert_policy_trajs_test.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,]))
+             
+                 #self.demo_state_om_per_profile.update(get_demo_oms_from_trajectories(self.expert_trajectories_per_odpr[odpr], state_dim=self.env.state_dim))
+            #learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train))
+            sampled_trajs_train = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train)
+            sampled_trajs_test = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_test)
+
+            # TODO ESTO ESTABA MAL. !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            #expert_trajs_train = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[TODO ESTO,], od_list=self.od_list_train)
+            #expert_trajs_test = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[TODO ESTO,], od_list=self.od_list_test)
+            # TODO: AGOU SIMILARITY NOT WELL CALCULATED ?? USAR algo como las expert policy trajs pero para exactamente los ODS de train y test????? o igual que lo otro?
+
+            all_trajs = deepcopy(sampled_trajs_train)
+            all_trajs.extend(sampled_trajs_test)
+
+            visitations = get_demo_oms_from_trajectories(learned_policy_trajs, state_dim=self.env.state_dim)
+            all_visitations = get_demo_oms_from_trajectories(all_trajs, state_dim= self.env.state_dim)
+            expert_visitations = get_demo_oms_from_trajectories(expert_policy_trajs, state_dim=self.env.state_dim)
+
+            #od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
+            #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
+            #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
+            costs_train, _, ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+            #jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(cost_model_from_reward_net(self._reward_net,env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
+            
+            costs_test, _, ods_agou_test= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=learned_policy_trajs_test, expert_trajs=expert_policy_trajs_test, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+            #jaccard_per_pr_expert_test, jaccard_expert_test_normal, jaccard_expert_test_costs, ods_jaccard_test = jaccard_similarity(cost_model_from_reward_net(self.reward_net), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
+            
+            for chosen_profile in set(bpr for i, bpr in enumerate(BASIC_PROFILES) if society_profile_distribution[i] > 0.0):
+                mntensor_train_per_pr[chosen_profile] = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_train['sample'], costs_train['expert'], preference_weights=chosen_profile)
+                mntensor_test_per_pr[chosen_profile] = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_test['sample'], costs_test['expert'], preference_weights=chosen_profile)
+                #print("MN TENSOR", mntensor_train_per_pr[chosen_profile], chosen_profile)
+                #print("MN TENSOR TEST", mntensor_test_per_pr[chosen_profile], chosen_profile)
+                #print(costs_train['sample'], chosen_profile)
+
+                """fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
+                                                                            sampled_traj_profile_to_expert_traj_profile_mapping=
+                                                                            {learned_policy_profile: chosen_profile})
+                fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
+                #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+                mntensor_train_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_train)).detach().numpy()
+
+                fd_test, fd_normed_test = self.feature_differences(
+                    sampled_trajs_test, obs_mat, per_state=False, 
+                    use_info_real_costs=True, 
+                    sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
+                
+                fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
+                #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+                mntensor_test_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_test)).detach().numpy()
+
+"""
+
+                rewards_per_pr[chosen_profile] = predicted_r_np
+        
         self.optimizer.zero_grad()  
         grad_norm = 0
+        ctrainsamp = th.as_tensor(costs_train['sample'],device=self._reward_net.device, dtype=self._reward_net.dtype)
+        ctrainexp = th.as_tensor(costs_train['expert'],device=self._reward_net.device, dtype=self._reward_net.dtype)
+        ctestsamp = th.as_tensor(costs_test['sample'],device=self._reward_net.device, dtype=self._reward_net.dtype)
+        ctestexp = th.as_tensor(costs_test['expert'],device=self._reward_net.device, dtype=self._reward_net.dtype)
+        #costs_train, agou_tr, ods_agou_tr= calculate_expected_similarities_and_std(lambda profile, normalization: lambda state_des: -rewards[state_des[0], state_des[1]], sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_for_cost_model=self._reward_net., profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+        agou_tr = 1.0- th.abs(1.0- 1.0/(-self._reward_net.trained_profile_net(- th.maximum(ctrainsamp, ctrainexp)/th.minimum(ctrainsamp, ctrainexp)))) #profiled_aggregated_similarity_Agourogiannis_et_al_2023(, )
+        assert th.all(agou_tr >= 0.0)
+        with th.no_grad():
+            agou_test = 1.0- th.abs(1.0 - 1/(- self._reward_net.trained_profile_net(- th.maximum(ctestsamp, ctestexp)/th.minimum(ctestsamp, ctestexp)))) #profiled_aggregated_similarity_Agourogiannis_et_al_2023(, )
+            assert th.all(agou_test >= 0.0)
+            mntensor_train_per_pr['learned'] = agou_tr.detach().numpy()
+            mntensor_test_per_pr['learned'] = agou_test.detach().numpy()
+            ods_weights= ods_agou
+            jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_tr, ods_jaccard_tr = jaccard_similarity(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=learned_policy_profile, sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_criteria=set(profiles), preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
+            jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_tst, ods_jaccard_tr = jaccard_similarity(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=learned_policy_profile, sample_trajs=learned_policy_trajs_test, expert_trajs=expert_policy_trajs_test, profile_criteria=set(profiles), preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
         
-        loss_total: th.Tensor = None
-        mntensor_train_per_pr = dict()
-        mntensor_test_per_pr = dict()
-        rewards_per_pr = dict()
-        
-        od_list_array = np.array(self.od_list_train)
-        society_array = np.asarray(society_profiles)
 
+        #avgg, stdd, _ = calculate_expected_cost_and_std(self.env.cost_model, mode='societal_cost',profile_for_cost_model=learned_policy_profile, trajectories=sampled_trajs_train, preprocessing=FeaturePreprocess.NORMALIZATION, )
+        #_, _, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(lambda profile, normalization: lambda state_des: -predicted_r_np[state_des[0], state_des[1]], profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION)
+        #mntensor_train_per_pr[pr]
+        #print(jaccard_training)
+
+            jaccard_tr = th.minimum(th.as_tensor(jaccard_tr), th.tensor(1.0))
+            jaccard_tst = th.minimum(th.as_tensor(jaccard_tst), th.tensor(1.0))
+        #print(np.float_power(1.0-jaccard_training, 1.0/3.0))
+        #jaccard_weights = np.float_power(1.0-jaccard_training, 1.0/3.0)
+        
+        
+        if self.fd_lambda != 0.0:
+            agou_tr = th.minimum(agou_tr,  th.tensor(1.0, requires_grad=True))
+
+            #print(np.float_power(1.0-jaccard_training, 1.0/3.0))
+            #agou_weights = np.float_power(1.0-agou_training, 1.0/3.0)
             
-        ods_index = np.random.choice(len(self.od_list_train), size=batch_size, replace=True)
-        ods = [(od[0], od[1]) for od in od_list_array[ods_index].tolist()]
-        profiles_index = np.random.choice(len(society_profiles), size=batch_size, p=society_profile_distribution, replace=True)
-        
-        profiles = [tuple(pr) for pr in society_array[profiles_index].tolist()]
-
-        assert len(profiles) == len(ods)
-        learned_policy_trajs = []
-        expert_policy_trajs = []
-        visitations = dict()
-        expert_visitations = dict()
-        for od, pr in zip(ods, profiles):
-            learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=[od,]))
-            """if odpr in self.expert_trajectories_per_odpr.keys():
-                expert_policy_trajs_per_odpr[odpr] = self.expert_trajectories_per_odpr[odpr]                 
-            else:
-
-                self.expert_trajectories_per_odpr[odpr] = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,])
-                if pr not in self.expert_trajectories_per_pr.keys():
-                    self.expert_trajectories_per_pr[pr] = []
-                self.expert_trajectories_per_pr[pr].extend(self.expert_trajectories_per_odpr[odpr])"""
-            expert_policy_trajs.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,]))
-            #self.demo_state_om_per_profile.update(get_demo_oms_from_trajectories(self.expert_trajectories_per_odpr[odpr], state_dim=self.env.state_dim))
-        #learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train))
-        sampled_trajs_train = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train)
-        sampled_trajs_test = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_test)
-
-        all_trajs = deepcopy(sampled_trajs_train)
-        all_trajs.extend(sampled_trajs_test)
-
-        visitations = get_demo_oms_from_trajectories(learned_policy_trajs, state_dim=self.env.state_dim)
-        all_visitations = get_demo_oms_from_trajectories(all_trajs, state_dim= self.env.state_dim)
-        expert_visitations = get_demo_oms_from_trajectories(expert_policy_trajs, state_dim=self.env.state_dim)
-
-       
-        
-        #chosen_profile_expert_trajs_train = [t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile) and (t.infos[0]['orig'], t.infos[0]['des']) in od_train_per_profile[chosen_profile]]
-        #od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
-        #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
-        #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
-        for chosen_profile in self.eval_profiles:
-            fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
-                                                                        sampled_traj_profile_to_expert_traj_profile_mapping=
-                                                                        {learned_policy_profile: chosen_profile})
-            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-            #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-            mntensor_train_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_train)).detach().numpy()
-
-            fd_test, fd_normed_test = self.feature_differences(
-                sampled_trajs_test, obs_mat, per_state=False, 
-                use_info_real_costs=True, 
-                sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
+            #agou_training =  th.hstack([agou_tr[ods_agou.index(od)] for od in ods_weights])
             
-            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-            #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-            mntensor_test_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_test)).detach().numpy()
+            COST_PREFERENCE = 3.0
+            OVERLAP_REFERENCE = 1.0
+            OVERLAP_USE = 0.0
 
-
-            rewards_per_pr[chosen_profile] = predicted_r_np
+            weights = th.float_power((1.0-agou_tr), 1.0/COST_PREFERENCE) #* OVERLAP_USE*th.float_power((1.0-jaccard_tr), 1.0/OVERLAP_REFERENCE)
+        else:
+            weights = th.ones_like(agou_tr)
+        assert th.all(weights >= 0.0)
         
-        visitation_count_diffs = th.as_tensor(
-            np.asarray([
-            visitations[(od, learned_policy_profile)] - expert_visitations[(od,pr)] for od, pr in zip(ods, profiles)]),
-                dtype=self._reward_net.dtype,
-                device=self._reward_net.device,
+        visitation_count_diffs = th.vstack([
+            weights[ods_weights.index(od)]*th.as_tensor(visitations[(od, learned_policy_profile)] - expert_visitations[(od,pr)], dtype=self._reward_net.dtype,
+                device=self._reward_net.device) for od, pr in zip(ods, profiles)],
+                #dtype=self._reward_net.dtype,
+                #device=self._reward_net.device,
             )
-        
         obs_matrix_all_trajs = th.vstack([obs_mat[:,od[1],:] for od in ods])
         done_matrix_all_trajs = th.vstack([dones[:,od[1]] for od in ods])
         
         rewards =  self._reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
         
-        
+    
         assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
         #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
         assert th.all(rewards < 0.0)
@@ -864,30 +1387,41 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         loss.backward(retain_graph=False)
         self.optimizer.step()
-            
-        grads = []
-        for p in self._reward_net.parameters():
-            assert p.grad is not None  # for type checker
-            grads.append(p.grad)
-            
-            print("GRAD: ", p.names, p.grad)
-        print("REAL LOSS:", loss)
-        print("REWARD NORM:", rewards.norm())
-        # TODO: Loss should be 0 when the profile has converged (?) ... or at least the gradient. Still it converges without problem though shakingly
-        grad_norm += util.tensor_iter_norm(grads).item()
         
-        grad_norm_per_pr = collections.defaultdict(lambda: grad_norm)
+        with th.no_grad():
+            grads = []
+            for p in self._reward_net.parameters():
+                assert p.grad is not None  # for type checker
+                grads.append(p.grad)
+                
+                print("GRAD: ", p.names, p.grad)
+            print("REAL LOSS:", loss)
+            print("REWARD NORM:", rewards.norm())
+            # TODO: Loss should be 0 when the profile has converged (?) ... or at least the gradient. Still it converges without problem though shakingly
+            grad_norm += util.tensor_iter_norm(grads).item()
+            
+            grad_norm_per_pr = collections.defaultdict(lambda: grad_norm)
 
-        return rewards_per_pr, all_visitations, grad_norm_per_pr, mntensor_train_per_pr, mntensor_test_per_pr, learned_policy_profile
+            visitations_test = get_demo_oms_from_trajectories(learned_policy_trajs_test, state_dim=self.env.state_dim)
+            expert_visitations_test = get_demo_oms_from_trajectories(expert_policy_trajs_test, state_dim=self.env.state_dim)
+            
+            visitation_count_diffs_abs_train = np.sum([np.abs(visitations[(od, learned_policy_profile)] - expert_visitations[(od,pr)]) for od, pr in zip(ods, profiles)], axis=1)
+            visitation_count_diffs_abs_test = np.sum([np.abs(visitations_test[(od, learned_policy_profile)] - expert_visitations_test[(od,pr)]) for od, pr in zip(ods_test, profiles_test)], axis=1)
+            
+            
+        return rewards_per_pr, all_visitations, grad_norm_per_pr, mntensor_train_per_pr, mntensor_test_per_pr, learned_policy_profile, jaccard_tr.detach().numpy(), jaccard_tst.detach().numpy(), visitation_count_diffs_abs_train, visitation_count_diffs_abs_test
     
-    def _train_step_value_learning(self, obs_mat: th.Tensor, dones: th.Tensor = None, chosen_profile=(1,0,0), loss_weighting=1.0,  batch_size=None) -> Tuple[np.ndarray, np.ndarray]:
+    def _train_step_value_learning(self, obs_mat: th.Tensor, dones: th.Tensor = None, chosen_profile=(1.0,0.0,0.0), loss_weighting=1.0,  batch_size=None) -> Tuple[np.ndarray, np.ndarray]:
         
         # get reward predicted for each state by current model, & compute
         # expected # of times each state is visited by soft-optimal policy
         # w.r.t that reward function
         # TODO(adam): support not just state-only reward?
         th.autograd.set_detect_anomaly(False)
-        learned_policy_profile  = self._reward_net.get_learned_profile() if self.training_mode == TrainingModes.PROFILE_LEARNING else chosen_profile
+        learned_policy_profile  = self._reward_net.get_learned_profile() if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else chosen_profile
+        pure_rewards_per_pure_pr = dict()
+        for pr in BASIC_PROFILES:
+            pure_rewards_per_pure_pr[pr] = self.calculate_rewards_for_destinations_and_profile(self.destinations, pr, obs_mat=obs_mat, dones=dones)
         
         predicted_r_np = self.calculate_rewards_for_destinations_and_profile(self.destinations, learned_policy_profile, obs_mat=obs_mat, dones=dones)
         
@@ -968,7 +1502,16 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     dtype=self._reward_net.dtype,
                     device=self._reward_net.device,
                 )
-            fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
+            
+            costs_train, agou , ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+            #jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(cost_model_from_reward_net(self._reward_net,env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
+            
+            costs_test, agou_test, ods_agou_test= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+            
+            mntensor_train =np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_train['sample'], costs_train['expert'], preference_weights=chosen_profile))
+            mntensor_test = np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_test['sample'], costs_test['expert'], preference_weights=chosen_profile))
+                
+            """fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
                                                                  sampled_traj_profile_to_expert_traj_profile_mapping=
                                                                  {learned_policy_profile: chosen_profile})
             fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
@@ -982,7 +1525,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             
             fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
             #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-            mntensor_test = th.mean(fd_normed_tensor_test)
+            mntensor_test = th.mean(fd_normed_tensor_test)"""
 
             obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
             done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
@@ -994,7 +1537,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             assert th.all(rewards < 0.0)
             #print(mntensor*rewards, (mntensor*rewards).shape)
             
-            if self.fd_lambda > 0.0:
+            """if self.fd_lambda > 0.0:
                 visited_states_for_each_od = (
                         th.as_tensor(
                             np.asarray([visitations[(odpr[0], learned_policy_profile)] for odpr in od_profiles_of_trajs_train]),
@@ -1009,7 +1552,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
                     rewards) 
             else:
-                losses = th.mul(
+                """
+            losses = th.mul(
                         visitation_count_diffs,
                     #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
                     rewards)
@@ -1044,7 +1588,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         predicted_r_np_all_states = predicted_r_np
 
-        return predicted_r_np_all_states, visitations, grad_norm, mntensor_train.detach().numpy(), mntensor_test.detach().numpy(), learned_policy_profile
+        return predicted_r_np_all_states, visitations, grad_norm, mntensor_train, mntensor_test, learned_policy_profile
 
     def divide_od_list_as_per_profile(self, od_list, pr):
         total_elements = len(od_list)
@@ -1099,21 +1643,25 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         dones = th.as_tensor(self.env.done_matrix,dtype=self._reward_net.dtype)
         assert self.demo_state_om is not None or self.demo_state_om_per_profile is not None
         #assert self.demo_state_om.shape == (len(obs_mat),)
-        assert self.demo_state_om_per_profile[(self.od_list_train[0], self.env.last_profile)].shape == (len(obs_mat),)
+        #print(list(self.demo_state_om_per_profile.keys()))
+        assert self.demo_state_om_per_profile[tuple(list(self.demo_state_om_per_profile.keys())[0])].shape == (len(obs_mat),)
         
         self.eval_profiles = self.training_profiles if self.training_set_mode != TrainingSetModes.PROFILED_SOCIETY else BASIC_PROFILES
         
 
         mean_absolute_difference_in_visitation_counts_per_profile_test = {pr: [] for pr in self.eval_profiles}
         mean_absolute_difference_in_visitation_counts_per_profile_train = {pr: [] for pr in self.eval_profiles}
+        if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
+            mean_absolute_difference_in_visitation_counts_per_profile_train['learned'] = []
+            mean_absolute_difference_in_visitation_counts_per_profile_test['learned'] = []
 
         grad_norms_per_iteration_per_profile = {pr: [] for pr in self.eval_profiles}
 
         overlapping_proportions_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
         overlapping_proportions_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
 
-        edit_distances_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
-        edit_distances_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
+        jaccard_pure_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
+        jaccard_pure_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
 
         sorted_overlap_indices_test = {pr: [] for pr in self.eval_profiles}
         sorted_overlap_indices_train = {pr: [] for pr in self.eval_profiles}
@@ -1121,6 +1669,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         pi_per_profile  = {pr: None for pr in self.eval_profiles}
         feature_expectation_differences_per_iteration_per_profile_test = {pr: [] for pr in self.eval_profiles}
         feature_expectation_differences_per_iteration_per_profile_train = {pr: [] for pr in self.eval_profiles}
+
+        historic_avg_agou_cost, historic_avg_jaccard, historic_std_agou_cost, historic_std_jaccard, historic_avg_vc, historic_std_vc= [], [], [],[],[],[]
+        historic_avg_agou_cost_test, historic_avg_jaccard_test, historic_std_agou_cost_test, historic_std_jaccard_test, historic_avg_vc_test, historic_std_vc_test= [], [], [],[],[],[]
 
         with networks.training(self._reward_net):
             # switch to training mode (affects dropout, normalization)
@@ -1151,12 +1702,31 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 visitations = dict()
                 learned_profiles_per_pr = {pr: pr for pr in self.eval_profiles}
                 predicted_rewards_per_profile = dict()
+
+                avg_soc_cost, std_soc_cost = None, None
+
                 if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
                     """predicted_rewards_per_profile, visitations, grad_norm_per_pr, fd_train_per_pr, fd_test_per_pr, learned_policy_profile = self._train_step_ponderated_profiles(
                         torch_obs_mat, dones, od_train_per_profile=od_train_per_basic_profile, profile_ponderation={pr: profile_proportions[BASIC_PROFILES.index(pr)] for pr in BASIC_PROFILES})"""
-                    predicted_rewards_per_profile, visitations, grad_norm_per_pr, fd_train_per_pr, fd_test_per_pr, learned_policy_profile = self._train_step_sampling_trajectories(
+                    predicted_rewards_per_profile, visitations, grad_norm_per_pr, fd_train_per_pr, fd_test_per_pr, learned_policy_profile, jaccard_sim_train, jaccard_sim_test, vc_diffs_abs_train, vc_diffs_abs_test = self._train_step_sampling_trajectories(
                         torch_obs_mat, dones, society_profiles=self.eval_profiles, society_profile_distribution=[profile_proportions[BASIC_PROFILES.index(pr)] for pr in self.eval_profiles], batch_size=batch_size)
                     learned_profiles_per_pr = {pr: learned_policy_profile for pr in self.eval_profiles}
+                    agou = fd_train_per_pr['learned']
+                    historic_avg_agou_cost.append(np.mean(agou))
+                    historic_std_agou_cost.append(np.std(agou))
+                    historic_avg_jaccard.append(np.mean(jaccard_sim_train))
+                    historic_std_jaccard.append(np.std(jaccard_sim_train))
+                    historic_avg_vc.append(np.mean(vc_diffs_abs_train))
+                    historic_std_vc.append(np.std(vc_diffs_abs_train))
+                    
+                    agou_test = fd_test_per_pr['learned']
+                    historic_avg_agou_cost_test.append(np.mean(agou_test))
+                    historic_std_agou_cost_test.append(np.std(agou_test))
+                    historic_avg_jaccard_test.append(np.mean(jaccard_sim_test))
+                    historic_std_jaccard_test.append(np.std(jaccard_sim_test))
+                    historic_avg_vc_test.append(np.mean(vc_diffs_abs_test))
+                    historic_std_vc_test.append(np.std(vc_diffs_abs_test))
+
                 else:
                     
                     for pr in self.rng.permutation(self.eval_profiles , axis=0):
@@ -1182,7 +1752,10 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     #di+=1
                     # these are just for termination conditions & debug logging
                     # TRAIN
-                    feature_expectation_differences_per_iteration_per_profile_train[pr].append(fd_train_per_pr[pr])
+                    #print(self.training_set_mode, self.training_mode)
+                    #print(self.eval_profiles, skip_pr)
+                    #print(fd_train_per_pr.keys())
+                    feature_expectation_differences_per_iteration_per_profile_train[pr].append(np.mean(fd_train_per_pr[pr]))
                     
                     difference_in_visitation_counts_train = np.array([self.demo_state_om_per_profile[(od, pr)] - visitations[(od,learned_profiles_per_pr[pr])] for od in self.od_list_train])
                     absolute_difference_in_visitation_counts_train = np.abs(difference_in_visitation_counts_train)
@@ -1196,7 +1769,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     mean_absolute_difference_in_visitation_counts_per_profile_train[pr].append(mean_absolute_difference_in_visitation_counts_train)
                     
                     # TEST 
-                    feature_expectation_differences_per_iteration_per_profile_test[pr].append(fd_test_per_pr[pr])
+                    feature_expectation_differences_per_iteration_per_profile_test[pr].append(np.mean(fd_test_per_pr[pr]))
                     
                     difference_in_visitation_counts_test = np.array([self.demo_state_om_per_profile[(od, pr)] - visitations[(od,learned_profiles_per_pr[pr])] for od in self.od_list_test])
                     absolute_difference_in_visitation_counts_test = np.abs(difference_in_visitation_counts_test)
@@ -1207,6 +1780,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     mean_absolute_difference_in_visitation_counts_per_profile_test[pr].append(mean_absolute_difference_in_visitation_counts_test)
                 
+                if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY:
+                    
+
+                    mean_absolute_difference_in_visitation_counts_per_profile_train['learned'].append(historic_avg_vc[-1])
+                    
+                    mean_absolute_difference_in_visitation_counts_per_profile_test['learned'].append(historic_avg_vc_test[-1])
+                    
                 if self.use_dijkstra:
                     
                     sampler: SimplePolicy = SimplePolicy.from_environment_expert(self.env, [prs for prs in self.eval_profiles if not skip_pr[prs]], custom_cost=lambda state_des, 
@@ -1234,10 +1814,10 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 overlapping_proportion_train = {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
                 overlap_sorted_train = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
                 
-                edit_dists_per_pr_train = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
-                edit_dists_per_pr_test = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
-                avg_edit_dist_per_pr_test =  {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
-                avg_edit_dist_per_pr_train =  {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                jaccards_per_pr_train = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                jaccards_per_pr_test = {pr: [] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                avg_jaccard_per_pr_test =  {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
+                avg_jaccard_per_pr_train =  {pr: 0 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]}
 
                 for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]:
                     overlap_of_this_pr_test = []
@@ -1282,12 +1862,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                                             overlapping_nodes+=do_overlap
                                             overlapping_proportion_test[pr]+=do_overlap
                                         total_possible_overlaps_of_this_pr_test+=1
-                                    edit_dist = editdistance.eval(traj.obs, expert_traj.obs)
-
+                                    #edit_dist = editdistance.eval(traj.obs, expert_traj.obs)
+                                    _,_,jreal, jaccard_dist = jaccard(traj,expert_traj,cost_model=self.env.cost_model, profile=pr,preprocessing=FeaturePreprocess.NORMALIZATION)
                                     overlap_of_this_pr_test.append(overlapping_nodes/len(expert_traj))
 
-                                    edit_dists_per_pr_test[pr].append(edit_dist)
-                                    avg_edit_dist_per_pr_test[pr]+=edit_dist/len(self.od_list_test)
+                                    jaccards_per_pr_test[pr].append(jaccard_dist)
+                                    avg_jaccard_per_pr_test[pr]+=jaccard_dist/len(self.od_list_test)
 
                                 if odpr[0] in self.od_list_train:
                                     overlapping_nodes = 0
@@ -1317,11 +1897,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                                             overlapping_nodes+=do_overlap
                                             overlapping_proportion_train[pr]+=do_overlap
                                         total_possible_overlaps_of_this_pr_train+=1
-                                    edit_dist = editdistance.eval(traj.obs, expert_traj.obs)
-
+                                    #edit_dist = editdistance.eval(traj.obs, expert_traj.obs)
+                                    _,_, jreal, jaccard_dist = jaccard(traj,expert_traj,cost_model=self.env.cost_model, profile=pr,preprocessing=FeaturePreprocess.NORMALIZATION)
                                     overlap_of_this_pr_train.append(overlapping_nodes/len(expert_traj))
-                                    edit_dists_per_pr_train[pr].append(edit_dist)
-                                    avg_edit_dist_per_pr_train[pr]+=edit_dist/len(self.od_list_train)
+
+                                    #overlap_of_this_pr_train.append(overlapping_nodes/len(expert_traj))
+                                    jaccards_per_pr_train[pr].append(jaccard_dist)
+                                    avg_jaccard_per_pr_train[pr]+=jaccard_dist/len(self.od_list_train)
                     
                     overlapping_proportion_test[pr]/=total_possible_overlaps_of_this_pr_test
                     
@@ -1331,7 +1913,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     overlap_sorted_test[pr] = npoverlap_test[sorted_overlap_indices_test[pr]]
                     
                     overlapping_proportions_per_iteration_per_profile_test[pr].append(overlapping_proportion_test[pr])
-                    edit_distances_per_iteration_per_profile_test[pr].append(avg_edit_dist_per_pr_test[pr])
+                    jaccard_pure_per_iteration_per_profile_test[pr].append(avg_jaccard_per_pr_test[pr])
 
                     overlapping_proportion_train[pr]/=total_possible_overlaps_of_this_pr_train
 
@@ -1342,14 +1924,14 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
                     overlapping_proportions_per_iteration_per_profile_train[pr].append(overlapping_proportion_train[pr])
 
-                    edit_distances_per_iteration_per_profile_train[pr].append(avg_edit_dist_per_pr_train[pr])
+                    jaccard_pure_per_iteration_per_profile_train[pr].append(avg_jaccard_per_pr_train[pr])
                     
                 termination_condition_met = False
                 if wait_until_end_of_iterations is False:
                     if self.training_set_mode != TrainingSetModes.PROFILED_SOCIETY:
                         termination_condition_met = (max(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.mean_vc_diff_eps or max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps) and self.overlaping_percentage <= min(overlapping_proportion_train[pr] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]])
                     else:
-                        termination_condition_met = max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps and sum(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]*profile_proportions[pr] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.mean_vc_diff_eps
+                        termination_condition_met = max(grad_norms_per_iteration_per_profile[pr][-1] for pr in [prs for prs in self.eval_profiles if not skip_pr[prs]]) <= self.grad_l2_eps and historic_avg_jaccard[-1] >= self.overlaping_percentage
                 if (self.log_interval is not None and 0 == (t % self.log_interval)) or termination_condition_met or (t + 1 == max_iter):
                     print("Logging")
                     params = self._reward_net.parameters()
@@ -1364,7 +1946,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     
                     print("PARAMS:", list(self._reward_net.parameters()))
                     print("Value matrix: ", self._reward_net.value_matrix())
-                    if self.training_mode==TrainingModes.PROFILE_LEARNING or self.training_mode==TrainingModes.SIMULTANEOUS:
+                    if self.training_mode==TrainingModes.VALUE_SYSTEM_IDENTIFICATION or self.training_mode==TrainingModes.SIMULTANEOUS:
                         print("Previous Profile: ", learned_policy_profile)
                         print("New Learned Profile: ", self._reward_net.get_learned_profile())
                         self.logger.record("Previous Profile: ", [f"{p:0.2f}" for p in learned_policy_profile])
@@ -1376,6 +1958,93 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     overlapping_colors = PROFILE_COLORS
                     grad_norm_colors = PROFILE_COLORS
 
+                    if len(historic_avg_agou_cost) > 0:
+                        plt.figure(figsize=(6,6))
+                        plt.title(f"Train: Similarity metrics")
+                        plt.xlabel("Training Iteration")
+                        plt.ylabel("Average similarity over OD pairs")
+                        agou = np.asarray(historic_avg_agou_cost)
+                        jaccard_metric =np.asarray(historic_avg_jaccard)
+                        std_agou =np.asarray(historic_std_agou_cost)
+                        std_jaccard = np.asarray(historic_std_jaccard)
+                        
+                        plt.plot(agou,
+                                        color='orange', 
+                                        label=f'PS: {float(agou[-1]):0.2f}'
+                                        )
+                        plt.plot(jaccard_metric,
+                                        color='black', 
+                                        label=f'JACC: {float(jaccard_metric[-1]):0.2f}'
+                                        ) 
+                        
+                        plt.fill_between([i for i in range(len(agou))], agou-std_agou, agou+std_agou,edgecolor='orange',alpha=0.1, facecolor='orange')
+                        plt.fill_between([i for i in range(len(agou))], jaccard_metric-std_jaccard, jaccard_metric+std_jaccard,edgecolor='black',alpha=0.1, facecolor='black')
+                        
+                        plt.legend()
+                        plt.grid()
+                        plt.savefig(f'plots/Maxent_{self.name_method}_similarities_train_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf')
+
+                        plt.figure(figsize=(6,6))
+                        plt.title(f"Test: Similarity metrics (assuming learned profile)")
+                        plt.xlabel("Training Iteration")
+                        plt.ylabel("Average similarity over OD pairs")
+                        agou_test = np.asarray(historic_avg_agou_cost_test)
+                        jaccard_metric_test =np.asarray(historic_avg_jaccard_test)
+                        std_agou_test =np.asarray(historic_std_agou_cost_test)
+                        std_jaccard_test = np.asarray(historic_std_jaccard_test)
+                        
+                        plt.plot(agou_test,
+                                        color='orange', 
+                                        label=f'PS: {float(agou[-1]):0.2f}'
+                                        )
+                        plt.plot(jaccard_metric_test,
+                                        color='black', 
+                                        label=f'JACC: {float(jaccard_metric[-1]):0.2f}'
+                                        ) 
+                        
+                        plt.fill_between([i for i in range(len(agou_test))], agou_test-std_agou_test, agou_test+std_agou_test,edgecolor='orange',alpha=0.1, facecolor='orange')
+                        plt.fill_between([i for i in range(len(jaccard_metric_test))], jaccard_metric_test-std_jaccard_test, jaccard_metric_test+std_jaccard_test,edgecolor='black',alpha=0.1, facecolor='black')
+                        
+                        plt.legend()
+                        plt.grid()
+                        plt.savefig(f'plots/Maxent_{self.name_method}_similarities_test_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf')
+
+                        plt.figure(figsize=(6,6))
+                        plt.title(f"Train: Total absolute difference in visitation counts")
+                        plt.xlabel("Training Iteration")
+                        plt.ylabel("Average TVC over OD pairs")
+                        tvc =np.asarray(historic_avg_vc)
+                        std_tvc =np.asarray(historic_std_vc)
+                        
+                        
+                        plt.plot(tvc,
+                                        color='magenta', 
+                                        label=f'TVC: {float(tvc[-1]):0.2f}'
+                                        )
+                        plt.fill_between([i for i in range(len(agou))], tvc-std_tvc, tvc+std_tvc,edgecolor='magenta',alpha=0.1, facecolor='magenta')
+                        
+                        plt.legend()
+                        plt.grid()
+                        plt.savefig(f'plots/Maxent_{self.name_method}_differences_train_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf')
+
+                        plt.figure(figsize=(6,6))
+                        plt.title(f"Test: Total absolute difference in visitation counts")
+                        plt.xlabel("Training Iteration")
+                        plt.ylabel("Average TVC over OD pairs")
+                        tvc_test =np.asarray(historic_avg_vc_test)
+                        std_tvc_test =np.asarray(historic_std_vc_test)
+                        
+                        plt.plot(tvc_test,
+                                        color='magenta', 
+                                        label=f'TVC: {float(tvc_test[-1]):0.2f}'
+                                        )
+                        plt.fill_between([i for i in range(len(tvc_test))], tvc_test-std_tvc_test, tvc_test+std_tvc_test,edgecolor='magenta',alpha=0.1, facecolor='magenta')
+                        
+                        plt.legend()
+                        plt.grid()
+                        plt.savefig(f'plots/Maxent_{self.name_method}_differences_test_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf')
+                    
+                    
                     print("-----------------------------------------------------------------------")
                     print("FIGURE TEST: ")
                     plt.figure(figsize=[18, 12])
@@ -1389,21 +2058,27 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                             #print(overlapping_proportions_per_iteration_per_profile_test[pr])
                             plt.plot(overlapping_proportions_per_iteration_per_profile_test[pr],
                                     color=overlapping_colors.get(pr,'black'), 
-                                    label=f'Pr: \'{BASIC_PROFILE_NAMES.get(pr, str(pr))}\'\nLast: {float(overlapping_proportions_per_iteration_per_profile_test[pr][-1]):0.3f}'
+                                    label=f'P: \'{BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\'\nLast: {float(overlapping_proportions_per_iteration_per_profile_test[pr][-1]):0.2f}'
                                     )
                         plt.legend()
                         plt.grid()"""
                     
-                    plt.title(f"Average trajectory edit distance with profiles")
+                    plt.title(f"Average trajectory jaccard similarity with profiles")
                     plt.xlabel("Training Iteration")
-                    plt.ylabel("Average trajectory edit distance")
+                    plt.ylabel("Average trajectory jaccard similarity with profiles")
                     for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #plt.plot(mean_absolute_difference_in_visitation_counts_per_profile[pr], color=mean_absolute_difference_in_visitation_counts_per_profile_colors[pi], label='Maximum difference in visitation counts')
                         #print(overlapping_proportions_per_iteration_per_profile_test[pr])
-                        plt.plot(edit_distances_per_iteration_per_profile_test[pr],
+                        plt.plot(jaccard_pure_per_iteration_per_profile_test[pr],
                                 color=overlapping_colors.get(pr,'black'), 
-                                label=f'Pr: \'{BASIC_PROFILE_NAMES.get(pr, str(pr))}\'\nLast: {float(edit_distances_per_iteration_per_profile_test[pr][-1]):0.3f}'
+                                label=f'P: \'{BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\'\nLast: {float(jaccard_pure_per_iteration_per_profile_test[pr][-1]):0.2f}'
                                 )
+                    if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY and len(historic_avg_jaccard_test) > 0:
+                        
+                        plt.plot(historic_avg_jaccard_test,
+                                        color='black', 
+                                        label=f'P: \'{BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\'\nLearned Prof. Sim: {float(historic_avg_jaccard_test[-1]):0.2f}'
+                                        ) 
                     plt.legend()
                     plt.grid()
 
@@ -1415,21 +2090,32 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         #print(mean_absolute_difference_in_visitation_counts_per_profile_test[pr])
                         plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_test[pr], 
                                     color=mean_absolute_difference_in_visitation_counts_per_profile_colors.get(pr,'black'), 
-                                    label=f'Pr: {BASIC_PROFILE_NAMES.get(pr, str(pr))}\nLast: {float(mean_absolute_difference_in_visitation_counts_per_profile_test[pr][-1]):0.3f}).')
+                                    label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\nLast: {float(mean_absolute_difference_in_visitation_counts_per_profile_test[pr][-1]):0.2f}).')
+                    if 'learned' in mean_absolute_difference_in_visitation_counts_per_profile_test.keys():
+                        plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_test['learned'], 
+                                    color='magenta', 
+                                    label=f'P: {BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_test["learned"][-1]):0.2f}).')
+                    
                     plt.legend()
                     plt.grid()
 
                     plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 3)
-                    plt.title(f"Expected trajectory profiled cost difference per iteration")
+                    plt.title(f"Expected trajectory profiled cost similarity per iteration")
                     plt.xlabel("Training Iteration")
-                    plt.ylabel("Expected trajectory profiled cost difference")
+                    plt.ylabel("Expected trajectory profiled cost similarity")
                     for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #print(feature_expectation_differences_per_iteration_per_profile_test[pr])
 
                         plt.plot(feature_expectation_differences_per_iteration_per_profile_test[pr], 
                                  color=grad_norm_colors.get(pr,'black'),
-                                 label=f'Pr: {BASIC_PROFILE_NAMES.get(pr, str(pr))}\nLast: {float(feature_expectation_differences_per_iteration_per_profile_test[pr][-1]):0.3f}).')
-                        #plt.axvline(x=0, color=grad_norm_colors.get(pr,'black'), linestyle='--', label=f'FED ({BASIC_PROFILE_NAMES.get(pr, str(pr))}): {float(feature_expectation_differences_per_iteration_per_profile[pr][-1]):0.3f}).')  # Highlighting the minimum value
+                                 label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\nLast: {float(feature_expectation_differences_per_iteration_per_profile_test[pr][-1]):0.2f}).')
+                        #plt.axvline(x=0, color=grad_norm_colors.get(pr,'black'), linestyle='--', label=f'FED ({BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}): {float(feature_expectation_differences_per_iteration_per_profile[pr][-1]):0.2f}).')  # Highlighting the minimum value
+                    if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY and len(historic_avg_agou_cost_test) > 0:
+                        
+                        plt.plot(historic_avg_agou_cost_test,
+                                        color='orange', 
+                                        label=f'P: \'{BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\'\nLearned Prof. Sim: {float(historic_avg_agou_cost_test[-1]):0.2f}'
+                                        ) 
                     plt.legend()
                     plt.grid()
                     
@@ -1438,15 +2124,19 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.bar(range(len(overlap_sorted_test[pr])), overlap_sorted_test[pr], color=overlapping_colors.get(pr,'black'))
                         plt.xlabel('OD pairs')
                         plt.ylabel('Best overlap proportion with an expert trajectory')
-                        plt.title(f'Best overlap proportion with {BASIC_PROFILE_NAMES.get(pr, str(pr))} agent per OD')
+                        plt.title(f'Best overlap proportion with {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))} agent per OD')
                         plt.xticks(range(len(overlap_sorted_test[pr])), labels=[str(od) for od in np.asarray(self.od_list_test)[sorted_overlap_indices_test[pr]]], rotation=90, fontsize=2)  # Setting x-axis ticks
-                        plt.axvline(x=0, color='blue', linestyle='--', label=f'Worst Overlap: {float(np.min(overlap_sorted_test[pr])):0.3f}\n(at {np.asarray(self.od_list_test)[sorted_overlap_indices_test[pr][0]]}).\nOverlap Proportion: {overlapping_proportion_test[pr]:0.2f}')  # Highlighting the minimum value
+                        plt.axvline(x=0, color='blue', linestyle='--', label=f'Worst Overlap: {float(np.min(overlap_sorted_test[pr])):0.2f}\n(at {np.asarray(self.od_list_test)[sorted_overlap_indices_test[pr][0]]}).\nOverlap Proportion: {overlapping_proportion_test[pr]:0.2f}')  # Highlighting the minimum value
                         plt.legend()
                         #plt.grid()
                     
 
                     # plt.show()
-                    test_file = f'plots/Maxent_learning_curves_test_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf'
+                    if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+                        test_file = f'results/value_grounding_learning/Maxent_{self.name_method}_learning_curves_test_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf'
+                    else:
+                        test_file = f'plots/Maxent_{self.name_method}_learning_curves_test_{self.training_mode.value}_via_{self.training_set_mode.value}.pdf'
+                    
                     plt.savefig(test_file)
                     plt.close()
                     print("Fig saved into file: ", test_file)
@@ -1466,21 +2156,27 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         #print(overlapping_proportions_per_iteration_per_profile_test[pr])
                         plt.plot(overlapping_proportions_per_iteration_per_profile_train[pr],
                                 color=overlapping_colors.get(pr,'black'), 
-                                label=f'Pr: \'{BASIC_PROFILE_NAMES.get(pr, str(pr))}\'\nLast: {float(overlapping_proportions_per_iteration_per_profile_train[pr][-1]):0.3f}'
+                                label=f'P: \'{BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\'\nLast: {float(overlapping_proportions_per_iteration_per_profile_train[pr][-1]):0.2f}'
                                 )
                     plt.legend()
                     plt.grid()"""
                     plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 1)
-                    plt.title(f"Average trajectory edit distance with profiles")
+                    plt.title(f"Average trajectory jaccard similarity with profiles")
                     plt.xlabel("Training Iteration")
-                    plt.ylabel("Average trajectory edit distance")
+                    plt.ylabel("Average trajectory jaccard similarity")
                     for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #plt.plot(mean_absolute_difference_in_visitation_counts_per_profile[pr], color=mean_absolute_difference_in_visitation_counts_per_profile_colors[pi], label='Maximum difference in visitation counts')
                         #print(overlapping_proportions_per_iteration_per_profile_test[pr])
-                        plt.plot(edit_distances_per_iteration_per_profile_train[pr],
+                        plt.plot(jaccard_pure_per_iteration_per_profile_train[pr],
                                 color=overlapping_colors.get(pr,'black'), 
-                                label=f'Pr: \'{BASIC_PROFILE_NAMES.get(pr, str(pr))}\'\nLast: {float(edit_distances_per_iteration_per_profile_train[pr][-1]):0.3f}'
+                                label=f'P: \'{BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\'\nLast: {float(jaccard_pure_per_iteration_per_profile_train[pr][-1]):0.2f}'
                                 )
+                    if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY and len(historic_avg_jaccard) > 0:
+                        
+                        plt.plot(historic_avg_jaccard,
+                                        color='black', 
+                                        label=f'P: \'{BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\'\nLearned Prof. Sim: {float(historic_avg_jaccard[-1]):0.2f}'
+                                        )  
                     plt.legend()
                     plt.grid()
 
@@ -1492,21 +2188,31 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         #print(mean_absolute_difference_in_visitation_counts_per_profile_train[pr])
                         plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_train[pr], 
                                     color=mean_absolute_difference_in_visitation_counts_per_profile_colors.get(pr,'black'), 
-                                    label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(pr))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]):0.3f}).')
+                                    label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]):0.2f}).')
+                    if 'learned' in mean_absolute_difference_in_visitation_counts_per_profile_train.keys():
+                        plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_train['learned'], 
+                                    color='magenta',  #TODO FORMATO PROFILE. 
+                                    label=f'P: {BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_train["learned"][-1]):0.2f}).')
                     plt.legend()
                     plt.grid()
 
                     plt.subplot(2, max(3,len([prs for prs in self.eval_profiles if not skip_pr[prs]])), 3)
-                    plt.title(f"Expected profiled cost difference per profile")
+                    plt.title(f"Expected profiled cost similarity per profile")
                     plt.xlabel("Training Iteration")
-                    plt.ylabel("Expected trajectory profiled cost difference")
+                    plt.ylabel("Expected trajectory profiled cost similarity")
                     for _, pr in enumerate([prs for prs in self.eval_profiles if not skip_pr[prs]]):
                         #print(feature_expectation_differences_per_iteration_per_profile_train[pr])
 
                         plt.plot(feature_expectation_differences_per_iteration_per_profile_train[pr], 
                                  color=grad_norm_colors.get(pr,'black'),
-                                 label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(pr))}\nLast iter: {float(feature_expectation_differences_per_iteration_per_profile_train[pr][-1]):0.3f}).')
-                        #plt.axvline(x=0, color=grad_norm_colors.get(pr,'black'), linestyle='--', label=f'FED ({BASIC_PROFILE_NAMES.get(pr, str(pr))}): {float(feature_expectation_differences_per_iteration_per_profile[pr][-1]):0.3f}).')  # Highlighting the minimum value
+                                 label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\nLast iter: {float(feature_expectation_differences_per_iteration_per_profile_train[pr][-1]):0.2f}).')
+                        #plt.axvline(x=0, color=grad_norm_colors.get(pr,'black'), linestyle='--', label=f'FED ({BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}): {float(feature_expectation_differences_per_iteration_per_profile[pr][-1]):0.2f}).')  # Highlighting the minimum value
+                    if self.training_set_mode == TrainingSetModes.PROFILED_SOCIETY and len(historic_avg_agou_cost) > 0:
+                        
+                        plt.plot(historic_avg_agou_cost,
+                                        color='orange', 
+                                        label=f'P: \'{BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\'\nLearned Prof. Sim: {float(historic_avg_agou_cost[-1]):0.2f}'
+                                        ) 
                     plt.legend()
                     plt.grid()
                     
@@ -1516,14 +2222,17 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                         plt.xlabel('OD pairs')
                         plt.ylim(top=1.1)
                         plt.ylabel('Best overlap proportion with an expert trajectory')
-                        plt.title(f'Best overlap proportion with {BASIC_PROFILE_NAMES.get(pr, str(pr))} agent per OD')
+                        plt.title(f'Best overlap proportion with {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))} agent per OD')
                         plt.xticks(range(len(overlap_sorted_train[pr])), labels=[str(od) for od in np.asarray(self.od_list_train)[sorted_overlap_indices_train[pr]]], rotation=90, fontsize=2)  # Setting x-axis ticks
-                        plt.axvline(x=0, color='blue', linestyle='--', label=f'Worst Overlap: {float(np.min(overlap_sorted_train[pr])):0.3f}\n(at {np.asarray(self.od_list_train)[sorted_overlap_indices_train[pr][0]]}).\nOverlap Proportion: {overlapping_proportion_train[pr]:0.2f}')  # Highlighting the minimum value
+                        plt.axvline(x=0, color='blue', linestyle='--', label=f'Worst Overlap: {float(np.min(overlap_sorted_train[pr])):0.2f}\n(at {np.asarray(self.od_list_train)[sorted_overlap_indices_train[pr][0]]}).\nOverlap Proportion: {overlapping_proportion_train[pr]:0.2f}')  # Highlighting the minimum value
                         plt.legend()
                         #plt.grid()
                     
-
-                    train_file = f'plots/Maxent_learning_curves_train_({self.training_mode.value}_via_{self.training_set_mode.value}).pdf'
+                    if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+                        train_file = f'results/value_grounding_learning/Maxent_{self.name_method}_learning_curves_train_({self.training_mode.value}_via_{self.training_set_mode.value}).pdf'
+                    else:
+                        train_file = f'plots/Maxent_{self.name_method}_learning_curves_train_({self.training_mode.value}_via_{self.training_set_mode.value}).pdf'
+                    
                     plt.savefig(train_file)
                     plt.close()
                     print("Fig saved into file: ", train_file)
@@ -1555,18 +2264,17 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     break
         
         self._policy.set_pi_or_policy(sampler)
-
         
         return (predicted_rewards_per_profile, 
     {"op": overlapping_proportions_per_iteration_per_profile_test,
-     "fd": feature_expectation_differences_per_iteration_per_profile_test, 
+     "ps": feature_expectation_differences_per_iteration_per_profile_test, 
      "vc": mean_absolute_difference_in_visitation_counts_per_profile_test,
-     "ed": edit_distances_per_iteration_per_profile_test
+     "jacc": jaccard_pure_per_iteration_per_profile_test
     }, 
      {"op": overlapping_proportions_per_iteration_per_profile_train,
-      "fd": feature_expectation_differences_per_iteration_per_profile_train, 
+      "ps": feature_expectation_differences_per_iteration_per_profile_train, 
       "vc": mean_absolute_difference_in_visitation_counts_per_profile_train,
-      "ed": edit_distances_per_iteration_per_profile_train})
+      "jacc": jaccard_pure_per_iteration_per_profile_train})
     
 
     @property
