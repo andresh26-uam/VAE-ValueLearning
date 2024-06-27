@@ -1,5 +1,5 @@
 _[a-z]*.py
-_[a-z]*
+_[a-zA-Z]*
 __pycache__*
 runs/
 checkpoints/

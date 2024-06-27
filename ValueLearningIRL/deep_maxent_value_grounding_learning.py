@@ -135,12 +135,7 @@ if __name__ == "__main__":
 
     print("PATHS CHECKED WITH EXPERT")
 
-    #exit(0) # TODO: 
-    # OPCION 1: Probar mce_occupancy measures con experto estocástico de VI. USar mce_occupancy para las policies internas.
-    # OPCION 1.2: Probar mce_occupancy measures con experto estocástico sampleado de get_demo_oms_from_trajectories
-    # OPCION 2: Todo con get_demo_oms_from_trajectories setting policy each step y sample_trajectories(PolicyAlgo.from_sb3_policy(mce_irl.policy, real_env = env_single))
-    # 2.a. Todo estocastico (stochastic True, repeat_per_od > 1)
-    # 2.b: todo deterministico (stochastic False, repeat_per_od = 1)
+    
 
     path, edge_path = expert_sampler.sample_path(start=107, des = DEST, stochastic=False, profile=EXAMPLE_PROFILES[0],t_max=1000)
     print("EXPERT PATH 107 DEST", edge_path)

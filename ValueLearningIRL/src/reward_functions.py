@@ -65,8 +65,8 @@ class PositiveBoundedLinearModule(nn.Linear):
         return w_bounded, b_bounded
     
 class TrainingModes(enum.Enum):
-    VALUE_SYSTEM_IDENTIFICATION = 'value_system_identification'
-    VALUE_GROUNDING_LEARNING = 'value_grounding_learning'
+    VALUE_SYSTEM_IDENTIFICATION = 'profile_learning'
+    VALUE_GROUNDING_LEARNING = 'value_learning'
     SIMULTANEOUS = 'sim_learning'
 
 class ProfiledRewardFunction(reward_nets.RewardNet):
@@ -282,7 +282,6 @@ def squeeze_r(r_output: th.Tensor) -> th.Tensor:
 def cost_model_from_reward_net(reward_net: ProfiledRewardFunction, env: RoadWorldGym, precalculated_rewards_per_pure_pr=None):
                 
     def apply(profile, normalization):
-        # TODO get features primero boludo xd.
         if np.allclose(list(reward_net.get_learned_profile()), list(profile)):
             def call(state_des):
                 data = th.tensor(

@@ -364,7 +364,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     
     def expected_trajectory_cost_calculation(self, on_profiles, learned_profiles, costs_measured_with_profiles=BASIC_PROFILES, stochastic_sampling = False, n_samples_per_od=None, custom_cost_preprocessing=None, repeat_society=10, bins=30, new_test_data=0, name_method='', plot_histograms=False, plot_learned_profiles_as_probabilities=False):
         
-        # TODO: Show costs of the 3 tyoes not only the ideal one for each profile.
         if new_test_data is not None:
             od_list_test_new = set(new_test_data)
             od_list_all = deepcopy(od_list_test_new)
@@ -568,8 +567,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     demo_oms_learned_profile_trajs_test = get_demo_oms_from_trajectories(learned_profile_trajs_test,state_dim=self.env.state_dim, groupby='od')
                     demo_oms_learned_profile_trajs_train = get_demo_oms_from_trajectories(learned_profile_trajs_train,state_dim=self.env.state_dim, groupby='od')
                     
-                    demo_oms_expert_trajs_train = get_demo_oms_from_trajectories(expert_trajs_train, state_dim=self.env.state_dim,groupby='od')
-                    demo_oms_expert_trajs_test = get_demo_oms_from_trajectories(society_trajs_test, state_dim=self.env.state_dim,groupby='od')
+                    demo_oms_expert_trajs_train = get_demo_oms_from_trajectories(expert_mpr_train, state_dim=self.env.state_dim,groupby='od')
+                    demo_oms_expert_trajs_test = get_demo_oms_from_trajectories(expert_mpr_test, state_dim=self.env.state_dim,groupby='od')
                     keys_vc_train = demo_oms_learned_profile_trajs_train.keys()
                     keys_vc_test = demo_oms_learned_profile_trajs_test.keys()
                     visitation_diff_expert_test = np.sum([np.abs(demo_oms_learned_profile_trajs_test[od] - demo_oms_expert_trajs_test[od]) for od in keys_vc_test],axis=1)
@@ -603,26 +602,8 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 train_rows[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train)
                 test_rows[f'learned_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = (avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test)
 
-                """avg_train, std_train , allcosts_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model',  trajectories=expert_trajs_train, preprocessing = cost_preprocessing,
-                                                                       bins=bins, file_name=name_method + f'expert_choosing_with_profile_{target_pr}', plot_histogram=plot_histograms)
-                avg_test, std_test , allcosts_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=expert_trajs_test, preprocessing = cost_preprocessing,
-                                                                     bins=bins, file_name=name_method + f'expert_choosing_with_profile_{target_pr}_test', plot_histogram=plot_histograms)"""
-                """if ipr_2 != 'societal_cost':
-                    
-                    print(costs['expert'].shape)
-                    print(costs['expert'][ipr_2].shape)
-                    print(agou)
-                    print(jensen)
-                    print(allcosts_train.shape)
-                    print(allcosts_train)
-                    print("0",costs['expert'][:,0], measure_profiles[0], ipr_2, pr_2)
-                    print("1",costs['expert'][:,1], measure_profiles[1], ipr_2, pr_2)
-                    print("2",costs['expert'][:,2], measure_profiles[2], ipr_2, pr_2)
-                    assert np.allclose(sorted(costs['expert'][:,ipr_2]), sorted(allcosts_train))"""
                 
-                # TODO: SEGUIR CON LAS SIMILARITIES A VER QUE TAL VAN. Optimizar lo de calcular dos veces el coste (?)
-                # TODO: HACER LAS GRAFICAS DE 3 EN 3 box plots.
-                # TODO: Plottear duramte aprendizaje en vez de Edit distance, la de Jaccard. Y en vez de feature differences la de Agou y la Jensen.
+                
                 avg_train, std_train = np.mean(costs_learned_and_expert_train['expert'][:,ipr_2]), np.std(costs_learned_and_expert_train['expert'][:,ipr_2])
                 avg_test, std_test = np.mean(costs_learned_and_expert_test['expert'][:,ipr_2]), np.std(costs_learned_and_expert_test['expert'][:,ipr_2])
 
@@ -632,11 +613,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 train_rows[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_train, std_train)
                 test_rows[f'expert_pr_{tuple(float(f"{t:0.2f}") for t in target_pr)}'][pr_2] = (avg_test, std_test)
 
-                """avg_train, std_train , allcosts_train = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=society_trajs_train, preprocessing = cost_preprocessing,
-                                                                       bins=bins, file_name=name_method + f'society_choosing_with_profile_{target_pr}', plot_histogram=plot_histograms)
-                avg_test, std_test , allcosts_test = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr_2 if pr_2 != 'societal_cost' else target_pr, mode='societal_cost' if pr_2 == 'societal_cost' else 'cost_model', trajectories=society_trajs_test, preprocessing = cost_preprocessing,
-                                                                     bins=bins, file_name=name_method + f'society_choosing_with_profile_{target_pr}_test', plot_histogram=plot_histograms)
-                """
                 avg_train, std_train = np.mean(costs_learned_and_society_train['expert'][:,ipr_2]), np.std(costs_learned_and_society_train['expert'][:,ipr_2])
                 avg_test, std_test = np.mean(costs_learned_and_society_test['expert'][:,ipr_2]), np.std(costs_learned_and_society_test['expert'][:,ipr_2])
 
@@ -659,16 +635,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     box_plots_train[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = allcosts_lpptr
                     box_plots_test[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}'][pr_2] = allcosts_lppte
             
-                """avg_societal_train_lr, std_societal_train_lr , allcosts_str_lr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=learned_pr, mode='societal_cost', trajectories=learned_profile_as_probs_trajs_train, preprocessing = cost_preprocessing,
-                                                                                                                    bins=bins, file_name=name_method + f'societal_costs_learned_profile_{learned_pr}', plot_histogram=plot_histograms)
-                avg_societal_test_lr, std_societal_test_lr , allcosts_ste_lr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=learned_pr, mode='societal_cost', trajectories=learned_profile_as_probs_trajs_test, preprocessing = cost_preprocessing,
-                                                                                                                    bins=bins, file_name=name_method + f'societal_costs_learned_profile_{learned_pr}_test', plot_histogram=plot_histograms)
-                
-
-                train_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = (avg_societal_train_lr, std_societal_train_lr)
-                test_rows[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = (avg_societal_test_lr, std_societal_test_lr)
-                box_plots_train[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = allcosts_str_lr
-                box_plots_test[f'learned_pr_probability_{tuple(float(f"{t:0.2f}") for t in target_pr)}_result_{tuple(float(f"{t:0.2f}") for t in learned_pr)}']['societal_cost'] = allcosts_ste_lr"""
             # ENDED learned, target current
             similarity_data_train['agou'].append(similarity_agou_now_train)
             similarity_data_train['visitation_count'].append(similarity_vc_now_train)
@@ -678,10 +644,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             similarity_data_test['visitation_count'].append(similarity_vc_now_test)
             similarity_data_test['jaccard'].append(similarity_jaccard_now_test)
             
-        # Expert with fixed target profile
-        """expert_profile_trajs_train = expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profiles,], od_list=self.od_list_train)
-        expert_profile_trajs_test = expert_policy.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[target_profiles,], od_list=od_list_test_new)
-        """
+        
         # SOCIETY with target profile (proportions several times)
 
         for pr in measure_profiles:
@@ -692,11 +655,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             
             value_learned_trajs_test = sampler.sample_trajectories(stochastic=stochastic_sampling, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_list_test_new)
             
-            
-            """if not self.stochastic_expert:
-                expert_trajs_train = [t for t in self.expert_trajectories_per_pr[pr] if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train]
-            else:
-                """
             expert_trajs_train_pr = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=self.od_list_train)
             expert_trajs_test_pr = expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=n_samples_per_od, with_profiles=[pr,], od_list=od_list_test_new)
             
@@ -706,22 +664,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             avg_cost_learned_trajs_train, std_learned_trajs_train , allcosts_lttr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=value_learned_trajs_train, preprocessing = cost_preprocessing,
                                                                                                     bins=bins, file_name=name_method + f'value_learning_with_profile_{pr}', plot_histogram=plot_histograms)
             
-            """avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train , allcosts_epttr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_train, preprocessing = cost_preprocessing,
-                                                                                                                  bins=bins, file_name=name_method + f'expert_with_target_profile_{target_profiles}', plot_histogram=plot_histograms)
-            avg_cost_society_profile_trajs_train, std_society_profile_trajs_train , allcosts_sptr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_train, preprocessing = cost_preprocessing,
-                                                                                                                    bins=bins, file_name=name_method + f'society_with_target_profile_{target_profiles}', plot_histogram=plot_histograms)
-            """
-            
             avg_cost_learned_trajs_test, std_learned_trajs_test , allcosts_ltte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=value_learned_trajs_test, preprocessing = cost_preprocessing,
                                                                                                   bins=bins, file_name=name_method + f'value_learning_with_profile_{pr}_test', plot_histogram=plot_histograms)
-            """
-            avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test , allcosts_eptte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_profile_trajs_test, preprocessing = cost_preprocessing,
-                                                                                                                bins=bins, file_name=name_method + f'expert_with_target_profile_{target_profiles}_test', plot_histogram=plot_histograms)
-            avg_cost_society_profile_trajs_test, std_society_profile_trajs_test , allcosts_spte = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=society_profile_trajs_test, preprocessing = cost_preprocessing,
-                                                                                                                  bins=bins, file_name=name_method + f'society_with_target_profile_{target_profiles}_test', plot_histogram=plot_histograms)
             
-            """
-
             avg_cost_expert_trajs_train, std_expert_trajs_train , allcosts_ettr = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_train_pr, preprocessing = cost_preprocessing,
                                                                                                   bins=bins, file_name=name_method + f'optimal_expert_with_profile_{pr}', plot_histogram=plot_histograms)
             avg_cost_expert_trajs_test, std_expert_trajs_test , allcosts_ette = calculate_expected_cost_and_std(self.env.cost_model, profile_for_cost_model=pr, trajectories=expert_trajs_test_pr, preprocessing = cost_preprocessing,
@@ -737,32 +682,11 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             test_rows['learned'][pr] = (avg_cost_learned_trajs_test, std_learned_trajs_test)
             box_plots_test['learned'][pr] = allcosts_ltte
 
-            """train_rows['learned_profile'][pr] = (avg_cost_learned_profile_trajs_train, std_learned_profile_trajs_train)
-            box_plots_train['learned_profile'][pr] = allcosts_lpttr
-            test_rows['learned_profile'][pr] = (avg_cost_learned_profile_trajs_test, std_learned_profile_trajs_test)
-            box_plots_test['learned_profile'][pr] = allcosts_lptte"""
-            
-            #train_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_train, std_society_profile_trajs_train)
-            #test_rows['society_profile'][pr] = (avg_cost_society_profile_trajs_test, std_society_profile_trajs_test)
-            #box_plots_train['society_profile'][pr] = allcosts_sptr
-            #box_plots_test['society_profile'][pr] = allcosts_spte
-
-            
-
-            #train_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_train, std_expert_profile_trajs_train)
-            #test_rows['expert_profile'][pr] = (avg_cost_expert_profile_trajs_test, std_expert_profile_trajs_test)
-            #box_plots_train['expert_profile'][pr] = allcosts_epttr
-            #box_plots_test['expert_profile'][pr] = allcosts_eptte
-
-
         
         df_data = []
         
         def get_key_name(key):
-            """elif 'learned_profile_probability' in key:
-                keyname = f'Profile Learning (as probs): {tuple(float(f"{t:0.2f}") for t in learned_pr)}'"""
-            """elif 'learned_profile' in key:
-                keyname = f'Profile Learning (as weights): {tuple(float(f"{t:0.2f}") for t in learned_pr)}'"""
+            
             keyname = None
             if 'expert_pr' in key:
                 keyname = 'Expert ' + key.split('expert_pr_')[1]
@@ -1225,37 +1149,17 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             expert_visitations = dict()
             for od, pr in zip(ods, profiles):
                 learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=[od,]))
-                """if odpr in self.expert_trajectories_per_odpr.keys():
-                    expert_policy_trajs_per_odpr[odpr] = self.expert_trajectories_per_odpr[odpr]                 
-                else:
-
-                    self.expert_trajectories_per_odpr[odpr] = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,])
-                    if pr not in self.expert_trajectories_per_pr.keys():
-                        self.expert_trajectories_per_pr[pr] = []
-                    self.expert_trajectories_per_pr[pr].extend(self.expert_trajectories_per_odpr[odpr])"""
+                
                 expert_policy_trajs.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,]))
             
             for od, pr in zip(ods_test, profiles_test):
                 learned_policy_trajs_test.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=[od,]))
-                """if odpr in self.expert_trajectories_per_odpr.keys():
-                    expert_policy_trajs_per_odpr[odpr] = self.expert_trajectories_per_odpr[odpr]                 
-                else:
-
-                    self.expert_trajectories_per_odpr[odpr] = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,])
-                    if pr not in self.expert_trajectories_per_pr.keys():
-                        self.expert_trajectories_per_pr[pr] = []
-                    self.expert_trajectories_per_pr[pr].extend(self.expert_trajectories_per_odpr[odpr])"""
+                
                 expert_policy_trajs_test.extend(self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[pr,], od_list=[od,]))
              
-                 #self.demo_state_om_per_profile.update(get_demo_oms_from_trajectories(self.expert_trajectories_per_odpr[odpr], state_dim=self.env.state_dim))
-            #learned_policy_trajs.extend(sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train))
+                 
             sampled_trajs_train = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_train)
             sampled_trajs_test = sampler.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[learned_policy_profile,], od_list=self.od_list_test)
-
-            # TODO ESTO ESTABA MAL. !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            #expert_trajs_train = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[TODO ESTO,], od_list=self.od_list_train)
-            #expert_trajs_test = self.expert_policy.sample_trajectories(stochastic=self.stochastic_expert, repeat_per_od=self.n_repeat_per_od_monte_carlo, with_profiles=[TODO ESTO,], od_list=self.od_list_test)
-            # TODO: AGOU SIMILARITY NOT WELL CALCULATED ?? USAR algo como las expert policy trajs pero para exactamente los ODS de train y test????? o igual que lo otro?
 
             all_trajs = deepcopy(sampled_trajs_train)
             all_trajs.extend(sampled_trajs_test)
@@ -1264,39 +1168,13 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             all_visitations = get_demo_oms_from_trajectories(all_trajs, state_dim= self.env.state_dim)
             expert_visitations = get_demo_oms_from_trajectories(expert_policy_trajs, state_dim=self.env.state_dim)
 
-            #od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
-            #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
-            #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
-            costs_train, _, ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
-            #jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(cost_model_from_reward_net(self._reward_net,env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
             
+            costs_train, _, ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
             costs_test, _, ods_agou_test= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=learned_policy_trajs_test, expert_trajs=expert_policy_trajs_test, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
-            #jaccard_per_pr_expert_test, jaccard_expert_test_normal, jaccard_expert_test_costs, ods_jaccard_test = jaccard_similarity(cost_model_from_reward_net(self.reward_net), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
             
             for chosen_profile in set(bpr for i, bpr in enumerate(BASIC_PROFILES) if society_profile_distribution[i] > 0.0):
                 mntensor_train_per_pr[chosen_profile] = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_train['sample'], costs_train['expert'], preference_weights=chosen_profile)
                 mntensor_test_per_pr[chosen_profile] = profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_test['sample'], costs_test['expert'], preference_weights=chosen_profile)
-                #print("MN TENSOR", mntensor_train_per_pr[chosen_profile], chosen_profile)
-                #print("MN TENSOR TEST", mntensor_test_per_pr[chosen_profile], chosen_profile)
-                #print(costs_train['sample'], chosen_profile)
-
-                """fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
-                                                                            sampled_traj_profile_to_expert_traj_profile_mapping=
-                                                                            {learned_policy_profile: chosen_profile})
-                fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-                #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-                mntensor_train_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_train)).detach().numpy()
-
-                fd_test, fd_normed_test = self.feature_differences(
-                    sampled_trajs_test, obs_mat, per_state=False, 
-                    use_info_real_costs=True, 
-                    sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
-                
-                fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-                #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-                mntensor_test_per_pr[chosen_profile] = (th.mean(fd_normed_tensor_test)).detach().numpy()
-
-"""
 
                 rewards_per_pr[chosen_profile] = predicted_r_np
         
@@ -1306,7 +1184,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         ctrainexp = th.as_tensor(costs_train['expert'],device=self._reward_net.device, dtype=self._reward_net.dtype)
         ctestsamp = th.as_tensor(costs_test['sample'],device=self._reward_net.device, dtype=self._reward_net.dtype)
         ctestexp = th.as_tensor(costs_test['expert'],device=self._reward_net.device, dtype=self._reward_net.dtype)
-        #costs_train, agou_tr, ods_agou_tr= calculate_expected_similarities_and_std(lambda profile, normalization: lambda state_des: -rewards[state_des[0], state_des[1]], sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_for_cost_model=self._reward_net., profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+        
         agou_tr = 1.0- th.abs(1.0- 1.0/(-self._reward_net.trained_profile_net(- th.maximum(ctrainsamp, ctrainexp)/th.minimum(ctrainsamp, ctrainexp)))) #profiled_aggregated_similarity_Agourogiannis_et_al_2023(, )
         assert th.all(agou_tr >= 0.0)
         with th.no_grad():
@@ -1319,29 +1197,18 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
             jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_tst, ods_jaccard_tr = jaccard_similarity(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=learned_policy_profile, sample_trajs=learned_policy_trajs_test, expert_trajs=expert_policy_trajs_test, profile_criteria=set(profiles), preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
         
 
-        #avgg, stdd, _ = calculate_expected_cost_and_std(self.env.cost_model, mode='societal_cost',profile_for_cost_model=learned_policy_profile, trajectories=sampled_trajs_train, preprocessing=FeaturePreprocess.NORMALIZATION, )
-        #_, _, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(lambda profile, normalization: lambda state_des: -predicted_r_np[state_des[0], state_des[1]], profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=learned_policy_trajs, expert_trajs=expert_policy_trajs, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION)
-        #mntensor_train_per_pr[pr]
-        #print(jaccard_training)
 
             jaccard_tr = th.minimum(th.as_tensor(jaccard_tr), th.tensor(1.0))
             jaccard_tst = th.minimum(th.as_tensor(jaccard_tst), th.tensor(1.0))
-        #print(np.float_power(1.0-jaccard_training, 1.0/3.0))
-        #jaccard_weights = np.float_power(1.0-jaccard_training, 1.0/3.0)
         
         
         if self.fd_lambda != 0.0:
             agou_tr = th.minimum(agou_tr,  th.tensor(1.0, requires_grad=True))
-
-            #print(np.float_power(1.0-jaccard_training, 1.0/3.0))
-            #agou_weights = np.float_power(1.0-agou_training, 1.0/3.0)
-            
-            #agou_training =  th.hstack([agou_tr[ods_agou.index(od)] for od in ods_weights])
             
             COST_PREFERENCE = 3.0
-            OVERLAP_REFERENCE = 1.0
-            OVERLAP_USE = 0.0
-
+            #OVERLAP_REFERENCE = 1.0
+            #OVERLAP_USE = 0.0
+            # TODO: Investigate using similarities to ponder bigger or shorter updates
             weights = th.float_power((1.0-agou_tr), 1.0/COST_PREFERENCE) #* OVERLAP_USE*th.float_power((1.0-jaccard_tr), 1.0/OVERLAP_REFERENCE)
         else:
             weights = th.ones_like(agou_tr)
@@ -1350,8 +1217,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         visitation_count_diffs = th.vstack([
             weights[ods_weights.index(od)]*th.as_tensor(visitations[(od, learned_policy_profile)] - expert_visitations[(od,pr)], dtype=self._reward_net.dtype,
                 device=self._reward_net.device) for od, pr in zip(ods, profiles)],
-                #dtype=self._reward_net.dtype,
-                #device=self._reward_net.device,
             )
         obs_matrix_all_trajs = th.vstack([obs_mat[:,od[1],:] for od in ods])
         done_matrix_all_trajs = th.vstack([dones[:,od[1]] for od in ods])
@@ -1367,22 +1232,9 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     visitation_count_diffs,
                 #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
                 rewards)
-        #sum_of_all_lengths = np.sum([len(t) for t in chosen_profile_trajs_train])
-        #weights = th.tensor([len(t)/sum_of_all_lengths for t in self.expert_trajectories], dtype=losses.dtype, requires_grad=False)
-        
-        #losses = th.matmul(fd_tensor, losses)
-        # This alost works but vanishes? loss = th.sum(losses)/len(chosen_profile_trajs_train)
 
         
 
-        """with th.no_grad():
-            wheres = th.where(losses != 0.0)
-        if wheres[0].shape[0] <= 1:
-            loss = th.sum(losses)
-        else:
-            #loss = th.sum(losses)/len(chosen_profile_expert_trajs_train)
-            loss = th.sum(losses[wheres])/len(set(wheres[0].tolist()))#/len([odpr for odpr in od_profiles_of_trajs_train if losses[:,odpr[0][1]]]) #/len([t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile)])
-        """
         loss = th.sum(losses)/batch_size
 
         loss.backward(retain_graph=False)
@@ -1397,7 +1249,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                 print("GRAD: ", p.names, p.grad)
             print("REAL LOSS:", loss)
             print("REWARD NORM:", rewards.norm())
-            # TODO: Loss should be 0 when the profile has converged (?) ... or at least the gradient. Still it converges without problem though shakingly
+            # TODO: Loss should be 0 when the profile has converged (?) ... or at least the gradient. Still it converges without problem though shakingly in learning from societies
             grad_norm += util.tensor_iter_norm(grads).item()
             
             grad_norm_per_pr = collections.defaultdict(lambda: grad_norm)
@@ -1413,10 +1265,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
     
     def _train_step_value_learning(self, obs_mat: th.Tensor, dones: th.Tensor = None, chosen_profile=(1.0,0.0,0.0), loss_weighting=1.0,  batch_size=None) -> Tuple[np.ndarray, np.ndarray]:
         
-        # get reward predicted for each state by current model, & compute
-        # expected # of times each state is visited by soft-optimal policy
-        # w.r.t that reward function
-        # TODO(adam): support not just state-only reward?
         th.autograd.set_detect_anomaly(False)
         learned_policy_profile  = self._reward_net.get_learned_profile() if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else chosen_profile
         pure_rewards_per_pure_pr = dict()
@@ -1463,7 +1311,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
         self.optimizer.zero_grad()  
         grad_norm = 0
-        if False:
+        """if False:
             loss = th.mean(th.vstack([
                 th.dot(th.as_tensor(
                     np.mean([visitations[(sod, chosen_profile)] - self.demo_state_om_per_profile[(sod, chosen_profile)] for sod in self.env.od_list_int if sod[1] == d], axis=0),
@@ -1478,100 +1326,83 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                     # This gives the required gradient:
                     #   E_\pi[\nabla r_\theta(S)] - E_D[\nabla r_\theta(S)].
         else:
+        """
+        sampled_trajs_train = []
+        sampled_trajs_test = [] 
 
-            sampled_trajs_train = []
-            sampled_trajs_test = [] 
+        for t in sampled_trajs:
+            if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train:
+                sampled_trajs_train.append(t)
+                #od_profiles_of_trajs_train.append((t.infos[0]['orig'], t.infos[0]['des']))
+            if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test:
+                sampled_trajs_test.append(t)
 
-            for t in sampled_trajs:
-                if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train:
-                    sampled_trajs_train.append(t)
-                    #od_profiles_of_trajs_train.append((t.infos[0]['orig'], t.infos[0]['des']))
-                if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test:
-                    sampled_trajs_test.append(t)
-
-            #chosen_profile_expert_trajs_train = [t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile) and (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train]
-            chosen_profile_expert_trajs_train = [t for od in  batch_od_train for t in self.expert_trajectories_per_odpr[(od, chosen_profile)]]
-            od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
-            #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
-            #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
+        #chosen_profile_expert_trajs_train = [t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile) and (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_train]
+        chosen_profile_expert_trajs_train = [t for od in  batch_od_train for t in self.expert_trajectories_per_odpr[(od, chosen_profile)]]
+        od_profiles_of_trajs_train = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_expert_trajs_train]
+        #chosen_profile_trajs_test = [t for t in chosen_profile_trajs if (t.infos[0]['orig'], t.infos[0]['des']) in self.od_list_test]
+        #od_profiles_of_trajs_test = [((t.infos[0]['orig'], t.infos[0]['des']), chosen_profile) for t in chosen_profile_trajs_test]
 
 
-            visitation_count_diffs = th.as_tensor(
-                np.asarray([
-                visitations[(odpr[0], learned_policy_profile)] - self.demo_state_om_per_profile[odpr] for odpr in od_profiles_of_trajs_train]),
-                    dtype=self._reward_net.dtype,
-                    device=self._reward_net.device,
-                )
+        visitation_count_diffs = th.as_tensor(
+            np.asarray([
+            visitations[(odpr[0], learned_policy_profile)] - self.demo_state_om_per_profile[odpr] for odpr in od_profiles_of_trajs_train]),
+                dtype=self._reward_net.dtype,
+                device=self._reward_net.device,
+            )
+        
+        costs_train, agou , ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+        #jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(cost_model_from_reward_net(self._reward_net,env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
+        
+        costs_test, agou_test, ods_agou_test= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
+        
+        mntensor_train =np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_train['sample'], costs_train['expert'], preference_weights=chosen_profile))
+        mntensor_test = np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_test['sample'], costs_test['expert'], preference_weights=chosen_profile))
             
-            costs_train, agou , ods_agou= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env, precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
-            #jaccard_per_pr_expert_train, jaccard_expert_train_normal, jaccard_expert_train_costs, ods_jaccard = jaccard_similarity(cost_model_from_reward_net(self._reward_net,env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), profile_for_cost_model=(1.0,1.0,1.0), sample_trajs=sampled_trajs_train, expert_trajs=expert_trajs_train, profile_criteria=BASIC_PROFILES, preprocessing =FeaturePreprocess.NORMALIZATION,return_per_od=True)
-            
-            costs_test, agou_test, ods_agou_test= calculate_expected_similarities_and_std(cost_model_from_reward_net(self._reward_net, env=self.env,precalculated_rewards_per_pure_pr=pure_rewards_per_pure_pr), sample_trajs=sampled_trajs_train, expert_trajs=chosen_profile_expert_trajs_train, profile_for_cost_model=(1.0,1.0,1.0), profile_criteria=BASIC_PROFILES,preprocessing=FeaturePreprocess.NORMALIZATION,return_ods=True)    
-            
-            mntensor_train =np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_train['sample'], costs_train['expert'], preference_weights=chosen_profile))
-            mntensor_test = np.mean(profiled_aggregated_similarity_Agourogiannis_et_al_2023(costs_test['sample'], costs_test['expert'], preference_weights=chosen_profile))
-                
-            """fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
-                                                                 sampled_traj_profile_to_expert_traj_profile_mapping=
-                                                                 {learned_policy_profile: chosen_profile})
-            fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-            #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-            mntensor_train = th.mean(fd_normed_tensor_train)
+        """fd_train, fd_normed_train = self.feature_differences(sampled_trajs_train, obs_mat, per_state=False, use_info_real_costs=True, 
+                                                                sampled_traj_profile_to_expert_traj_profile_mapping=
+                                                                {learned_policy_profile: chosen_profile})
+        fd_normed_tensor_train = th.as_tensor(np.asarray([fd_normed_train[(od, chosen_profile)] for od in self.od_list_train]), device=self._reward_net.device, dtype=self._reward_net.dtype)
+        #fd_tensor_train = th.as_tensor(np.asarray([fd_train[odpr] for odpr in od_profiles_of_trajs_train]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+        mntensor_train = th.mean(fd_normed_tensor_train)
 
-            fd_test, fd_normed_test = self.feature_differences(
-                sampled_trajs_test, obs_mat, per_state=False, 
-                use_info_real_costs=True, 
-                sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
-            
-            fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
-            #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
-            mntensor_test = th.mean(fd_normed_tensor_test)"""
+        fd_test, fd_normed_test = self.feature_differences(
+            sampled_trajs_test, obs_mat, per_state=False, 
+            use_info_real_costs=True, 
+            sampled_traj_profile_to_expert_traj_profile_mapping={learned_policy_profile: chosen_profile})
+        
+        fd_normed_tensor_test = th.as_tensor(np.asarray([fd_normed_test[(od, chosen_profile)] for od in self.od_list_test]), device=self._reward_net.device, dtype=self._reward_net.dtype)
+        #fd_tensor_test = th.as_tensor(np.asarray([fd_test[odpr] for odpr in od_profiles_of_trajs_test]), device=self.reward_net.device, dtype=self.reward_net.dtype)
+        mntensor_test = th.mean(fd_normed_tensor_test)"""
 
-            obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
-            done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
-            
-            rewards =  self._reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
-            
-            assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
-            #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
-            assert th.all(rewards < 0.0)
-            #print(mntensor*rewards, (mntensor*rewards).shape)
-            
-            """if self.fd_lambda > 0.0:
-                visited_states_for_each_od = (
-                        th.as_tensor(
-                            np.asarray([visitations[(odpr[0], learned_policy_profile)] for odpr in od_profiles_of_trajs_train]),
-                            device=self._reward_net.device, dtype=self._reward_net.dtype) > 0)
-            
-                fd_on_visited_states = th.mul(
-                        visited_states_for_each_od, 
-                        fd_normed_tensor_train.reshape(-1,1)
-                        )
-                losses = th.mul(
-                        visitation_count_diffs + self.fd_lambda/(2*len(chosen_profile_expert_trajs_train))*fd_on_visited_states,
-                    #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
-                    rewards) 
-            else:
-                """
-            losses = th.mul(
-                        visitation_count_diffs,
-                    #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
-                    rewards)
-            #sum_of_all_lengths = np.sum([len(t) for t in chosen_profile_trajs_train])
-            #weights = th.tensor([len(t)/sum_of_all_lengths for t in self.expert_trajectories], dtype=losses.dtype, requires_grad=False)
-            
-            #losses = th.matmul(fd_tensor, losses)
-            # This alost works but vanishes? loss = th.sum(losses)/len(chosen_profile_trajs_train)
+        obs_matrix_all_trajs = th.vstack([obs_mat[:,t.infos[0]['des'],:] for t in chosen_profile_expert_trajs_train])
+        done_matrix_all_trajs = th.vstack([dones[:, t.infos[0]['des']] for t in chosen_profile_expert_trajs_train])
+        
+        rewards =  self._reward_net(None, None, obs_matrix_all_trajs, done_matrix_all_trajs).reshape_as(visitation_count_diffs)
+        
+        assert visitation_count_diffs.shape == rewards.shape, f"D: {visitation_count_diffs.shape}, R: {rewards.shape}"
+        #assert feature_expectation_diffs.shape == rewards.shape, f"D: {feature_expectation_diffs.shape}, R: {rewards.shape}"
+        assert th.all(rewards < 0.0)
+        
+        losses = th.mul(
+                    visitation_count_diffs,
+                #squeeze_r(self.reward_net(obs_mat, None, None, dones[:, self.destinations[0]])) if state_space_is_1d else
+                rewards)
+        #sum_of_all_lengths = np.sum([len(t) for t in chosen_profile_trajs_train])
+        #weights = th.tensor([len(t)/sum_of_all_lengths for t in self.expert_trajectories], dtype=losses.dtype, requires_grad=False)
+        
+        #losses = th.matmul(fd_tensor, losses)
+        # This alost works but vanishes? loss = th.sum(losses)/len(chosen_profile_trajs_train)
 
-            
+        
 
-            with th.no_grad():
-                wheres = th.where(losses != 0.0)
-            if wheres[0].shape[0] <= 1:
-                loss = th.sum(losses)
-            else:
-                loss = th.sum(losses[wheres])/len(set(wheres[0].tolist()))#/len([odpr for odpr in od_profiles_of_trajs_train if losses[:,odpr[0][1]]]) #/len([t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile)])
-            loss *= loss_weighting
+        with th.no_grad():
+            wheres = th.where(losses != 0.0)
+        if wheres[0].shape[0] <= 1:
+            loss = th.sum(losses)
+        else:
+            loss = th.sum(losses[wheres])/len(set(wheres[0].tolist()))#/len([odpr for odpr in od_profiles_of_trajs_train if losses[:,odpr[0][1]]]) #/len([t for t in self.expert_trajectories if tuple(t.infos[0]['profile']) == tuple(chosen_profile)])
+        loss *= loss_weighting
 
         loss.backward(retain_graph=False)
         self.optimizer.step()
@@ -1614,16 +1445,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         return groups
     
     def train(self, max_iter: int = 1000,render_partial_plots=True, training_mode = None, training_set_mode = None, batch_size=None, wait_until_end_of_iterations=False) -> np.ndarray:
-        """Runs MCE IRL.
-
-        Args:
-            max_iter: The maximum number of iterations to train for. May terminate
-                earlier if `self.linf_eps` or `self.grad_l2_eps` thresholds are reached.
-
-        Returns:
-            State occupancy measure for the final reward function. `self.reward_net`
-            and `self.optimizer` will be updated in-place during optimisation.
-        """
+        
         if training_mode is not None:
             self.training_mode = training_mode
         if training_set_mode is not None:
@@ -1642,8 +1464,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         
         dones = th.as_tensor(self.env.done_matrix,dtype=self._reward_net.dtype)
         assert self.demo_state_om is not None or self.demo_state_om_per_profile is not None
-        #assert self.demo_state_om.shape == (len(obs_mat),)
-        #print(list(self.demo_state_om_per_profile.keys()))
         assert self.demo_state_om_per_profile[tuple(list(self.demo_state_om_per_profile.keys())[0])].shape == (len(obs_mat),)
         
         self.eval_profiles = self.training_profiles if self.training_set_mode != TrainingSetModes.PROFILED_SOCIETY else BASIC_PROFILES
@@ -2191,7 +2011,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                                     label=f'P: {BASIC_PROFILE_NAMES.get(pr, str(tuple([float(f"{l:0.2f}") for l in pr])))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_train[pr][-1]):0.2f}).')
                     if 'learned' in mean_absolute_difference_in_visitation_counts_per_profile_train.keys():
                         plt.plot(mean_absolute_difference_in_visitation_counts_per_profile_train['learned'], 
-                                    color='magenta',  #TODO FORMATO PROFILE. 
+                                    color='magenta',  
                                     label=f'P: {BASIC_PROFILE_NAMES.get(learned_policy_profile, str(tuple([float(f"{l:0.2f}") for l in learned_policy_profile])))}\nLast iter: {float(mean_absolute_difference_in_visitation_counts_per_profile_train["learned"][-1]):0.2f}).')
                     plt.legend()
                     plt.grid()

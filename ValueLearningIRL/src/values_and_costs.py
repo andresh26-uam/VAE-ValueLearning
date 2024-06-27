@@ -15,7 +15,7 @@ FULL_NAME_VALUES = OrderedDict({'sus': 'Sustainability', 'sec': 'Security', 'eff
 def eco_cost(feature_vector, path_feature_vector=None):
     # feature_vector = residential, primary, unclassified, tertiary, living street, secondary
     # path_feature_vector = number of road segments, total length, number of left turns, number of right turns, number of U turns, number of road segment per type (6 dimensions)
-    fuel_consumption_estimate = np.asarray([17, 12, 12, 10, 20, 10]) # esto está inventado, es difícil encontrar referencias consistentes...
+    fuel_consumption_estimate = np.asarray([17, 12, 12, 10, 20, 10]) 
     normalized_fuel = fuel_consumption_estimate/np.max(fuel_consumption_estimate)
     #print(np.dot(fuel_consumption_estimate, feature_vector[1:]))
     return feature_vector[0]*(np.dot(normalized_fuel, feature_vector[1:]))

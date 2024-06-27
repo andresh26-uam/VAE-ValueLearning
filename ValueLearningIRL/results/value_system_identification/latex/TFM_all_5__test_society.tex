@@ -1,0 +1,26 @@
+\begin{table*}[h!]
+\centering
+\resizebox{\columnwidth}{!}{\begin{tabularx}{1.3\textwidth}{ll|YYYY|YYYY|Y}
+\hline
+{\makecell{Original Profile}} & {\makecell{Learned Profile}} & \rotatebox{0}{\makecell{$\textit{PS}_{P}$}} & \rotatebox{0}{\makecell{$\textit{PS}_{sus}$}} & \rotatebox{0}{\makecell{$\textit{PS}_{sec}$}} & \rotatebox{0}{\makecell{$\textit{PS}_{eff}$}} & \rotatebox{0}{\makecell{$\textit{JAC}_{P}$}} & \rotatebox{0}{\makecell{$\textit{JAC}_{sus}$}} & \rotatebox{0}{\makecell{$\textit{JAC}_{sec}$}} & \rotatebox{0}{\makecell{$\textit{JAC}_{eff}$}} & \rotatebox{0}{\makecell{$\textit{TVC}$}} \\
+\hline
+(0.0, 0.0, 1.0) & (0.01, 0.01, 0.98) & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 0.08 \\
+(0.0, 0.25, 0.75) & (0.68, 0.31, 0.01) & 0.63 & 0.91 & 0.71 & 0.67 & 0.47 & 0.52 & 0.53 & 0.49 & 15.46 \\
+(0.0, 0.5, 0.5) & (0.51, 0.48, 0.01) & 0.68 & 0.87 & 0.62 & 0.51 & 0.45 & 0.41 & 0.43 & 0.36 & 15.65 \\
+(0.0, 0.75, 0.25) & (0.28, 0.71, 0.01) & 0.75 & 0.80 & 0.56 & 0.41 & 0.60 & 0.31 & 0.34 & 0.27 & 14.79 \\
+(0.0, 1.0, 0.0) & (0.0, 0.99, 0.0) & 1.00 & 0.99 & 1.00 & 0.99 & 0.98 & 0.98 & 0.98 & 0.98 & 0.66 \\
+(0.25, 0.0, 0.75) & (0.31, 0.12, 0.56) & 0.96 & 0.98 & 0.97 & 0.99 & 0.87 & 0.91 & 0.92 & 0.91 & 4.75 \\
+(0.25, 0.25, 0.5) & (0.72, 0.27, 0.0) & 0.68 & 0.92 & 0.73 & 0.69 & 0.52 & 0.54 & 0.55 & 0.52 & 13.21 \\
+(0.25, 0.5, 0.25) & (0.54, 0.45, 0.01) & 0.72 & 0.88 & 0.63 & 0.53 & 0.47 & 0.43 & 0.45 & 0.38 & 15.12 \\
+(0.25, 0.75, 0.0) & (0.33, 0.66, 0.01) & 0.82 & 1.00 & 1.00 & 1.00 & 0.59 & 1.00 & 1.00 & 1.00 & 13.39 \\
+(0.5, 0.0, 0.5) & (0.61, 0.07, 0.32) & 0.95 & 0.97 & 0.94 & 0.95 & 0.82 & 0.84 & 0.85 & 0.84 & 5.19 \\
+(0.5, 0.25, 0.25) & (0.74, 0.25, 0.0) & 0.76 & 0.94 & 0.76 & 0.73 & 0.58 & 0.62 & 0.62 & 0.59 & 12.92 \\
+(0.5, 0.5, 0.0) & (0.52, 0.47, 0.01) & 0.79 & 0.97 & 0.95 & 0.92 & 0.49 & 0.88 & 0.89 & 0.87 & 14.54 \\
+(0.75, 0.0, 0.25) & (0.73, 0.05, 0.22) & 0.97 & 0.97 & 0.94 & 0.95 & 0.86 & 0.85 & 0.86 & 0.85 & 4.99 \\
+(0.75, 0.25, 0.0) & (0.7, 0.3, 0.0) & 0.84 & 0.94 & 0.85 & 0.83 & 0.57 & 0.76 & 0.76 & 0.75 & 13.57 \\
+(1.0, 0.0, 0.0) & (0.92, 0.02, 0.06) & 1.00 & 1.00 & 0.98 & 0.97 & 0.95 & 0.95 & 0.96 & 0.95 & 1.42 \\
+\hline
+\end{tabularx}
+}\caption{Results for value system identification, learning from different profiled societies. The learned profile represents a linear combination value system alignment function that the algorithm found the most coherent with observed behaviour. The expected value alignments of the routes sampled with the original profile and the learned profile are shown in the first 6 columns. The last three columns represent the \textit{visitation_count} similarities with the observed trajectories (from the test set)  according to the three values.}
+\label{tab:simfromsociety}
+\end{table*}

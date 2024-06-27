@@ -25,11 +25,6 @@ from src.values_and_costs import BASIC_PROFILES
 from src.utils.load_data import ini_od_dist
 from utils import sample_example_profiles, split_od_train_test
 
-# DONE?: SIMILITUDES DE PERFIL APRENDIDO A EXPERTOS ECO, SEC Y EFF enterminos de los costes correspondientes.
-# DONE: BOXPLOT SUS vs EFF, SUS vs SEC. DONE
-# TODO: AÑADIR SIMILITUDES EN TERMINOS DE VISITATION COUNT en las similitudes
-
-
 # CUSTOM
 
 log_interval = 10  # interval between training status logs
@@ -82,16 +77,13 @@ if __name__ == "__main__":
         
         
         invalid_component_indexes = set(BASIC_PROFILES.index(p) for p in BASIC_PROFILES if p not in combination)
-        print(invalid_component_indexes)
+        
         for p_with_eff in deepcopy(EXAMPLE_PROFILES):
             for ind in invalid_component_indexes:
                 if p_with_eff[ind] > 0.0:
                     EXAMPLE_PROFILES.remove(p_with_eff)
-        print(PROFILE_VARIETY_TEST, name_of_files, EXAMPLE_PROFILES)
-    
+        
         a = np.array(EXAMPLE_PROFILES, dtype=np.dtype([('x', float), ('y', float), ('z', float)]))
-
-        print(a)
         sortedprofiles =a[np.argsort(a, axis=-1, order=('x', 'y', 'z'), )]
         EXAMPLE_PROFILES = list(tuple(t) for t in sortedprofiles.tolist())
 
@@ -108,7 +100,6 @@ if __name__ == "__main__":
         BATCH_SIZE_PS = 200 # In profile society, batch size is vital, for sampling routes with random profiles and destinations with enough variety
 
         N_OD_SPLITS_FOR_SIMULATING_SOCIETY = 10
-        # TODO: AÑADIR PRIMERO LO DE LOS COSTES DE LA SOCIEDAD EN LA TABLA. 0.7 costes de eco + 0.3 costes de las rutas efficientes
         N_NEW_TEST_DATA = 100
 
         PLOT_HISTS = False
@@ -152,7 +143,6 @@ if __name__ == "__main__":
 
         if new_test_data is None:
             od_list_train, od_list_test, _, _= split_od_train_test(od_list, od_dist, split=0.8, to_od_list_int=True)
-            # TODO : probar 0.5 0.3 0.2 y luego ir a por el algoritmo holger: hacer un visitation loss por cada agente de una sociedad, sumar y dividir por numero de samples, samplear rutas aleatoriamente elegiendo destinos y perfiles todo a lo loco. 
             def select_random_pairs(input_list, n, min_distance=5):
                 # Make sure there are at least two unique elements in the input list
                 if len(set(input_list)) < 2:
@@ -217,10 +207,7 @@ if __name__ == "__main__":
 
             mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.VALUE_SYSTEM_IDENTIFICATION, training_set_mode=TrainingSetModes.PROFILED_EXPERT, render_partial_plots=False, batch_size=None)
             learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
-            print(learned_profile, learned_bias)
-            if 'eff' in name_of_files and npr == (0.0,0.0,1.0):
-                print("WTF", name_of_files, learned_profile, learned_bias)
-
+            
             # 0.019875993952155113, 0.009943496435880661, 0.9701805710792542 EXPERT 001.
             # (0.017024695873260498, 0.008413741365075111, 0.9745615720748901) EXPERT 0109.
             learned_profiles_to_targets.append((learned_profile, npr))
@@ -238,18 +225,18 @@ if __name__ == "__main__":
         
         df_train.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_train.csv")
         df_test.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_test.csv")
-        df_train.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_train.md")
-        df_test.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_test.md")
+        #df_train.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_train.md")
+        #df_test.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_test.md")
         for metric, df in similarities_train.items():
 
             df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_train.csv")
-            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_train.md")
+            #df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_train.md")
         for metric, df in similarities_test.items():
 
             df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_test.csv")
-            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_test.md")
+            #df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_test.md")
                     
-        exit(0)   
+    
 
         
 
@@ -262,7 +249,6 @@ if __name__ == "__main__":
             mce_irl.name_method = name_of_files+str(npr)
             mce_irl.adapt_policy_to_profile(npr, use_cached_policies=False)
             learned_profiles_to_targets.append((npr, npr))
-            # TODO: Sacar a funcion los graficos guapos esos de overlapping proportion y tambien los correspondientes para FEATURE DIFF Y VISITATION COUNT DIFFS.
             sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
             path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=npr,t_max=HORIZON)
             
@@ -309,7 +295,7 @@ if __name__ == "__main__":
 
             mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.VALUE_SYSTEM_IDENTIFICATION, training_set_mode=TrainingSetModes.PROFILED_SOCIETY, render_partial_plots=False, batch_size=BATCH_SIZE_PS)
             learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
-            print(learned_profile, learned_bias)
+            #print(learned_profile, learned_bias)
 
             learned_profiles_to_targets.append((learned_profile, npr))
 

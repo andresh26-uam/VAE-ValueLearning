@@ -1,0 +1,26 @@
+\begin{table*}[h!]
+\centering
+\begin{tabularx}{\textwidth}{ll|XXX|XXX}
+\hline
+\makecell{Target Profile} & \makecell{Learned Profile} & \rotatebox{90}{\makecell{Original Sus}} & \rotatebox{90}{\makecell{Originial Sec}} & \rotatebox{90}{\makecell{Original Eff}} & \rotatebox{90}{\makecell{Learned Sus}} & \rotatebox{90}{\makecell{Learned Sec}} & \rotatebox{90}{\makecell{Learned Eff}} \\
+\hline
+(0.0, 0.0, 1.0) & (0.0, 0.0, 1.0) & 0.399 & 0.602 & 0.229 & 0.399 & 0.602 & 0.229 \\
+(0.0, 0.25, 0.75) & (0.0, 0.25, 0.75) & 0.402 & 0.595 & 0.229 & 0.401 & 0.579 & 0.232 \\
+(0.0, 0.5, 0.5) & (0.0, 0.5, 0.5) & 0.404 & 0.593 & 0.229 & 0.404 & 0.477 & 0.306 \\
+(0.0, 0.75, 0.25) & (0.0, 0.75, 0.25) & 0.402 & 0.580 & 0.232 & 0.447 & 0.361 & 0.514 \\
+(0.0, 1.0, 0.0) & (0.0, 1.0, 0.0) & 0.614 & 0.275 & 1.035 & 0.605 & 0.275 & 1.016 \\
+(0.25, 0.0, 0.75) & (0.25, 0.0, 0.75) & 0.396 & 0.606 & 0.229 & 0.387 & 0.608 & 0.231 \\
+(0.25, 0.25, 0.5) & (0.25, 0.25, 0.5) & 0.397 & 0.600 & 0.229 & 0.389 & 0.556 & 0.245 \\
+(0.25, 0.5, 0.25) & (0.25, 0.5, 0.25) & 0.395 & 0.593 & 0.230 & 0.410 & 0.425 & 0.374 \\
+(0.25, 0.75, 0.0) & (0.25, 0.75, 0.0) & 0.501 & 0.304 & 0.742 & 0.545 & 0.284 & 0.865 \\
+(0.5, 0.0, 0.5) & (0.5, 0.0, 0.5) & 0.390 & 0.610 & 0.230 & 0.379 & 0.624 & 0.235 \\
+(0.5, 0.25, 0.25) & (0.5, 0.25, 0.25) & 0.390 & 0.601 & 0.230 & 0.382 & 0.515 & 0.283 \\
+(0.5, 0.5, 0.0) & (0.5, 0.5, 0.0) & 0.418 & 0.389 & 0.467 & 0.455 & 0.342 & 0.602 \\
+(0.75, 0.0, 0.25) & (0.75, 0.0, 0.25) & 0.383 & 0.622 & 0.232 & 0.374 & 0.615 & 0.245 \\
+(0.75, 0.25, 0.0) & (0.75, 0.25, 0.0) & 0.377 & 0.507 & 0.320 & 0.392 & 0.448 & 0.372 \\
+(1.0, 0.0, 0.0) & (1.0, 0.0, 0.0) & 0.371 & 0.580 & 0.271 & 0.371 & 0.580 & 0.271 \\
+\hline
+\end{tabularx}
+\caption{Results for value system identification, learning from individual agents with different profiles. The learned profile represents a linear combination value system alignment function that the algorithm found the most coherent with observed behaviour. The expected value alignments of the routes sampled with the original profile and the learned profile are shown in the first 6 columns. The last three columns represent the \textit{agou} similarities with the observed trajectories (from the test set)  according to the three values.}
+\label{table:expert_df}
+\end{table*}

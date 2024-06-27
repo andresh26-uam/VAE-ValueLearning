@@ -52,7 +52,7 @@ def jensen_shannon_distance_at_weighted_criteria(sample_costs, expert_costs, pre
         exit(0)"""
         jsd_per_criterion[j] = distance.jensenshannon(cost_distribution_sample, cost_distribution_expert)
         
-        jsd_final += jsd_per_criterion[j]*prw # NUMPY MAL ESTO TODO
+        jsd_final += jsd_per_criterion[j]*prw # TODO Jensen shannon does not work for some reason...
 
     return jsd_final, jsd_per_criterion
 
@@ -196,7 +196,7 @@ def calculate_expected_similarities_and_std(cost_model, profile_for_cost_model, 
     
     all_costs['sample'] = np.asarray(all_costs['sample'])
     all_costs['expert'] = np.asarray(all_costs['expert'])
-    # TODO: como agrupar estas medidas. Media de agou y std, pero de jensen shannon?
+    
     agourogiannis_similarity = profiled_aggregated_similarity_Agourogiannis_et_al_2023(all_costs['sample'] , all_costs['expert'] , preference_weights=profile_for_cost_model)
     
     #jensen_distance, jsd_per_criterion = jensen_shannon_distance_at_weighted_criteria(all_costs['sample'] , all_costs['expert'] , preference_weights=profile_for_cost_model)
@@ -845,16 +845,7 @@ class ValueIterationPolicy(SimplePolicy):
             
         else:
             actual_expert_paths_per_od_profile = expert_paths_per_od_profile
-        """
-        for state in self.env.valid_edges:
-            self.values[(state, d)] = 0"""
         
-        # TODO: IMPORTANTE AQUI EL SOFTMAX PARA ESTIMAR PROBABILIDADES Y ESO CUIDAO!!!
-
-        """prob_s_a_ns = 1 # ns = a and transition matrix is identity if available a in s.
-        n_needed_edges=needed_edges.shape[0]
-        n_goals=goals.shape[0]"""
-
         if reset_vi:
             print("RESETTED VI")
             self.values[needed_edges][:, goals] = RESET_VAL

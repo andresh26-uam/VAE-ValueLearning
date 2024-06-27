@@ -460,7 +460,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             edge_feature = self.link_feature[state, :]
             assert torch.all(edge_feature > 0)
         elif normalized == FeaturePreprocess.STANDARIZATION:
-            path_feature = self.path_feature_standarized[state, des, :] #NOT USELESS pero casi. Que coño se puede hacer?
+            path_feature = self.path_feature_standarized[state, des, :] 
             #path_feature = torch.zeros_like(self.path_feature[state,des,:])
             edge_feature = self.link_feature_standarized[state, :]
         else:
@@ -680,11 +680,10 @@ class RoadWorldGym(RoadWorld,gym.Env):
         
         max_per_pf = np.max(max_dists, axis=0)
         #print(max_per_pf)
-        assert max_per_pf.shape == (len(BASIC_PROFILES),) # TODO SEGUIR
+        assert max_per_pf.shape == (len(BASIC_PROFILES),) 
         
         
         #  edge features = [length, fuel, insec, time]
-        # TODO: NORMALIZATION CON ESTO?
         for i in range(max_per_pf.shape[0]):
             self.link_feature[:,i+1] = self.link_feature[:,i+1]/(max_per_pf[i]/self.edge_feature_max[i+1])
         
@@ -794,7 +793,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
         self.need_path_features = not ((self.feature_selection == FeatureSelection.ONLY_COSTS) or (isinstance(self.feature_selection, tuple)))
         #print(self.feature_selection)
         #print(self.need_path_features)
-        # NEED TO BE DONE IN THIS ORDER:
+        # NEEDS TO BE DONE IN THIS ORDER:
 
         self._init_edge_features(edge_path)
 
