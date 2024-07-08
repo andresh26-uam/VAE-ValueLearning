@@ -50,7 +50,7 @@ if PLOTS:
                     bar_width = 0.35
                     index = np.arange(len(expert_df))
                     
-                    bars1 = ax.bar(index, expert_df[f'{col}_mean'], bar_width, yerr=expert_df[f'{col}_std'] if PUT_OD_STD else None, capsize=5, label=f"{'Expert profile agent'}", color=colors[col][0])
+                    bars1 = ax.bar(index, expert_df[f'{col}_mean'], bar_width, yerr=expert_df[f'{col}_std'] if PUT_OD_STD else None, capsize=5, label=f"{'Original profile individual'}", color=colors[col][0])
                     bars2 = ax.bar(index + bar_width, learned_df[f'{col}_mean'], bar_width, yerr=learned_df[f'{col}_std'] if PUT_OD_STD  else None, capsize=5, label='Learned profile agent', color=colors[col][1])
                     
                     ax.set_title(f'Expected route {FULL_NAME_VALUES[col].lower()} costs ({test_or_train} set)')
@@ -105,7 +105,7 @@ if PLOTS:
                     bar_width = 0.35
                     index = np.arange(len(expert_df))
                     
-                    bars1 = ax.bar(index, expert_df[f'{col}_mean'], bar_width, yerr=expert_df[f'{col}_std'] if PUT_OD_STD else None, capsize=5, label=f"{'Expert profile agent' if society_or_expert == 'expert' else 'Profiled society'}", color=colors[col][0])
+                    bars1 = ax.bar(index, expert_df[f'{col}_mean'], bar_width, yerr=expert_df[f'{col}_std'] if PUT_OD_STD else None, capsize=5, label=f"{'Original profile individual' if society_or_expert == 'expert' else 'Profiled society'}", color=colors[col][0])
                     bars2 = ax.bar(index + bar_width, learned_df[f'{col}_mean'], bar_width, yerr=learned_df[f'{col}_std'] if PUT_OD_STD  else None, capsize=5, label='Learned profile agent', color=colors[col][1])
                     
                     ax.set_title(f'Expected route {FULL_NAME_VALUES[col].lower()} costs ({test_or_train} set)')
