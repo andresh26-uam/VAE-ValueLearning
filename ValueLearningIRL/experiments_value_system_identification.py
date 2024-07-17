@@ -1,4 +1,3 @@
-from ast import literal_eval
 from copy import deepcopy
 from functools import partial
 import random
@@ -83,8 +82,8 @@ if __name__ == "__main__":
             for ind in invalid_component_indexes:
                 if p_with_eff[ind] > 0.0:
                     EXAMPLE_PROFILES.remove(p_with_eff)
+        
         a = np.array(EXAMPLE_PROFILES, dtype=np.dtype([('x', float), ('y', float), ('z', float)]))
-
         sortedprofiles =a[np.argsort(a, axis=-1, order=('x', 'y', 'z'), )]
         EXAMPLE_PROFILES = list(tuple(t) for t in sortedprofiles.tolist())
 
@@ -101,18 +100,15 @@ if __name__ == "__main__":
         BATCH_SIZE_PS = 200 # In profile society, batch size is vital, for sampling routes with random profiles and destinations with enough variety
 
         N_OD_SPLITS_FOR_SIMULATING_SOCIETY = 10
-        
         N_NEW_TEST_DATA = 100
 
         PLOT_HISTS = False
-        
 
         reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
 
         od_list, od_dist = ini_od_dist(train_p)
         print("DEBUG MODE", __debug__)
         print("Learning/using profiles: ", EXAMPLE_PROFILES)
-
         #print("Profile of society: ", NEW_PROFILE)
         env_creator = partial(RoadWorldPOMDPStateAsTuple, network_path=network_p, edge_path=edge_p, node_path=node_p, path_feature_path = path_feature_p, 
                             pre_reset=(od_list, od_dist), profile=EXAMPLE_PROFILES[0], 
@@ -194,97 +190,148 @@ if __name__ == "__main__":
         print("VALUE_MATRIX: ")
         print(mce_irl.get_reward_net().value_matrix())
 
-         # Value System Identification from society
+        
+        # Opcion 2 (learn from a single expert with a mixed profile)
+        learned_profiles_to_targets = list()
 
-        origdf = pd.read_csv(f"results/value_system_identification/{name_of_files}_similarities_agou_learning_from_society_train.csv")
-        origdf['Learned Profile'] = origdf['Learned Profile'].apply(lambda x: literal_eval(x))
-        origdf['Target Profile'] = origdf['Target Profile'].apply(lambda x: literal_eval(x))
-        learned_profiles_to_targets = list(zip( origdf['Learned Profile'], origdf['Target Profile']))
         mce_irl.policies_per_profile.clear()
         
-        
-        for learned_profile, npr in learned_profiles_to_targets:
-            #origdf = pd.read_csv(f"results/value_system_identification/def_{name_of_files}_similarities_agou_learning_from_expert_train.csv")
+        for npr in EXAMPLE_PROFILES:
             mce_irl.name_method = name_of_files+str(npr)
             mce_irl.training_profiles = [npr, ]
+            new_reward_net = mce_irl.get_reward_net()
+            new_reward_net.reset_learning_profile(checkpointed_learned_profile)
+            mce_irl.set_reward_net(new_reward_net)
+
+            #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
+
+            mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.VALUE_SYSTEM_IDENTIFICATION, training_set_mode=TrainingSetModes.PROFILED_EXPERT, render_partial_plots=False, batch_size=None)
+            learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
+            
+            # 0.019875993952155113, 0.009943496435880661, 0.9701805710792542 EXPERT 001.
+            # (0.017024695873260498, 0.008413741365075111, 0.9745615720748901) EXPERT 0109.
+            learned_profiles_to_targets.append((learned_profile, npr))
             mce_irl.adapt_policy_to_profile(learned_profile, use_cached_policies=False)
+            sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
+            path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=learned_profile,t_max=HORIZON)
+            real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=npr,t_max=HORIZON)
+            print(f"Learned path with learned profile {learned_profile} (from profile {npr}) : {edge_path}")
+            print(f"Real path for profile {npr}: {real_edge_path}")
 
-        df_train, df_test, train_data, test_data, similarities_train, similarities_test = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, learned_profiles=learned_profiles_to_targets, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, repeat_society=N_OD_SPLITS_FOR_SIMULATING_SOCIETY, new_test_data=new_test_data, name_method=name_of_files+'learned_from_society', plot_histograms=PLOT_HISTS)
+            env_single.render(caminos_by_value={'sus': [path,], 'eff': [real_path]}, file=f"{name_of_files}_me_learned_paths_from_expert_{npr}_{learned_profile}.png", show=False,show_edge_weights=False)
+            
         
-        df_train.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_society_train.csv")
-        df_test.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_society_test.csv")
-        #df_train.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_train.md")
-        #df_test.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_test.md")
-        for metric, df in similarities_train.items():
-
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_society_train.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_train.md")
-        for metric, df in similarities_test.items():
-
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_society_test.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_test.md")
-           
-        continue
-        # Value System Identification from expert
-
-        origdf = pd.read_csv(f"results/value_system_identification/{name_of_files}_similarities_agou_learning_from_expert_train.csv")
-        origdf['Learned Profile'] = origdf['Learned Profile'].apply(lambda x: literal_eval(x))
-        origdf['Target Profile'] = origdf['Target Profile'].apply(lambda x: literal_eval(x))
-        learned_profiles_to_targets = list(zip( origdf['Learned Profile'], origdf['Target Profile']))
-        mce_irl.policies_per_profile.clear()
-        
-        
-        for learned_profile, npr in learned_profiles_to_targets:
-            #origdf = pd.read_csv(f"results/value_system_identification/def_{name_of_files}_similarities_agou_learning_from_expert_train.csv")
-            mce_irl.name_method = name_of_files+str(npr)
-            mce_irl.training_profiles = [npr, ]
-            mce_irl.adapt_policy_to_profile(learned_profile, use_cached_policies=False)
-
         df_train, df_test, train_data, test_data, similarities_train, similarities_test = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, learned_profiles=learned_profiles_to_targets, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, repeat_society=N_OD_SPLITS_FOR_SIMULATING_SOCIETY, new_test_data=new_test_data, name_method=name_of_files+'learned_from_expert', plot_histograms=PLOT_HISTS)
         
-        df_train.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_train.csv")
-        df_test.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_test.csv")
-        #df_train.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_train.md")
-        #df_test.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_test.md")
+        df_train.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_train.csv")
+        df_test.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_test.csv")
+        #df_train.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_train.md")
+        #df_test.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_expert_test.md")
         for metric, df in similarities_train.items():
 
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_train.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_train.md")
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_train.csv")
+            #df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_train.md")
         for metric, df in similarities_test.items():
 
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_test.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_expert_test.md")
-                  
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_test.csv")
+            #df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_expert_test.md")
+                    
+    
+
+        
+
         # Without retraining, check whether the sampled trajs are consistent with the profile.
 
-        origdf = pd.read_csv(f"results/value_system_identification/{name_of_files}_similarities_agou_learning_from_expert_train.csv")
-        origdf['Learned Profile'] = origdf['Learned Profile'].apply(lambda x: literal_eval(x))
-        origdf['Target Profile'] = origdf['Target Profile'].apply(lambda x: literal_eval(x))
-        learned_profiles_to_targets = list(zip( origdf['Target Profile'], origdf['Target Profile']))
-        mce_irl.policies_per_profile.clear()
-        
-        
-        for learned_profile, npr in learned_profiles_to_targets:
-            #origdf = pd.read_csv(f"results/value_system_identification/def_{name_of_files}_similarities_agou_learning_from_expert_train.csv")
-            mce_irl.name_method = name_of_files+str(npr)
-            mce_irl.training_profiles = [npr, ]
-            mce_irl.adapt_policy_to_profile(npr, use_cached_policies=False)
 
+        learned_profiles_to_targets = list()
+        mce_irl.policies_per_profile.clear()
+        for npr in EXAMPLE_PROFILES:
+            mce_irl.name_method = name_of_files+str(npr)
+            mce_irl.adapt_policy_to_profile(npr, use_cached_policies=False)
+            learned_profiles_to_targets.append((npr, npr))
+            sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
+            path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=npr,t_max=HORIZON)
+            
+            #mce_irl.expert_policy.fit_to_profile(profile=NEW_PROFILE, new_pi = ValueIterationPolicy(env_single).value_iteration(profile=NEW_PROFILE, reset_with_values=example_vi.values))
+            real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=npr,t_max=HORIZON)
+            print(f"INDIRECTLY learned path for profile {npr}: {edge_path}")
+            print(f"Real path for profile {npr}: {real_edge_path}")
+
+            env_single.render(caminos_by_value={'sus': [path,], 'eff': [real_path]}, file=f"{name_of_files}_me_learned_paths_{npr}_vl.png", show=False,show_edge_weights=False)
+            
         df_train, df_test, train_data, test_data, similarities_train, similarities_test = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, learned_profiles=learned_profiles_to_targets, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, new_test_data=new_test_data, name_method=name_of_files+'given_profile', plot_histograms=PLOT_HISTS)
         
-        df_train.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_for_unseen_profile_train.csv")
-        df_test.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_for_unseen_profile_test.csv")
-        #df_train.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_for_unseen_profile_train_train.md")
-        #df_test.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_for_unseen_profile_test_test.md")
+        df_train.to_csv(f"results/value_system_identification/{name_of_files}_statistics_for_unseen_profile_train.csv")
+        df_test.to_csv(f"results/value_system_identification/{name_of_files}_statistics_for_unseen_profile_test.csv")
+        df_train.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_for_unseen_profile_train_train.md")
+        df_test.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_for_unseen_profile_test_test.md")
 
         for metric, df in similarities_train.items():
 
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_for_unseen_profile_train.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_for_unseen_profile_train.md")
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_for_unseen_profile_train.csv")
+            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_for_unseen_profile_train.md")
         for metric, df in similarities_test.items():
 
-            df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_for_unseen_profile_test.csv")
-            #df.to_markdown(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_for_unseen_profile_test.md")
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_for_unseen_profile_test.csv")
+            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_for_unseen_profile_test.md")
+                
         
 
-       
+        # Opcion 1. probabilities 70% with 1.0,0.0,0, 30% with 0,1.0,0. (A "Society")
+        mce_irl.policies_per_profile.clear()
+        learned_profiles_to_targets = list()
+
+        
+        for npr in EXAMPLE_PROFILES:
+            # TODO: Support for unknown societies... Define a society only with a list of profiles and the probability of choosing one or the other. 
+            mce_irl.training_profiles = [npr, ]
+            mce_irl.name_method = name_of_files+str(npr)
+            
+            new_reward_net = mce_irl.get_reward_net()
+            new_reward_net.reset_learning_profile(checkpointed_learned_profile)
+            mce_irl.set_reward_net(new_reward_net)
+            
+            #mce_irl.reward_net.reset_learning_profile(checkpointed_learned_profile)
+
+            mce_irl.train(LEARNING_ITERATIONS, training_mode = TrainingModes.VALUE_SYSTEM_IDENTIFICATION, training_set_mode=TrainingSetModes.PROFILED_SOCIETY, render_partial_plots=False, batch_size=BATCH_SIZE_PS)
+            learned_profile, learned_bias = mce_irl.get_reward_net().get_learned_profile(with_bias=True)
+            #print(learned_profile, learned_bias)
+
+            learned_profiles_to_targets.append((learned_profile, npr))
+
+            mce_irl.adapt_policy_to_profile(learned_profile, use_cached_policies=False)
+            sampler: SimplePolicy = SimplePolicy.from_sb3_policy(mce_irl.policy, real_env = env_single)
+            path, edge_path = sampler.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=learned_profile,t_max=HORIZON)
+            real_path, real_edge_path = mce_irl.expert_policy.sample_path(start=env_single.od_list_int[0][0], des = env_single.od_list_int[0][1], stochastic=False, profile=npr,t_max=HORIZON)
+            print(f"Learned path with learned profile {learned_profile} (from profile {npr}) : {edge_path}")
+            print(f"Real path for profile {npr}: {real_edge_path}")
+            env_single.render(caminos_by_value={'sus': [path,], 'eff': [real_path]}, file=f"{name_of_files}_me_learned_paths_from_society_{npr}_{learned_profile}.png", show=False,show_edge_weights=False)
+            
+        
+            
+        df_train, df_test, train_data, test_data, similarities_train, similarities_test  = mce_irl.expected_trajectory_cost_calculation(on_profiles=EXAMPLE_PROFILES, learned_profiles=learned_profiles_to_targets, stochastic_sampling=False, n_samples_per_od=None, custom_cost_preprocessing=FeaturePreprocess.NORMALIZATION, repeat_society=N_OD_SPLITS_FOR_SIMULATING_SOCIETY, new_test_data=new_test_data, name_method=name_of_files+'learned_from_society', plot_histograms=PLOT_HISTS)
+        
+        df_train.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_society_train.csv")
+        df_train.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_society_train.md")
+        df_test.to_csv(f"results/value_system_identification/{name_of_files}_statistics_learning_from_society_test.csv")
+        df_test.to_markdown(f"results/value_system_identification/{name_of_files}_statistics_learning_from_society_test.md")
+
+        for metric, df in similarities_train.items():
+
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_society_train.csv")
+            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_society_train.md")
+        for metric, df in similarities_test.items():
+
+            df.to_csv(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_society_test.csv")
+            df.to_markdown(f"results/value_system_identification/{name_of_files}_similarities_{metric}_learning_from_society_test.md")
+            
+        mce_irl.policies_per_profile.clear()
+        
+            
+            # LEARNING.
+
+
+        
+                    
+            
+
