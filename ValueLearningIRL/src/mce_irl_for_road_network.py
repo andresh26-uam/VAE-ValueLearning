@@ -34,8 +34,8 @@ from imitation.util import networks, util
 from copy import deepcopy
 
 from src.network_env import FeaturePreprocess, RoadWorldPOMDPStateAsTuple
-from src.policies import SimplePolicy, TabularPolicyPerProfile, calculate_expected_cost_and_std, calculate_expected_similarities_and_std, jaccard, jaccard_similarity, profiled_aggregated_similarity_Agourogiannis_et_al_2023
-from src.policies import ValueIterationPolicy
+from src.road_network_policies import SimplePolicy, TabularPolicyPerProfile, calculate_expected_cost_and_std, calculate_expected_similarities_and_std, jaccard, jaccard_similarity, profiled_aggregated_similarity_Agourogiannis_et_al_2023
+from src.road_network_policies import ValueIterationPolicyRoadWorld
 from src.reward_functions import TrainingModes, ProfiledRewardFunction, cost_model_from_reward_net, squeeze_r
 from src.src_rl.aggregations import SumScore
 from src.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS
@@ -219,10 +219,10 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         #ones = np.ones((self.env.state_dim, self.env.action_dim))
         #uniform_pi = ones / self.env.action_dim
 
-        self.default_vi_policy = ValueIterationPolicy(self.env) # Starts with random policy
+        self.default_vi_policy = ValueIterationPolicyRoadWorld(self.env) # Starts with random policy
         #self.vi_policy.train(0.001, verbose=True, stochastic=True, custom_reward_function=lambda s,a,d: self.env.reward_matrix[self.env.netconfig[s][a]]) # alpha stands for error tolerance in value_iteration
         self.vi_policy_per_profile = {
-            pr: ValueIterationPolicy(self.env) for pr in self.training_profiles
+            pr: ValueIterationPolicyRoadWorld(self.env) for pr in self.training_profiles
         }
         self._policy = TabularPolicyPerProfile(
             state_space=self.env.state_space,
@@ -346,7 +346,6 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
                                             od_list=od_list,
                                             full_match=False, verbose=False)
         else:
-            print("EMERGENCY PROFILE NEW: ", profile)
             return self.default_vi_policy.value_iteration(error=1, 
                                             profile=self.env.last_profile if profile is None else tuple(profile),
                                             custom_reward=self.reward_from_matrix(reward_matrix), expert_paths_per_od_profile=self.expert_trajectories_per_odpr,
@@ -891,11 +890,12 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
         
         with th.no_grad():
             self._reward_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
-            self._reward_net.set_profile(chosen_profile)
+            self._reward_net.set_alignment_function(chosen_profile)
             if state_space_is_1d:
                 predicted_r = squeeze_r(self._reward_net(None, None, obs_mat, dones[:, destinations[0]]))
                 
                 assert predicted_r.shape == (obs_mat.shape[0],)
+                
                 predicted_r_np = predicted_r.detach().cpu().numpy()
             else:
                 predicted_r_np = np.zeros_like(self.env.reward_matrix[list(self.env.reward_matrix.keys())[0]])
@@ -963,7 +963,7 @@ class MCEIRL_RoadNetwork(base.DemonstrationAlgorithm[types.TransitionsMinimal]):
 
             if self.training_mode != TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
                 learned_policy_profile = chosen_profile
-                self._reward_net.set_profile(learned_policy_profile)
+                self._reward_net.set_alignment_function(learned_policy_profile)
 
             assert chosen_profile in self.expert_trajectories_per_pr.keys()
 

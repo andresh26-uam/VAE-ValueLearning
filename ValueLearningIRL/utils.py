@@ -229,9 +229,9 @@ def sample_example_profiles(profile_variety, n_values=3) -> set:
     if n_values < 1:
         raise ValueError('Need more values: n_values must be bigger than 0')
     if n_values == 1:
-        return set(ratios)
+        profile_set = list(ratios)
     if n_values == 2:
-        return set((1-ratio, ratio) for ratio in ratios)
+        profile_set = [(1.0-ratio, ratio) for ratio in ratios]
     if n_values == 3:
         profile_combinations = [set(itertools.permutations((ratios[i], ratios[j], ratios[-i-j-1]))) for i in range(len(ratios)) for j in range(i, (len(ratios)-i+1)//2)]
     else:
@@ -251,9 +251,16 @@ def sample_example_profiles(profile_variety, n_values=3) -> set:
         profile_combinations = [set(itertools.permutations(ratios[i] for i in idx)) for idx in recursFind(len(ratios)-1, n_values)]
 
     
+    if n_values >= 3:
+        profile_set = list(set(tuple(float(f"{a_i:0.3f}") for a_i in a) for l in profile_combinations for a in l))
+        [profile_set.remove(pr) for pr in BASIC_PROFILES]
+        for pr in reversed(BASIC_PROFILES):
+            profile_set.insert(0, pr)
+
+    a = np.array(profile_set, dtype=np.dtype([(f'{i}', float) for i in range(n_values)]))
+    sortedprofiles =a[np.argsort(a, axis=-1, order=tuple([f'{i}' for i in range(n_values)]), )]
+    profile_set = list(tuple(t) for t in sortedprofiles.tolist())
+
+    profile_set = [tuple(round(num, 2) for num in t) for t in profile_set]
     
-    profile_set = list(set(tuple(float(f"{a_i:0.3f}") for a_i in a) for l in profile_combinations for a in l))
-    [profile_set.remove(pr) for pr in BASIC_PROFILES]
-    for pr in reversed(BASIC_PROFILES):
-        profile_set.insert(0, pr)
     return profile_set

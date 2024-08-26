@@ -5,3 +5,5 @@ runs/
 checkpoints/
 irlvenv/
 *partial*.png
+*.npy
+*.pickle

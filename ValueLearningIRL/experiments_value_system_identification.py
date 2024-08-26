@@ -17,7 +17,7 @@ from src.mce_irl_for_road_network import (
 )
 import torch
 
-from src.policies import SimplePolicy, check_policy_gives_optimal_paths
+from src.road_network_policies import SimplePolicy, check_policy_gives_optimal_paths
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
 from src.reward_functions import PositiveBoundedLinearModule, ProfiledRewardFunction
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
 
         mce_irl = MCEIRL_RoadNetwork(
             expert_policy=expert_sampler,
-            expert_trajectories=expert_demonstrations_all_profiles, # los rollout no me fio en absoluto.
+            expert_trajectories=expert_demonstrations_all_profiles,
             env=env_single,
             reward_net=reward_net,
             log_interval=LOGINTERVAL,

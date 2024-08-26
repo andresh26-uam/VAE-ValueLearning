@@ -12,7 +12,7 @@ from src.mce_irl_for_road_network import (
 from imitation.data import rollout
 import torch
 
-from src.policies import SimplePolicy, ValueIterationPolicy, check_policy_gives_optimal_paths
+from src.road_network_policies import SimplePolicy, ValueIterationPolicyRoadWorld, check_policy_gives_optimal_paths
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
 from src.reward_functions import TrainingModes, ProfiledRewardFunction
 from src.src_rl.aggregations import SumScore
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         reward_bias=-0.0,
         activations=[nn.Identity, nn.Identity]
     )
-    reward_net.set_profile(PROFILE)
+    reward_net.set_alignment_function(PROFILE)
 
     print(reward_net.values_net)
 
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     else:
         start_vi = time.time()
         pi_with_d_per_profile = {
-            pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
+            pr: ValueIterationPolicyRoadWorld(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
         }
         end_vi = time.time()
 

@@ -1,0 +1,49 @@
+{
+    "os": "macOS-14.4.1-arm64-arm-64bit",
+    "python": "3.9.6",
+    "heartbeatAt": "2024-07-23T14:24:18.101671",
+    "startedAt": "2024-07-23T14:24:17.676645",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "/Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningIRL/main_iql.py",
+    "codePathLocal": "main_iql.py",
+    "codePath": "ValueLearningIRL/main_iql.py",
+    "git": {
+        "remote": "https://github.com/andresh26-uam/Values-with-CEP.git",
+        "commit": "6ea4449ef361a30682d3c7c2ef3dfcc2ea78381e"
+    },
+    "email": "andres.holgado@urjc.es",
+    "root": "/Users/andresh26/Desktop/VAE-ValueLearning",
+    "host": "Andress-MacBook-Pro.local",
+    "username": "andresh26",
+    "executable": "/Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningIRL/irlvenv/bin/python",
+    "cpu_count": 8,
+    "cpu_count_logical": 8,
+    "cpu_freq": {
+        "current": 3504,
+        "min": 600,
+        "max": 3504
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 3504,
+            "min": 600,
+            "max": 3504
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 228.27386474609375,
+            "used": 12.545047760009766
+        }
+    },
+    "gpuapple": {
+        "type": "arm",
+        "vendor": "Apple"
+    },
+    "memory": {
+        "total": 16.0
+    }
+}

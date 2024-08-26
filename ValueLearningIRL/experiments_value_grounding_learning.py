@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from src.mce_irl_for_road_network import MCEIRL_RoadNetwork, TrainingSetModes
 import torch
 
-from src.policies import SimplePolicy, ValueIterationPolicy
+from src.road_network_policies import SimplePolicy, ValueIterationPolicyRoadWorld
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
 from src.reward_functions import ProfiledRewardFunction, TrainingModes, plot_avg_value_matrix
 from src.src_rl.aggregations import SumScore
@@ -96,7 +96,7 @@ if EXPERT_USE_DIJKSTRA:
 else:
     start_vi = time.time()
     pi_with_d_per_profile = {
-        pr: ValueIterationPolicy(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
+        pr: ValueIterationPolicyRoadWorld(env_single).value_iteration(0.000001, verbose=True, custom_reward=lambda s,a,d: env_single.get_reward(s,a,d,tuple(pr))) for pr in EXAMPLE_PROFILES
     }
     end_vi = time.time()
 
@@ -144,7 +144,7 @@ for repeat in range(N_EXPERIMENTS):
         reward_bias=-0.0,
         activations=[nn.Identity, nn.Identity]
     )
-    reward_net.set_profile(PROFILE)
+    reward_net.set_alignment_function(PROFILE)
 
     
     

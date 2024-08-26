@@ -1,7 +1,9 @@
+from abc import abstractmethod
 from copy import deepcopy
 import enum
 import os
 from typing import Iterator
+import gymnasium as gym
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
 import numpy as np
@@ -17,6 +19,20 @@ from itertools import chain
 from src.values_and_costs import BASIC_PROFILES, VALUE_COSTS_PRE_COMPUTED_FEATURES
 from utils import CHECKPOINTS
 
+def print_tensor_and_grad_fn(grad_fn, level=0):
+            indent = "  " * level
+            if grad_fn is None:
+                return
+            if getattr(grad_fn,'variable',None) is not None:
+                print(f"{indent}AccumulateGrad for tensor: {grad_fn.variable}")
+            else:
+                print(f"{indent}Grad function: {grad_fn}")
+                if hasattr(grad_fn, 'next_functions'):
+                    for next_fn in grad_fn.next_functions:
+                        if next_fn[0] is not None:
+                            print_tensor_and_grad_fn(next_fn[0], level + 1)
+
+                          
 class ConvexLinearModule(nn.Linear):
     
     def forward(self, input: Tensor) -> Tensor:
@@ -31,18 +47,11 @@ class ConvexLinearModule(nn.Linear):
 
         return output
 
-class PositiveBoundedLinearModule(nn.Linear):
-    
+class ProfileLayer(nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
         self.use_bias = bias
-        with th.no_grad():
-            if data is not None:
-                state_dict = self.state_dict()
-                state_dict['weight'] = th.log(th.as_tensor([list(data)]).clone())
-                
-                self.load_state_dict(state_dict)
-
+        
     def forward(self, input: Tensor) -> Tensor:
         w_bounded, b_bounded = self.get_profile()
         
@@ -50,10 +59,7 @@ class PositiveBoundedLinearModule(nn.Linear):
             output = nn.functional.linear(input, w_bounded, b_bounded)
         else:
             output = nn.functional.linear(input, w_bounded)
-        assert th.all(output < 0.0)
-        #print(th.where(input<=0.0))
-        #print(input[th.where(input<=0.0)])
-        assert th.all(input < 0.0)
+        
         return output
     def get_profile(self):
 
@@ -63,28 +69,193 @@ class PositiveBoundedLinearModule(nn.Linear):
         if self.use_bias:
             b_bounded = nn.functional.sigmoid(self.bias)
         return w_bounded, b_bounded
+class PositiveBoundedLinearModule(ProfileLayer):
+    
+    def forward(self, input: Tensor) -> Tensor:
+        output = super().forward(input)
+        assert th.all(output < 0.0)
+        #print(th.where(input<=0.0))
+        #print(input[th.where(input<=0.0)])
+        assert th.all(input < 0.0)
+        return output
+    
     
 class TrainingModes(enum.Enum):
     VALUE_SYSTEM_IDENTIFICATION = 'profile_learning'
     VALUE_GROUNDING_LEARNING = 'value_learning'
     SIMULTANEOUS = 'sim_learning'
+    EVAL = 'eval'
 
-class ProfiledRewardFunction(reward_nets.RewardNet):
 
+class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
+    def set_alignment_function(self, align_func):
+        if align_func is None:
+            return
+        if self.cur_align_func is None or self.cur_align_func != align_func:
+            self.cur_align_func = align_func
+    @abstractmethod
+    def reset_learned_alignment_function(self):
+        ...
+
+    def set_grounding_function(self, grounding):
+        if grounding is None:
+            return
         
+        if self.cur_value_grounding is None or self.cur_value_grounding != grounding:
+            self.cur_value_grounding = grounding
+        
+
+    def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
+                 mode = TrainingModes.VALUE_GROUNDING_LEARNING,
+                 **kwargs):
+        observation_space = environment.observation_space
+        action_space = environment.action_space
+        super().__init__(observation_space, action_space, True)
+
+        self.mode = mode
+        self.use_action = use_action
+
+        self.use_next_state = use_next_state
+
+        self.use_state = use_state
+        self.use_done = use_done
+
+        self.use_one_hot_state_action = use_one_hot_state_action
+        self.cur_align_func = None
+        self.cur_value_grounding = None
+
+        
+
+    @abstractmethod
+    def value_system_layer(self, align_func):    
+        pass
+    @abstractmethod
+    def value_grounding_layer(self, custom_layer):    
+        pass
+
+
+    def _forward(self, features, align_func=None, grounding=None):
+        
+        self.set_mode(self.mode)
+        
+        x = self.value_grounding_layer(custom_layer=grounding)(features) 
+        """print("VG", x.grad_fn)
+        print(align_func)
+        print(features.requires_grad)
+        print(features[0])
+        print(features.shape)
+        print_tensor_and_grad_fn(x.grad_fn)
+        print_tensor_and_grad_fn(features.grad_fn)
+        """
+        x = self.value_system_layer(align_func)(x)
+        """print("VSL", x.grad)
+        print(align_func)"""
+        return x 
+    
+    def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
+        inputs = []
+
+        if self.use_one_hot_state_action:
+            inputs.append(th.flatten(state, 1)) # Assume state encodes state-action pairs.
+        else:
+            if self.use_state:
+                inputs.append(th.flatten(state, 1))
+            if self.use_action:
+                inputs.append(th.flatten(action, 1))
+            if self.use_next_state:
+                inputs.append(th.flatten(next_state, 1))
+            if self.use_done:
+                inputs.append(th.reshape(done, [-1, 1]))
+
+        inputs_concat = th.cat(inputs, dim=1)
+        
+        return self._forward(inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding) # If mode is not eval, cur_align_func and cur_value_grounding is not used. This depends on the implementation. 
+    
+    @abstractmethod    
+    def get_learned_align_function(self):
+        pass
+    @abstractmethod
+    def get_learned_grounding(self):
+        pass
+class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
+
+    def set_mode(self, mode):
+        super().set_mode(mode)
+        if self.mode is None or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            self.values_net.requires_grad_(True)
+            self.trained_profile_net.requires_grad_(False)
+        elif self.mode == TrainingModes.EVAL:
+            self.values_net.requires_grad_(False)
+            self.trained_profile_net.requires_grad_(False)
+        elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            self.values_net.requires_grad_(False)
+            self.trained_profile_net.requires_grad_(True)
+        elif self.mode == TrainingModes.SIMULTANEOUS:
+            self.values_net.requires_grad_(True)
+            self.trained_profile_net.requires_grad_(True)
+        
+        else:
+            raise ValueError("Unkown training mode" + str(self.mode))
+    def set_alignment_function(self, align_func):
+        if align_func is None:
+            pass
+        if self.cur_align_func is None or self.cur_align_func != align_func:
+            self.cur_align_func = align_func
+        if self.cur_align_func is not None:
+            assert self.hid_sizes[-1] == len(self.cur_align_func)
+    
+    def reset_learned_alignment_function(self):
+        self.trained_profile_net = self.basic_layer_classes[-1](self.hid_sizes[-1],1, bias=self.use_bias)
+        
+        
+    def value_grounding_layer(self, custom_layer = None):
+        if custom_layer is None:
+            return lambda x: -self.values_net(x)
+        else:
+            def _call(x):
+                assert custom_layer.shape == (self.input_size, self.hid_sizes[-1])
+                pt = th.tensor(custom_layer, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
+                x = -F.linear(x, pt.T)
+                return x
+            return _call
+    
+    def value_system_layer(self, align_func=None):
+        if self.mode == TrainingModes.EVAL or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            if align_func is None:
+                align_func = self.cur_align_func
+            def _call(x):
+                pt = th.tensor(align_func, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
+                x = F.linear(x, pt)
+                x = self.final_activation(x) + self.reward_bias
+                return x
+        elif self.mode == TrainingModes.SIMULTANEOUS or self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            def _call(x):
+                x = self.trained_profile_net(x)
+                x = self.final_activation(x) + self.reward_bias
+                return x
+        return _call
+    
     def reset_learning_profile(self, new_profile: tuple = None, bias=False):
-        self.trained_profile_net = PositiveBoundedLinearModule(self.hid_sizes[-1],1, bias=bias, data=new_profile)
+        self.trained_profile_net = self.basic_layer_classes[-1](self.hid_sizes[-1],1, bias=bias)
+        with th.no_grad():
+            if new_profile is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
+                state_dict = self.trained_profile_net.state_dict()
+                state_dict['weight'] = th.log(th.as_tensor([list(new_profile)]).clone())
+                
+                self.trained_profile_net.load_state_dict(state_dict)
+
+        
         self.use_bias = bias
         
 
     def reset_value_net(self):
         modules = []
         for i in range(1, len(self.activations)):
-            linmod = ConvexLinearModule(self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
+            linmod = self.basic_layer_classes[i-1](self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
             
-            if self.activations[i-1] == nn.ReLU or self.activations[i-1] == nn.Identity:
+            if isinstance(linmod, ConvexLinearModule):
                 state_dict = linmod.state_dict()
                 state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
                     
@@ -97,52 +268,58 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
         
         self.values_net = nn.Sequential(*modules,        )
 
-    def __init__(self, environment: RoadWorldGym, use_state=False, use_action=False, use_next_state=True, use_done=True,
+    def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
                  activations = [nn.Sigmoid, nn.Tanh],
                  hid_sizes = [3,],
+                 basic_layer_classes = [ConvexLinearModule, PositiveBoundedLinearModule],
                  mode = TrainingModes.VALUE_GROUNDING_LEARNING,
                  reward_bias = 0,
                  **kwargs):
+        
+        if isinstance(environment, RoadWorldGym):
+            self.cur_align_func = environment.last_profile
+            
         observation_space = environment.observation_space
         action_space = environment.action_space
-        self.cur_profile = environment.last_profile
-
-        super().__init__(observation_space, action_space, True)
+        super().__init__(environment=environment, 
+                         use_state=use_state, 
+                         use_action=use_action, 
+                         use_next_state=use_next_state,
+                         use_done=use_done,
+                         use_one_hot_state_action=use_one_hot_state_action,mode=mode)
         combined_size = 0
-        self.reward_bias = reward_bias
-        self.use_state = use_state
-        if self.use_state:
-            combined_size += preprocessing.get_flattened_obs_dim(observation_space)
 
-        self.use_action = use_action
-        if self.use_action:
-            combined_size += preprocessing.get_flattened_obs_dim(action_space)
-
-        self.use_next_state = use_next_state
-        if self.use_next_state:
-            combined_size += preprocessing.get_flattened_obs_dim(observation_space)
-
-        self.use_done = use_done
-        if self.use_done:
-            combined_size += 1
+        if self.use_one_hot_state_action:
+            combined_size += preprocessing.get_flattened_obs_dim(observation_space) * preprocessing.get_flattened_obs_dim(action_space)
+        else:
+            if self.use_state:
+                combined_size += preprocessing.get_flattened_obs_dim(observation_space)
+            if self.use_action:
+                combined_size += preprocessing.get_flattened_obs_dim(action_space)
+            if self.use_next_state:
+                combined_size += preprocessing.get_flattened_obs_dim(observation_space)
+            if self.use_done:
+                combined_size += 1
 
         self.input_size = combined_size
-       
+    
+        self.reward_bias = reward_bias
         #self.mlp = networks.build_mlp(**full_build_mlp_kwargs)
             
         self.hid_sizes = deepcopy(hid_sizes)
         self.hid_sizes.insert(0, self.input_size)
         self.final_activation = activations[-1]()
         self.activations = activations
+        self.basic_layer_classes = basic_layer_classes
         
         self.reset_value_net()
 
-        self.mode = mode
         self.reset_learning_profile()
         
         #th.tensor((0,0,0), requires_grad=True,device=self.parameters()[0].device)
         
-        assert hid_sizes[-1] == 3
+        
+        
     def parameters(self, recurse: bool = True) -> Iterator:
         if self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             return self.values_net.parameters(recurse)
@@ -151,55 +328,12 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
         else:
             return chain(self.trained_profile_net.parameters(recurse), self.values_net.parameters(recurse))
     
-    def _forward(self, features, profile=(1.0,0.0,0.0)):
-        
-        """print(x, x.size())"""
-        
-        """print("VALUES", x, x.size())
-        print(self.values_net.parameters())"""
-
-        if self.mode is None or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
-            self.values_net.requires_grad_(True)
-            self.trained_profile_net.requires_grad_(False)
-            x = -self.values_net(features) 
-            pt = th.tensor(profile, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
-            x = F.linear(x, pt)
-            x = self.final_activation(x) + self.reward_bias
-            
-            return x
-        elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
-            self.values_net.requires_grad_(False)
-            self.trained_profile_net.requires_grad_(True)
-            x = -self.values_net(features)
-            
-            """with th.no_grad():
-                x = -self.values_net(features)"""  
-                #x = F.normalize(x, p=float('inf'), dim=0) 
-
-            x = self.trained_profile_net(x)
-            x = self.final_activation(x) + self.reward_bias
-            return x
-        elif self.mode == TrainingModes.SIMULTANEOUS:
-            self.values_net.requires_grad_(True)
-            self.trained_profile_net.requires_grad_(True)
-            x = -self.values_net(features)  
-                #x = F.normalize(x, p=float('inf'), dim=0) 
-            x = self.trained_profile_net(x)
-            x = self.final_activation(x) + self.reward_bias
-            return x
-        else:
-            raise ValueError("Unkown training mode" + str(self.mode))
-        
-    def set_profile(self, profile: tuple):
-        if self.cur_profile != profile:
-            self.cur_profile = profile
-    
     def value_matrix(self):
         with th.no_grad():
             params = th.tensor(list(p.data for name, p in self.values_net.named_parameters(recurse=True))[-1])
             assert params.dim() == 2
             return nn.functional.softmax(params)
-
+    
     def get_learned_profile(self, with_bias=False):
         prof_w = tuple(list(self.trained_profile_net.get_profile()[0].squeeze().tolist()))
         prof_b = float(self.trained_profile_net.get_profile()[1])
@@ -210,26 +344,17 @@ class ProfiledRewardFunction(reward_nets.RewardNet):
             return prof_w, prof_b
         else:
             return prof_w
-    def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
-        inputs = []
-        if self.use_state:
-            inputs.append(th.flatten(state, 1))
-        if self.use_action:
-            inputs.append(th.flatten(action, 1))
-        if self.use_next_state:
-            inputs.append(th.flatten(next_state, 1))
-        if self.use_done:
-            inputs.append(th.reshape(done, [-1, 1]))
-
-        inputs_concat = th.cat(inputs, dim=1)
-        return self._forward(inputs_concat, profile=self.cur_profile)
+        
+    def get_learned_align_function(self):
+        return self.get_learned_profile()
+    def get_learned_grounding(self):
+        return self.value_matrix()    
     
     def save_checkpoint(self, file="reward_function_checkpoint.pt"):
         th.save(self, os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
         #th.save(self.values_net, os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
 
     def from_checkpoint(file="reward_function_checkpoint.pt"):
-        
         return th.load(os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
 
 
@@ -306,7 +431,7 @@ def cost_model_from_reward_net(reward_net: ProfiledRewardFunction, env: RoadWorl
                 def call(state_des):
                     prev_mode = reward_net.mode
                     reward_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
-                    reward_net.set_profile(profile)
+                    reward_net.set_alignment_function(profile)
                     data = th.tensor(
         [[VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*env.get_separate_features(state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],],
             dtype=reward_net.dtype)

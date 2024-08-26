@@ -31,7 +31,7 @@ if OBTAIN_CORRECTED_CSVS:
     )
     import torch
 
-    from src.policies import SimplePolicy, check_policy_gives_optimal_paths
+    from src.road_network_policies import SimplePolicy, check_policy_gives_optimal_paths
     from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
     from src.reward_functions import PositiveBoundedLinearModule, ProfiledRewardFunction
 
