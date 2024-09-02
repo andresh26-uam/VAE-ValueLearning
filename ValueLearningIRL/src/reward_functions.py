@@ -47,6 +47,27 @@ class ConvexLinearModule(nn.Linear):
 
         return output
 
+class ConvexTensorModule(nn.Module):
+    def __init__(self, size, init_tuple=None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.size = size
+        self.reset(init_tuple)
+
+    def get_tensor_as_tuple(self):
+        return tuple(self.forward().detach().cpu().numpy())
+    def reset(self, init_tuple=None):
+        if init_tuple is None:
+            new_profile = np.random.rand(self.size)
+            new_profile = new_profile/np.sum(new_profile)
+            new_profile = tuple(new_profile)
+        self.weights = th.tensor(np.array(new_profile, dtype=np.float64), dtype=th.float32, requires_grad=True)
+
+    def forward(self, x=None):
+        return nn.functional.softmax(self.weights, dtype=th.float64)
+    
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]:
+        return iter([self.weights])
+
 class ProfileLayer(nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
@@ -96,7 +117,7 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
         if self.cur_align_func is None or self.cur_align_func != align_func:
             self.cur_align_func = align_func
     @abstractmethod
-    def reset_learned_alignment_function(self):
+    def reset_learned_alignment_function(self, new_align_func=None):
         ...
 
     def set_grounding_function(self, grounding):
@@ -149,6 +170,7 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
         print_tensor_and_grad_fn(x.grad_fn)
         print_tensor_and_grad_fn(features.grad_fn)
         """
+        
         x = self.value_system_layer(align_func)(x)
         """print("VSL", x.grad)
         print(align_func)"""
@@ -179,6 +201,10 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
     @abstractmethod
     def get_learned_grounding(self):
         pass
+
+    @abstractmethod
+    def copy(self):
+        ...
 class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
 
     def set_mode(self, mode):
@@ -200,24 +226,31 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
             raise ValueError("Unkown training mode" + str(self.mode))
     def set_alignment_function(self, align_func):
         if align_func is None:
-            pass
+            return
         if self.cur_align_func is None or self.cur_align_func != align_func:
             self.cur_align_func = align_func
         if self.cur_align_func is not None:
             assert self.hid_sizes[-1] == len(self.cur_align_func)
     
-    def reset_learned_alignment_function(self):
-        self.trained_profile_net = self.basic_layer_classes[-1](self.hid_sizes[-1],1, bias=self.use_bias)
+    def reset_learned_alignment_function(self, new_align_func: tuple = None):
+        
+        self.reset_learning_profile(new_profile=new_align_func)
         
         
     def value_grounding_layer(self, custom_layer = None):
         if custom_layer is None:
-            return lambda x: -self.values_net(x)
+            if self.negative_grounding_layer:
+                return lambda x: -self.values_net(x)
+            else:
+                return lambda x: self.values_net(x)
         else:
             def _call(x):
                 assert custom_layer.shape == (self.input_size, self.hid_sizes[-1])
                 pt = th.tensor(custom_layer, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
-                x = -F.linear(x, pt.T)
+                if self.negative_grounding_layer:
+                    x = -F.linear(x, pt.T)
+                else:
+                    x = F.linear(x, pt.T)
                 return x
             return _call
     
@@ -241,13 +274,13 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         self.trained_profile_net = self.basic_layer_classes[-1](self.hid_sizes[-1],1, bias=bias)
         with th.no_grad():
             if new_profile is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
+                assert isinstance(new_profile, tuple)
                 state_dict = self.trained_profile_net.state_dict()
                 state_dict['weight'] = th.log(th.as_tensor([list(new_profile)]).clone())
                 
                 self.trained_profile_net.load_state_dict(state_dict)
 
         
-        self.use_bias = bias
         
 
     def reset_value_net(self):
@@ -274,6 +307,7 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
                  basic_layer_classes = [ConvexLinearModule, PositiveBoundedLinearModule],
                  mode = TrainingModes.VALUE_GROUNDING_LEARNING,
                  reward_bias = 0,
+                 negative_grounding_layer=False,
                  **kwargs):
         
         if isinstance(environment, RoadWorldGym):
@@ -281,12 +315,15 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
             
         observation_space = environment.observation_space
         action_space = environment.action_space
+
+        self.negative_grounding_layer = negative_grounding_layer
+
         super().__init__(environment=environment, 
                          use_state=use_state, 
                          use_action=use_action, 
                          use_next_state=use_next_state,
                          use_done=use_done,
-                         use_one_hot_state_action=use_one_hot_state_action,mode=mode)
+                         use_one_hot_state_action=use_one_hot_state_action,mode=mode,)
         combined_size = 0
 
         if self.use_one_hot_state_action:
@@ -314,12 +351,13 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         
         self.reset_value_net()
 
-        self.reset_learning_profile()
+        self.reset_learned_alignment_function()
         
         #th.tensor((0,0,0), requires_grad=True,device=self.parameters()[0].device)
         
-        
-        
+    def copy(self):
+        return deepcopy(self)
+    
     def parameters(self, recurse: bool = True) -> Iterator:
         if self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             return self.values_net.parameters(recurse)
@@ -358,8 +396,70 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         return th.load(os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
 
 
+class DistributionProfiledRewardFunction(ProfiledRewardFunction):
+            
+    def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False, activations=[nn.Sigmoid,], hid_sizes=[3], basic_layer_classes=[ConvexLinearModule, PositiveBoundedLinearModule], mode=TrainingModes.VALUE_GROUNDING_LEARNING, reward_bias=0, negative_grounding_layer=False, **kwargs):
+        super().__init__(environment, use_state, use_action, use_next_state, use_done, use_one_hot_state_action, activations, hid_sizes, basic_layer_classes, mode, reward_bias, negative_grounding_layer, **kwargs)
+        self.fixed_align_func_index = None
+    def reset_learning_profile(self, new_profile: tuple = None):
+        self.trained_profile_net=ConvexTensorModule(size=self.hid_sizes[-1], init_tuple=new_profile)
+        self.cur_align_func = self.trained_profile_net.get_tensor_as_tuple()
+    
+    def fix_alignment_function(self, align_func=None):
+        if align_func is None:
+            align_func = self.cur_align_func
+            self.fixed_align_func_index = np.random.choice(len(align_func), p=align_func)
+        else:
+            self.fixed_align_func_index = np.argmax(align_func)
+    def free_alignment_function(self):
+        self.fixed_align_func_index= None
 
+    def get_learned_profile(self, with_bias=False):
+        return self.trained_profile_net.get_tensor_as_tuple()
+    
+    def parameters(self, recurse: bool = True) -> Iterator:
+        if self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            return self.values_net.parameters(recurse)
+        elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            return self.trained_profile_net.parameters(recurse)
+        else:
+            return chain(self.trained_profile_net.parameters(recurse), self.values_net.parameters(recurse))
 
+    def value_system_layer(self, align_func=None):
+        if self.mode == TrainingModes.EVAL or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            if align_func is None:
+                align_func = self.cur_align_func
+            def _call(x):
+                if self.fixed_align_func_index is not None:
+                    selected_index = self.fixed_align_func_index
+                else:
+                    selected_index = np.random.choice(a=x.size()[-1], p=align_func)
+                if len(x.size()) == 2:
+                    x = x[:, selected_index]
+                    return x
+                elif len(x.size()) == 3:
+                    x = x[:,:,selected_index]
+                x = self.final_activation(x) + self.reward_bias
+                return x
+
+        elif self.mode == TrainingModes.SIMULTANEOUS or self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            def _call(x):
+                if self.fixed_align_func_index is not None:
+                    selected_index = self.fixed_align_func_index
+                else:
+                    selected_index = np.random.choice(a=x.size()[-1], p=self.trained_profile_net())
+                if len(x.size()) == 2:
+                        x = x[:, selected_index]
+                        return x
+                elif len(x.size()) == 3:
+                    x = x[:,:,selected_index]
+                else:
+                    print("X IS SIZE IS WEIRD", x.size())
+                    exit(-1)
+                x = self.final_activation(x) + self.reward_bias
+                return x
+        return _call    
+    
 def plot_avg_value_matrix(avg_matrix, std_matrix, file='value_matrix_demo.pdf'):
     X, Y = np.meshgrid(np.arange(avg_matrix.shape[1]), np.arange(avg_matrix.shape[0]))
 

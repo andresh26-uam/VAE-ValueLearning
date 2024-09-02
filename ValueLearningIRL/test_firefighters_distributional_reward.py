@@ -15,39 +15,10 @@ from src.envs.firefighters_env import FeatureSelection, FireFightersEnv
 from src.me_irl_for_vsl import MaxEntropyIRLForVSL, TrainingSetModes, mce_partition_fh
 from src.reward_functions import PositiveBoundedLinearModule, ProfileLayer, ProfiledRewardFunction, TrainingModes
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, ValueSystemLearningPolicy
+from test_firefighters import *
 from utils import sample_example_profiles, train_test_split_initial_state_distributions
 from torch import nn
-LOGINTERVAL = 1
-SEED = 26
 
-
-STOCHASTIC_EXPERT = True
-LEARN_STOCHASTIC_POLICY = True
-
-USE_ACTION = True # Use action to approximate the reward.
-USE_ONE_HOT_STATE_ACTION = True # One-Hot encode all state-action pairs or rather, concatenate state and action features.
-DEMO_OM_FROM_POLICY = True # If False, use the sampled trajectories as data to calculate occcupancy measures of the expert agents,
-                            # instead use the original policy probabilities directly 
-# TODO: different batch size for evaluating correctness.
-N_SEEDS = 200
-N_EXPERT_SAMPLES_PER_SEED = 1 if STOCHASTIC_EXPERT is False else 10
-
-N_REWARD_SAMPLES_PER_ITERATION = 20
-N_SEEDS_MINIBATCH = 100
-N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 1 if STOCHASTIC_EXPERT is False else 5
-FEATURE_SELECTION = FeatureSelection.ONE_HOT_OBSERVATIONS
-
-POLICY_APPROXIMATION_METHOD = 'mce_original'  # Approximate policies using causal entropy (original MCE_IRL algorithm, up to the stablished HORIZON), 
-                            # or use normal value iteration ('value_iteration')
-                            # or another method... (NOT IMPLEMENTED)
-
-HORIZON = 20
-
-USE_PMOVI_EXPERT = False 
-
-INITIAL_STATE_DISTRIBUTION = 'uniform' # or 'default' or a specfic probability distribution on the encrypted states.
-SOCIETY_EXPERT = False
-EXPERT_FIXED_TRAJECTORIES = True
 
 
 def profiled_society_sampler(align_func_as_basic_profile_probs):
@@ -78,14 +49,12 @@ def profiled_society_traj_sampler_from_policy(policy: ValueSystemLearningPolicy,
     
     return trajs
 
-
 if __name__ == "__main__":
     np.random.seed(SEED)
     torch.manual_seed(SEED)
 
     # Example usage
     
-
     env_real: FireFightersEnv = gym.make('FireFighters-v0', feature_selection = FEATURE_SELECTION, horizon=HORIZON, initial_state_distribution=INITIAL_STATE_DISTRIBUTION)
     env_real.reset(seed=SEED)
 
@@ -130,7 +99,7 @@ if __name__ == "__main__":
     
 
 
-    profiles  = sample_example_profiles(profile_variety=11,n_values=2)
+    profiles  = sample_example_profiles(profile_variety=6,n_values=2)
     profile_to_matrix = {}
     profile_to_assumed_matrix = {}
     for w in profiles:
@@ -144,6 +113,7 @@ if __name__ == "__main__":
                                              value_iteration_tolerance=0.0000001,
                                              policy_approximator=POLICY_APPROXIMATION_METHOD,deterministic= not STOCHASTIC_EXPERT )
         profile_to_assumed_matrix[w] = assumed_expert_pi
+
     expert_policy = VAlignedDictSpaceActionPolicy(policy_per_va_dict = profile_to_matrix if USE_PMOVI_EXPERT else profile_to_assumed_matrix, env = env_real, state_encoder=None)
     expert_policy_train = VAlignedDictSpaceActionPolicy(policy_per_va_dict = profile_to_matrix if USE_PMOVI_EXPERT else profile_to_assumed_matrix, env = env_training, state_encoder=None)
     expert_trajs = expert_policy.obtain_trajectories(n_seeds=N_SEEDS, seed=SEED, stochastic=STOCHASTIC_EXPERT, repeat_per_seed=N_EXPERT_SAMPLES_PER_SEED, with_alignfunctions=profiles, t_max=HORIZON)
@@ -237,113 +207,14 @@ if __name__ == "__main__":
         # Show the plot
         plt.show()"""
 
-    # VALUE GROUNDING LEARNING:
-    learned_grounding, learned_rewards, reward_net_learned, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
-                                                        mode=TrainingModes.VALUE_GROUNDING_LEARNING,n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
-                                                        n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_distributional_reward=False,n_reward_reps_if_distributional_reward=N_REWARD_SAMPLES_PER_ITERATION)
-    
-    
-    
-    
-    fig, axes = plt.subplots(2, 2, figsize=(16, 8))
-    
-    # Reward similarities
-    for i, al in enumerate(max_entropy_algo.vgl_target_align_funcs):
-        # Ensure that you do not exceed the number of subplots
-        if i >= 2:
-            break
-
-        # Plot the first matrix
-        im1 = axes[i, 0].imshow(learned_rewards(al), cmap='viridis', interpolation='none', aspect=learned_rewards(al).shape[1]/learned_rewards(al).shape[0])
-        axes[i, 0].set_title(f'Predicted Reward Matrix ({al})')
-        axes[i, 0].set_xlabel('Dimension M')
-        axes[i, 0].set_ylabel('Dimension N')
-        fig.colorbar(im1, ax=axes[i, 0], orientation='vertical', label='Value')
-
-        # Plot the second matrix
-        print(env_real.reward_matrix_per_va(al)[152,0])
-        #print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
-        im2 = axes[i, 1].imshow(env_real.reward_matrix_per_va(al), cmap='viridis', interpolation='none', aspect=learned_rewards(al).shape[1]/learned_rewards(al).shape[0])
-        axes[i, 1].set_title(f'Real Matrix ({al})')
-        axes[i, 1].set_xlabel('Dimension M')
-        axes[i, 1].set_ylabel('Dimension N')
-        fig.colorbar(im2, ax=axes[i, 1], orientation='vertical', label='Value')
-    
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-
-    # Show the plot
-    plt.show()
-
-    
-    fig, axes = plt.subplots(2, 2, figsize=(16, 8))
-    for i, al in enumerate(max_entropy_algo.vgl_target_align_funcs):
-        # Ensure that you do not exceed the number of subplots
-        if i >= 2:
-            break
-
-        # Plot the first matrix
-        
-        im1 = axes[i, 0].imshow(max_entropy_algo.learned_policy_per_va.policy_per_va(al), cmap='viridis', vmin=0, vmax=1, interpolation='none', aspect=expert_policy.policy_per_va(al).shape[1]/expert_policy.policy_per_va(al).shape[0])
-        axes[i, 0].set_title(f'Predicted Policy Matrix ({al})')
-        axes[i, 0].set_xlabel('Dimension M')
-        axes[i, 0].set_ylabel('Dimension N')
-        fig.colorbar(im1, ax=axes[i, 0], orientation='vertical', label='Value')
-
-        # Plot the second matrix
-        #print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
-        im2 = axes[i, 1].imshow(expert_policy.policy_per_va(al), cmap='viridis', interpolation='none', vmin=0, vmax=1, aspect=expert_policy.policy_per_va(al).shape[1]/expert_policy.policy_per_va(al).shape[0])
-        axes[i, 1].set_title(f'Real Policy Matrix ({al})')
-        axes[i, 1].set_xlabel('Dimension M')
-        axes[i, 1].set_ylabel('Dimension N')
-        fig.colorbar(im2, ax=axes[i, 1], orientation='vertical', label='Value')
-    
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-
-    # Show the plot
-    plt.show()
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 8))
-    for i, al in enumerate(max_entropy_algo.vgl_target_align_funcs):
-        # Ensure that you do not exceed the number of subplots
-        if i >= 2:
-            break
-
-        # Plot the first matrix
-        im1 = axes[i, 0].imshow(max_entropy_algo.mce_occupancy_measures(reward_matrix=learned_rewards(al))[1][:,None], cmap='viridis', interpolation='none', aspect=expert_policy.policy_per_va(al).shape[1]/expert_policy.policy_per_va(al).shape[0])
-        axes[i, 0].set_title(f'Occupancy Matrix ({al})')
-        axes[i, 0].set_xlabel('Dimension M')
-        axes[i, 0].set_ylabel('Dimension N')
-        fig.colorbar(im1, ax=axes[i, 0], orientation='vertical', label='Value')
-
-        # Plot the second matrix
-        #print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
-        im2 = axes[i, 1].imshow(max_entropy_algo.mce_occupancy_measures(reward_matrix=env_real.reward_matrix_per_va(al))[1][:,None], cmap='viridis', interpolation='none', aspect=expert_policy.policy_per_va(al).shape[1]/expert_policy.policy_per_va(al).shape[0])
-        axes[i, 1].set_title(f'Real Occupancy Matrix ({al})')
-        axes[i, 1].set_xlabel('Dimension M')
-        axes[i, 1].set_ylabel('Dimension N')
-        fig.colorbar(im2, ax=axes[i, 1], orientation='vertical', label='Value')
-    
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-
-    # Show the plot
-    plt.show()
-    learned = max_entropy_algo.learned_policy_per_va.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=LEARN_STOCHASTIC_POLICY, exploration=0, only_states=True)
-    real = expert_policy.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=STOCHASTIC_EXPERT, exploration=0, only_states=True)
-
-    
     # VALUE SYSTEM IDENTIFICATION:
-
 
     target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
                                                         mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
                                                         assumed_grounding=assumed_grounding,
                                                         n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
                                                         n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_distributional_reward=False,n_reward_reps_if_distributional_reward=N_REWARD_SAMPLES_PER_ITERATION)
+                                                        use_distributional_reward=True,n_reward_reps_if_distributional_reward=N_REWARD_SAMPLES_PER_ITERATION)
     
     fig, axes = plt.subplots(2, len(max_entropy_algo.vsi_target_align_funcs), figsize=(16, 8))
     for i, al in enumerate(max_entropy_algo.vsi_target_align_funcs):

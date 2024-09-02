@@ -185,7 +185,6 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         return action, policy_state 
     
 
-
 class VAlignedDictSpaceActionPolicy(VAlignedDiscreteSpaceActionPolicy):
    
     def _callable_from_dict(self):

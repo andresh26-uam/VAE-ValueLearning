@@ -221,7 +221,26 @@ def split_od_train_test(od_list, od_dist, split=0.8, to_od_list_int=True):
 
     return train_split, test_split, train_split_dist, test_split_dist
 
+def train_test_split_initial_state_distributions(n_states, split_percentage=0.7):
+    n = n_states
 
+    # Step 2: Randomly select 70% of the indexes
+    indices = np.arange(n)
+    np.random.shuffle(indices)
+
+    split_point = int(split_percentage * n)
+    first_indices = indices[:split_point]
+    second_indices = indices[split_point:]
+
+    # Step 3: Create uniform distributions
+    first_distribution = np.zeros(n)
+    second_distribution = np.zeros(n)
+
+    first_distribution[first_indices] = 1 / len(first_indices)
+    second_distribution[second_indices] = 1 / len(second_indices)
+
+    # Output the distributions
+    return first_distribution, second_distribution
 
 def sample_example_profiles(profile_variety, n_values=3) -> set:
     ratios = np.linspace(0, 1, profile_variety)

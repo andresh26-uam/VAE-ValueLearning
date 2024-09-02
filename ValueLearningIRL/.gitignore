@@ -7,3 +7,4 @@ irlvenv/
 *partial*.png
 *.npy
 *.pickle
+.DS-Store

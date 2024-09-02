@@ -142,7 +142,8 @@ for repeat in range(N_EXPERIMENTS):
         use_done=False,
         hid_sizes=[3,],
         reward_bias=-0.0,
-        activations=[nn.Identity, nn.Identity]
+        activations=[nn.Identity, nn.Identity],
+        negative_grounding_layer=True
     )
     reward_net.set_alignment_function(PROFILE)
 

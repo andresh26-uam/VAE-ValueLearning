@@ -14,10 +14,12 @@ from src.envs.tabularVAenv import TabularVAPOMDP
 
 class FeatureSelection(enum.Enum):
 
-    ONE_HOT_OBSERVATIONS = 'observations_one_hot'
-    ONE_HOT_FEATURES = 'features_one_hot'
-    ORIGINAL_OBSERVATIONS = 'observations'
-    ENCRYPTED_OBSERVATIONS = 'encrypted_observations'
+    
+    ONE_HOT_FEATURES = 'features_one_hot' # Each feature is one-hot encoded
+    ORIGINAL_OBSERVATIONS = 'observations' # Use the original observations of the form [0,1,4,3,0]
+    ENCRYPTED_OBSERVATIONS = 'encrypted_observations' # Use State unique identifier given by its encryption, e.g. 320
+    ONE_HOT_OBSERVATIONS = 'observations_one_hot' # Use State encrption, but one hot encoded
+    ORDINAL_AND_ONE_HOT_FEATURES = 'ordinal_and_one_hot' # TODO: Ordinal Features remain as 0, 1, 2 but categorical ones are one hot encoded. 
     DEFAULT = None
 
 class FireFightersEnv(TabularVAPOMDP):
@@ -29,7 +31,7 @@ class FireFightersEnv(TabularVAPOMDP):
 
     def render(self):
         return self.real_env.render()
-    def __init__(self, feature_selection=FeatureSelection.ONE_HOT_FEATURES, horizon=100):
+    def __init__(self, feature_selection=FeatureSelection.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):
         self.real_env = HighRiseFireEnv()
         
         if feature_selection == FeatureSelection.ORIGINAL_OBSERVATIONS:
@@ -52,14 +54,10 @@ class FireFightersEnv(TabularVAPOMDP):
 
         transition_matrix = np.zeros((self.n_states, self.action_space.n, self.n_states))
         reward_matrix_per_va = dict()
-        reward_matrix_per_va_complete = dict()
 
 
         reward_matrix_per_va[(1.0, 0.0)] = np.zeros((self.n_states, self.action_space.n))
         reward_matrix_per_va[(0.0, 1.0)] = np.zeros((self.n_states, self.action_space.n))
-
-        reward_matrix_per_va_complete[(1.0, 0.0)] = np.zeros((self.n_states, self.action_space.n, self.n_states))
-        reward_matrix_per_va_complete[(0.0, 1.0)] = np.zeros((self.n_states, self.action_space.n, self.n_states))
 
         _goal_states = list()
 
@@ -80,34 +78,40 @@ class FireFightersEnv(TabularVAPOMDP):
                     ns_trans = self.real_env.transition(s_trans,a)
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s,a,ns] = 1.0
-                    reward_matrix_per_va_complete[(1.0, 0.0)][s,a,ns], reward_matrix_per_va_complete[(0.0, 1.0)][s,a,ns] = self.real_env.calculate_rewards(s_trans, a, ns_trans)
-                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = reward_matrix_per_va_complete[(1.0, 0.0)][s,a,ns], reward_matrix_per_va_complete[(0.0, 1.0)][s,a,ns]
+                    
+                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = self.real_env.calculate_rewards(s_trans, a, ns_trans)
             else:
                 _goal_states.append(s_trans)
+                
                 for a in range(self.action_space.n):  
                     ns_trans = self.real_env.transition(s_trans,a)    
                                  
                     ns = self.real_env.encrypt(ns_trans)
-                    reward_matrix_per_va_complete[(1.0, 0.0)][s,a,ns], reward_matrix_per_va_complete[(0.0, 1.0)][s,a,ns] = self.real_env.calculate_rewards(s_trans, a, ns_trans)
-                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = reward_matrix_per_va_complete[(1.0, 0.0)][s,a,ns], reward_matrix_per_va_complete[(0.0, 1.0)][s,a,ns]
-
-                    transition_matrix[s,a,ns] = 0.0
                     
+                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = self.real_env.calculate_rewards(s_trans, a, ns_trans)
+        
+        if isinstance(initial_state_distribution, np.ndarray):
 
-        initial_state_dist = np.zeros(self.n_states)
-        initial_state_dist[self.real_env.encrypt(np.array([0, 3, 4, 0, 0, 3]))] = 1.0
-        #initial_state_dist = np.ones(self.n_states)/self.n_states
+            assert np.allclose(np.sum(initial_state_distribution), 1.0)
+
+            self.initial_state_dist = initial_state_distribution
+
+        elif initial_state_distribution == 'uniform':
+            self.initial_state_dist = np.ones(self.n_states)/self.n_states
+        else:
+            self.initial_state_dist = np.zeros(self.n_states)
+            self.initial_state_dist[self.real_env.encrypt(np.array([0, 3, 4, 0, 0, 3]))] = 1.0
+
         self._cur_state = self.real_env.state
         self._goal_states = np.asarray(_goal_states)
 
         
         super(FireFightersEnv, self).__init__(transition_matrix=transition_matrix, observation_matrix=observation_matrix, 
                                               reward_matrix_per_va=lambda va: reward_matrix_per_va[va], 
-                                              reward_matrix_per_va_complete=lambda va: reward_matrix_per_va_complete[va], 
-                                              default_reward_matrix=reward_matrix_per_va[(0.0, 1.0)], horizon=horizon, initial_state_dist=initial_state_dist)
+                                              default_reward_matrix=reward_matrix_per_va[(0.0, 1.0)], horizon=horizon, initial_state_dist=self.initial_state_dist)
     @property
     def state(self) -> np.dtype:
-        """Data type of observation vectors (e.g. np.float32)."""
+        """Data type of state vectors (must be np.int64)."""
         return self._cur_state
     @property
     def observation(self) -> np.dtype:
