@@ -283,7 +283,6 @@ if __name__ == "__main__":
 
         
         for npr in EXAMPLE_PROFILES:
-            # TODO: Support for unknown societies... Define a society only with a list of profiles and the probability of choosing one or the other. 
             mce_irl.training_profiles = [npr, ]
             mce_irl.name_method = name_of_files+str(npr)
             

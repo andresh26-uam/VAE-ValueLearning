@@ -155,7 +155,7 @@ for repeat in range(N_EXPERIMENTS):
     st = time.time()
     mce_irl = MCEIRL_RoadNetwork(
         expert_policy=expert_sampler,
-        expert_trajectories=expert_demonstrations_all_profiles, # los rollout no me fio en absoluto.
+        expert_trajectories=expert_demonstrations_all_profiles,
         env=env_single,
         reward_net=reward_net,
         log_interval=1,

@@ -41,9 +41,8 @@ class ConvexLinearModule(nn.Linear):
         #print(w_normalized)
         output = nn.functional.linear(input, w_normalized)
         assert th.all(output >=0)
-        #print(th.where(input<=0.0))
-        #print(input[th.where(input<=0.0)])
-        assert th.all(input > 0.0)
+
+        #assert th.all(input > 0.0)
 
         return output
 
@@ -63,7 +62,7 @@ class ConvexTensorModule(nn.Module):
         self.weights = th.tensor(np.array(new_profile, dtype=np.float64), dtype=th.float32, requires_grad=True)
 
     def forward(self, x=None):
-        return nn.functional.softmax(self.weights, dtype=th.float64)
+        return nn.functional.softmax(self.weights, dtype=th.float64, dim=0)
     
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]:
         return iter([self.weights])
@@ -108,24 +107,24 @@ class TrainingModes(enum.Enum):
     EVAL = 'eval'
 
 
-class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
+class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
-    def set_alignment_function(self, align_func):
-        if align_func is None:
-            return
-        if self.cur_align_func is None or self.cur_align_func != align_func:
-            self.cur_align_func = align_func
+    def set_alignment_function(self, align_func=None):
+        self.cur_align_func = align_func
+
     @abstractmethod
     def reset_learned_alignment_function(self, new_align_func=None):
+        ...
+    @abstractmethod
+    def reset_learned_grounding_function(self, new_grounding_func=None):
         ...
 
     def set_grounding_function(self, grounding):
         if grounding is None:
             return
         
-        if self.cur_value_grounding is None or self.cur_value_grounding != grounding:
-            self.cur_value_grounding = grounding
+        self.cur_value_grounding = grounding
         
 
     def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
@@ -147,7 +146,6 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
         self.cur_align_func = None
         self.cur_value_grounding = None
 
-        
 
     @abstractmethod
     def value_system_layer(self, align_func):    
@@ -156,24 +154,10 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
     def value_grounding_layer(self, custom_layer):    
         pass
 
-
+    
     def _forward(self, features, align_func=None, grounding=None):
-        
-        self.set_mode(self.mode)
-        
         x = self.value_grounding_layer(custom_layer=grounding)(features) 
-        """print("VG", x.grad_fn)
-        print(align_func)
-        print(features.requires_grad)
-        print(features[0])
-        print(features.shape)
-        print_tensor_and_grad_fn(x.grad_fn)
-        print_tensor_and_grad_fn(features.grad_fn)
-        """
-        
-        x = self.value_system_layer(align_func)(x)
-        """print("VSL", x.grad)
-        print(align_func)"""
+        x = self.value_system_layer(align_func=align_func)(x)
         return x 
     
     def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
@@ -195,6 +179,10 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
         
         return self._forward(inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding) # If mode is not eval, cur_align_func and cur_value_grounding is not used. This depends on the implementation. 
     
+    def get_next_align_func_and_its_probability(self, from_specific_align_func=None):
+        used_alignment_func = from_specific_align_func if from_specific_align_func is not None else self.get_learned_align_function()
+        probability = 1.0
+        return used_alignment_func, probability, None
     @abstractmethod    
     def get_learned_align_function(self):
         pass
@@ -205,30 +193,31 @@ class AbstractVSLearningRewardFunction(reward_nets.RewardNet):
     @abstractmethod
     def copy(self):
         ...
-class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
+class ProfiledRewardFunction(AbstractVSLRewardFunction):
 
     def set_mode(self, mode):
         super().set_mode(mode)
         if self.mode is None or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            self.cur_value_grounding = None
             self.values_net.requires_grad_(True)
             self.trained_profile_net.requires_grad_(False)
         elif self.mode == TrainingModes.EVAL:
             self.values_net.requires_grad_(False)
             self.trained_profile_net.requires_grad_(False)
         elif self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            self.cur_align_func = None
             self.values_net.requires_grad_(False)
             self.trained_profile_net.requires_grad_(True)
         elif self.mode == TrainingModes.SIMULTANEOUS:
+            self.cur_value_grounding = None
+            self.cur_align_func = None
             self.values_net.requires_grad_(True)
             self.trained_profile_net.requires_grad_(True)
         
         else:
             raise ValueError("Unkown training mode" + str(self.mode))
     def set_alignment_function(self, align_func):
-        if align_func is None:
-            return
-        if self.cur_align_func is None or self.cur_align_func != align_func:
-            self.cur_align_func = align_func
+        super().set_alignment_function(align_func)
         if self.cur_align_func is not None:
             assert self.hid_sizes[-1] == len(self.cur_align_func)
     
@@ -238,20 +227,36 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         
         
     def value_grounding_layer(self, custom_layer = None):
-        if custom_layer is None:
+        if custom_layer is None or self.mode in [TrainingModes.VALUE_GROUNDING_LEARNING, TrainingModes.SIMULTANEOUS]:
             if self.negative_grounding_layer:
                 return lambda x: -self.values_net(x)
             else:
                 return lambda x: self.values_net(x)
         else:
-            def _call(x):
-                assert custom_layer.shape == (self.input_size, self.hid_sizes[-1])
-                pt = th.tensor(custom_layer, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
-                if self.negative_grounding_layer:
-                    x = -F.linear(x, pt.T)
-                else:
-                    x = F.linear(x, pt.T)
-                return x
+            if isinstance(custom_layer, nn.Module):
+                def _call(x):
+                    with th.no_grad():
+                        custom_layer.requires_grad_(False)
+                        if self.negative_grounding_layer:
+                            x = -custom_layer(x)
+                            assert th.all(x <=0)
+                        else:
+                            x = custom_layer(x)
+                        assert x.shape[-1] == self.hid_sizes[-1]
+                        return x
+            else:
+                def _call(x):
+                    assert custom_layer.shape == (self.input_size, self.hid_sizes[-1])
+                    if isinstance(custom_layer, Tensor):
+                        pt = custom_layer.clone().detach()
+                    else:
+                        pt = th.tensor(custom_layer, requires_grad=False, dtype=th.float32)#.reshape((1, len(profile)))
+                    if self.negative_grounding_layer:
+                        x = -F.linear(x, pt.T)
+                        assert th.all(x <= 0)
+                    else:
+                        x = F.linear(x, pt.T)
+                    return x
             return _call
     
     def value_system_layer(self, align_func=None):
@@ -282,24 +287,29 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
 
         
         
+    def reset_learned_grounding_function(self, new_grounding_func=None):
+        return self.reset_value_net(new_grounding_func)
 
-    def reset_value_net(self):
+    def reset_value_net(self, new_grounding_func=None):
         modules = []
-        for i in range(1, len(self.activations)):
-            linmod = self.basic_layer_classes[i-1](self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
+        if new_grounding_func is None:
+            for i in range(1, len(self.activations)):
+                linmod = self.basic_layer_classes[i-1](self.hid_sizes[i-1], self.hid_sizes[i], bias=False)
+                
+                if isinstance(linmod, ConvexLinearModule):
+                    state_dict = linmod.state_dict()
+                    state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
+                        
+                    state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
+                    linmod.load_state_dict(state_dict)
+                    assert th.all(linmod.state_dict()['weight'] > 0)
+                modules.append(linmod)
+                modules.append(self.activations[i-1]())
+            #modules.append(nn.BatchNorm1d()) ? 
             
-            if isinstance(linmod, ConvexLinearModule):
-                state_dict = linmod.state_dict()
-                state_dict['weight'] = th.rand(*(state_dict['weight'].shape), requires_grad=True)
-                    
-                state_dict['weight'] = state_dict['weight']/th.sum(state_dict['weight'])
-                linmod.load_state_dict(state_dict)
-                assert th.all(linmod.state_dict()['weight'] > 0)
-            modules.append(linmod)
-            modules.append(self.activations[i-1]())
-        #modules.append(nn.BatchNorm1d()) ? 
-        
-        self.values_net = nn.Sequential(*modules,        )
+            self.values_net = nn.Sequential(*modules,        )
+        else:
+            self.values_net  = new_grounding_func
 
     def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
                  activations = [nn.Sigmoid, nn.Tanh],
@@ -349,7 +359,7 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         self.activations = activations
         self.basic_layer_classes = basic_layer_classes
         
-        self.reset_value_net()
+        self.reset_learned_grounding_function()
 
         self.reset_learned_alignment_function()
         
@@ -396,21 +406,28 @@ class ProfiledRewardFunction(AbstractVSLearningRewardFunction):
         return th.load(os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
 
 
-class DistributionProfiledRewardFunction(ProfiledRewardFunction):
+class ProabilisticProfiledRewardFunction(ProfiledRewardFunction):
             
-    def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False, activations=[nn.Sigmoid,], hid_sizes=[3], basic_layer_classes=[ConvexLinearModule, PositiveBoundedLinearModule], mode=TrainingModes.VALUE_GROUNDING_LEARNING, reward_bias=0, negative_grounding_layer=False, **kwargs):
+    def __init__(self, environment: gym.Env, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False, activations=[nn.Sigmoid,], hid_sizes=[3], basic_layer_classes=[ConvexLinearModule, PositiveBoundedLinearModule], mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION, reward_bias=0, negative_grounding_layer=False, **kwargs):
         super().__init__(environment, use_state, use_action, use_next_state, use_done, use_one_hot_state_action, activations, hid_sizes, basic_layer_classes, mode, reward_bias, negative_grounding_layer, **kwargs)
         self.fixed_align_func_index = None
+    
     def reset_learning_profile(self, new_profile: tuple = None):
         self.trained_profile_net=ConvexTensorModule(size=self.hid_sizes[-1], init_tuple=new_profile)
-        self.cur_align_func = self.trained_profile_net.get_tensor_as_tuple()
+        self.cur_align_func = None
     
-    def fix_alignment_function(self, align_func=None):
+    def fix_alignment_function(self, align_func=None, random=True):
         if align_func is None:
-            align_func = self.cur_align_func
+            if self.mode == TrainingModes.EVAL or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+                align_func = self.cur_align_func
+            else:
+                align_func = self.trained_profile_net().detach().numpy()
+            
+        if random:
             self.fixed_align_func_index = np.random.choice(len(align_func), p=align_func)
         else:
-            self.fixed_align_func_index = np.argmax(align_func)
+            self.fixed_align_func_index = np.argmax(np.random.permutation(align_func))
+           
     def free_alignment_function(self):
         self.fixed_align_func_index= None
 
@@ -424,16 +441,40 @@ class DistributionProfiledRewardFunction(ProfiledRewardFunction):
             return self.trained_profile_net.parameters(recurse)
         else:
             return chain(self.trained_profile_net.parameters(recurse), self.values_net.parameters(recurse))
+        
+    def get_next_align_func_and_its_probability(self, from_specific_align_func=None):
+        
+        if from_specific_align_func is None:
+            align_tensor = self.trained_profile_net()
+        else:
+            if not isinstance(from_specific_align_func, th.Tensor):
+                align_tensor = th.as_tensor(from_specific_align_func, dtype=self.dtype, device=self.device).requires_grad_(self.mode != TrainingModes.EVAL)
+            else:
+                align_tensor = from_specific_align_func
+        
+        if self.fixed_align_func_index is not None:
+            selected_index = self.fixed_align_func_index
+        else:
+            selected_index = np.random.choice(a=len(align_tensor), p=align_tensor)
 
-    def value_system_layer(self, align_func=None):
+        used_alignment_func = np.zeros_like(align_tensor.detach().numpy())
+        used_alignment_func[self.fixed_align_func_index] = 1.0
+        used_alignment_func = tuple(used_alignment_func)
+
+        probability = align_tensor[selected_index]
+
+        return used_alignment_func, probability, selected_index
+
+    def value_system_layer(self, align_func=None):  
+        if align_func is None:
+                align_func = self.cur_align_func
+        
         if self.mode == TrainingModes.EVAL or self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             if align_func is None:
-                align_func = self.cur_align_func
+                align_func = self.trained_profile_net().detach()
+
             def _call(x):
-                if self.fixed_align_func_index is not None:
-                    selected_index = self.fixed_align_func_index
-                else:
-                    selected_index = np.random.choice(a=x.size()[-1], p=align_func)
+                used_alignment_func, probability, selected_index = self.get_next_align_func_and_its_probability(align_func)
                 if len(x.size()) == 2:
                     x = x[:, selected_index]
                     return x
@@ -444,10 +485,7 @@ class DistributionProfiledRewardFunction(ProfiledRewardFunction):
 
         elif self.mode == TrainingModes.SIMULTANEOUS or self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             def _call(x):
-                if self.fixed_align_func_index is not None:
-                    selected_index = self.fixed_align_func_index
-                else:
-                    selected_index = np.random.choice(a=x.size()[-1], p=self.trained_profile_net())
+                used_alignment_func, probability, selected_index = self.get_next_align_func_and_its_probability(self.trained_profile_net())
                 if len(x.size()) == 2:
                         x = x[:, selected_index]
                         return x

@@ -66,7 +66,7 @@ class ValueSystemLearningPolicy(BasePolicy):
 
     def obtain_trajectory(self, alignment_function=None, seed=32, options: Union[None, Dict] = None,t_max=None, stochastic=False, exploration=0, only_states=False) -> Union[List, Trajectory]:
         state_obs, info = self.env.reset(seed = seed, options=options) if options is not None else self.env.reset(seed=seed) 
-        policy_state = self.reset(seed=seed)
+        policy_state = self.reset(seed=seed)        
         init_state = self.state_encoder(state_obs, info)
 
         terminated = False
@@ -211,4 +211,31 @@ class VAlignedDictDiscreteStateActionPolicyTabularMDP(VAlignedDictSpaceActionPol
     
     
     
+
+def profiled_society_sampler(align_func_as_basic_profile_probs):
+    index_ = np.random.choice(a=len(align_func_as_basic_profile_probs), p=align_func_as_basic_profile_probs)
+    target_align_func = [0.0]*len(align_func_as_basic_profile_probs)
+    target_align_func[index_] = 1.0
+    target_align_func = tuple(target_align_func)
+    return target_align_func
     
+def random_sampler_among_trajs(trajs, align_funcs, n_seeds, n_trajs_per_seed):
+
+    all_trajs = []
+    for al in align_funcs:
+            all_trajs.extend(np.random.choice([traj for traj in trajs if traj.infos[0]['align_func'] == al], replace=True, size=n_seeds*n_trajs_per_seed))
+    return all_trajs
+
+def sampler_from_policy(policy: ValueSystemLearningPolicy, align_funcs, n_seeds, n_trajs_per_seed, stochastic, horizon):
+    return policy.obtain_trajectories(n_seeds=n_seeds, stochastic=stochastic, repeat_per_seed=n_trajs_per_seed, with_alignfunctions=align_funcs, t_max=horizon)
+
+def profiled_society_traj_sampler_from_policy(policy: ValueSystemLearningPolicy, align_funcs, n_seeds, n_trajs_per_seed, stochastic, horizon):
+    trajs = []
+    for al in align_funcs:
+        for rep in range(n_seeds):
+            target_align_func = profiled_society_sampler(al)
+
+            trajs.extend(policy.obtain_trajectories(n_seeds=1, stochastic=stochastic, 
+                                                    repeat_per_seed=n_trajs_per_seed, with_alignfunctions=[target_align_func], t_max=horizon))
+    
+    return trajs
