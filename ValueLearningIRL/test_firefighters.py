@@ -1,3 +1,4 @@
+from copy import deepcopy
 from functools import partial
 import pickle
 import gymnasium as gym
@@ -13,7 +14,7 @@ from firefighters_use_case.constants import ACTION_AGGRESSIVE_FIRE_SUPPRESSION
 from firefighters_use_case.pmovi import get_particular_policy, learn_and_do, pareto_multi_objective_value_iteration, scalarise_q_function
 from src.envs.firefighters_env import FeatureSelectionFFEnv, FireFightersEnv
 from src.me_irl_for_vsl import MaxEntropyIRLForVSL, check_coherent_rewards, mce_partition_fh, PolicyApproximators
-from src.me_irl_for_vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_rewards, plot_learned_to_expert_policies_vgl, plot_learned_to_expert_policies_vsi
+from src.me_irl_for_vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies
 from src.reward_functions import PositiveBoundedLinearModule, ProfileLayer, ProfiledRewardFunction, TrainingModes
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, ValueSystemLearningPolicy, profiled_society_sampler, profiled_society_traj_sampler_from_policy, random_sampler_among_trajs, sampler_from_policy
 from utils import sample_example_profiles, train_test_split_initial_state_distributions
@@ -21,8 +22,8 @@ from torch import nn
 LOG_EVAL_INTERVAL = 1
 SEED = 26
 
-STOCHASTIC_EXPERT = False
-LEARN_STOCHASTIC_POLICY = False
+STOCHASTIC_EXPERT = True
+LEARN_STOCHASTIC_POLICY = True
 
 USE_ACTION = True # Use action to approximate the reward.
 USE_ONE_HOT_STATE_ACTION = True # One-Hot encode all state-action pairs or rather, concatenate state and action features.
@@ -46,12 +47,64 @@ HORIZON = 20
 USE_PMOVI_EXPERT = False 
 
 INITIAL_STATE_DISTRIBUTION = 'uniform' # or 'default' or a specfic probability distribution on the encrypted states.
-SOCIETY_EXPERT = False
+
 EXPERT_FIXED_TRAJECTORIES = True
+USE_VA_EXPECTATIONS_INSTEAD_OF_OCC_MEASURES = True
+N_EXPERIMENT_REPETITON = 10
 
+FIREFIGHTER_ALFUNC_COLORS = lambda align_func: get_color_gradient([1,0,0], [0,0,1], align_func[0])
 
+PERFORM_VGL = False
+PERFORM_VSI_FROM_VGL = False
+PERFORM_VSI_FROM_REAL_GROUNDING = True
 
+def get_color_gradient(c1, c2, mix):
+    """
+    Given two hex colors, returns a color gradient corresponding to a given [0,1] value
+    """
+    c1_rgb = np.array(c1)
+    c2_rgb = np.array(c2)
+    
+    return ((1-mix)*c1_rgb + (mix*c2_rgb))
 
+def pad(array, length):
+    new_arr = np.zeros((length,))
+    new_arr[0:len(array)] = np.asarray(array)
+    new_arr[len(array):] = array[-1]
+    return new_arr
+
+def plot_learning_curves(historic_linf_delta_per_rep, historic_grad_norms_per_rep, name_method='test_lc', align_func_colors=lambda al: 'black'):
+    plt.figure(figsize=(6,6))
+    plt.title(f"Learning Curves over {historic_linf_delta_per_rep} repetitions")
+    plt.xlabel("Training Iteration")
+    plt.ylabel("Training error")
+    
+    for al in historic_linf_delta_per_rep[0].keys():  
+        max_length = np.max([len(historic_linf_delta_per_rep[rep][al]) for rep in range(len(historic_linf_delta_per_rep))])
+
+        linf_delta = np.asarray([pad(historic_linf_delta_per_rep[rep][al], max_length) for rep in range(len(historic_linf_delta_per_rep))])
+        grad_norms = np.asarray([pad(historic_linf_delta_per_rep[rep][al], max_length) for rep in range(len(historic_linf_delta_per_rep))])
+    
+        avg_linf_delta = np.mean(linf_delta, axis=0)
+        
+        std_linf_delta = np.std(linf_delta, axis=0)
+
+        avg_grad_norms = np.mean(grad_norms, axis=0)
+        std_grad_norms = np.std(grad_norms, axis=0)
+        color=align_func_colors(tuple(al))
+        plt.plot(avg_linf_delta,
+                        color=color, 
+                        label=f'{tuple([float("{0:.3f}".format(t)) for t in al])} Last: {float(avg_linf_delta[-1]):0.2f}'
+                        )
+        #plt.plot(avg_grad_norms,color=align_func_colors.get(tuple(al), 'black'), label=f'Grad Norm: {float(avg_grad_norms[-1]):0.2f}'
+                        
+        
+        plt.fill_between([i for i in range(len(avg_linf_delta))], avg_linf_delta-std_linf_delta, avg_linf_delta+std_linf_delta,edgecolor=color,alpha=0.3, facecolor=color)
+        #plt.fill_between([i for i in range(len(avg_grad_norms))], avg_grad_norms-std_grad_norms, avg_grad_norms+std_grad_norms,edgecolor='black',alpha=0.1, facecolor='black')
+        
+    plt.legend()
+    plt.grid()
+    plt.savefig(f'plots/Maxent_learning_curves_{name_method}.pdf')
 
 if __name__ == "__main__":
     np.random.seed(SEED)
@@ -63,6 +116,9 @@ if __name__ == "__main__":
     env_real: FireFightersEnv = gym.make('FireFighters-v0', feature_selection = FEATURE_SELECTION, horizon=HORIZON, initial_state_distribution=INITIAL_STATE_DISTRIBUTION)
     env_real.reset(seed=SEED)
 
+    print(env_real.goal_states)
+    
+    
     #train_init_state_distribution, test_init_state_distribution = train_test_split_initial_state_distributions(env_real.state_dim, 0.7)
     #env_training: FireFightersEnv = gym.make('FireFighters-v0', feature_selection = FEATURE_SELECTION, horizon=HORIZON, initial_state_distribution=train_init_state_distribution)
     env_training = env_real
@@ -115,10 +171,11 @@ if __name__ == "__main__":
         pi_matrix = stochastic_optimal_policy_calculator(scalarised_q, w, deterministic= not STOCHASTIC_EXPERT)
         profile_to_matrix[w] = pi_matrix
 
-        _,_, assumed_expert_pi = mce_partition_fh(env_real, discount=0.7,
+        _,_, assumed_expert_pi = mce_partition_fh(env_real, discount=discount_factor,
                                              reward=env_real.reward_matrix_per_align_func(w),
                                              approximator_kwargs={'value_iteration_tolerance': 0.00001, 'iterations': 1000},
                                              policy_approximator=POLICY_APPROXIMATION_METHOD,deterministic= not STOCHASTIC_EXPERT )
+        
         profile_to_assumed_matrix[w] = assumed_expert_pi
     expert_policy = VAlignedDictSpaceActionPolicy(policy_per_va_dict = profile_to_matrix if USE_PMOVI_EXPERT else profile_to_assumed_matrix, env = env_real, state_encoder=None)
     expert_policy_train = VAlignedDictSpaceActionPolicy(policy_per_va_dict = profile_to_matrix if USE_PMOVI_EXPERT else profile_to_assumed_matrix, env = env_training, state_encoder=None)
@@ -150,7 +207,7 @@ if __name__ == "__main__":
             env=env_training,
             reward_net=reward_net,
             log_interval=LOG_EVAL_INTERVAL,
-            vsi_optimizer_kwargs={"lr": 0.05, "weight_decay": 0.0000},
+            vsi_optimizer_kwargs={"lr": 0.15, "weight_decay": 0.0000},
             vgl_optimizer_kwargs={"lr": 0.1, "weight_decay": 0.0000},
             vgl_expert_policy=expert_policy_train,
             vsi_expert_policy=expert_policy_train,
@@ -171,8 +228,10 @@ if __name__ == "__main__":
 
             policy_approximator = POLICY_APPROXIMATION_METHOD,
             learn_stochastic_policy = LEARN_STOCHASTIC_POLICY,
+            expert_is_stochastic=STOCHASTIC_EXPERT,
             discount=discount_factor,
-            environment_is_stochastic=False
+            environment_is_stochastic=False,
+            use_feature_expectations_for_vsi=USE_VA_EXPECTATIONS_INSTEAD_OF_OCC_MEASURES,
             
             )
     
@@ -189,57 +248,109 @@ if __name__ == "__main__":
     
 
     # VALUE GROUNDING LEARNING:
-    learned_grounding, learned_rewards, reward_net_learned, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
-                                                        mode=TrainingModes.VALUE_GROUNDING_LEARNING,n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
-                                                        n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
-    
-    
-    
-    plot_learned_to_expert_policies_vgl(expert_policy, max_entropy_algo)
-    
-    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vgl')
-    
-    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vgl')
+    if PERFORM_VGL:
+        learned_rewards_per_round = []
+        policies_per_round = []
+        linf_delta_per_round = []
+        grad_norm_per_round = []
+        for rep in range(N_EXPERIMENT_REPETITON):
+            learned_grounding, learned_rewards, reward_net_learned, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=500, 
+                                                                mode=TrainingModes.VALUE_GROUNDING_LEARNING,n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
+                                                                n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
+                                                                use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
+            
+            
+            learned_rewards_per_round.append(learned_rewards)
+            policies_per_round.append(deepcopy(max_entropy_algo.learned_policy_per_va))
+            linf_delta_per_round.append(linf_delta_per_align_fun)
+            grad_norm_per_round.append(grad_norm_per_align_func)
+            print(learned_grounding)
+            
+        plot_learning_curves(linf_delta_per_round, grad_norm_per_round, name_method=f'expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vgl', align_func_colors=FIREFIGHTER_ALFUNC_COLORS)
 
-    
-    learned = max_entropy_algo.learned_policy_per_va.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=LEARN_STOCHASTIC_POLICY, exploration=0, only_states=True)
-    real = expert_policy.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=STOCHASTIC_EXPERT, exploration=0, only_states=True)
-    print("EXAMPLE TRAJS:")
-    print(learned)
-    print(real)
-    
+        plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards_per_round,vsi_or_vgl='vgl', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vgl')
+        
+        plot_learned_to_expert_policies(expert_policy, max_entropy_algo, vsi_or_vgl='vgl', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vgl', learnt_policy=policies_per_round)
+            
+        plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards_per_round, vsi_or_vgl='vgl', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vgl')
+            
+            
+        
+        learned = max_entropy_algo.learned_policy_per_va.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=LEARN_STOCHASTIC_POLICY, exploration=0, only_states=True)
+        real = expert_policy.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=STOCHASTIC_EXPERT, exploration=0, only_states=True)
+        print("EXAMPLE TRAJS:")
+        print(learned)
+        print(real)
+        
     # VALUE SYSTEM IDENTIFICATION: Correct grounding.
-    assumed_grounding = np.zeros((env_real.n_states*env_real.action_dim, 2))
-    assumed_grounding[:,0] = np.reshape(env_training.reward_matrix_per_align_func(profiles[-1]), (env_real.n_states*env_real.action_dim))
-    assumed_grounding[:,1] = np.reshape(env_training.reward_matrix_per_align_func(profiles[0]),(env_real.n_states*env_real.action_dim))
+    if PERFORM_VSI_FROM_REAL_GROUNDING:
+        assumed_grounding = np.zeros((env_real.n_states*env_real.action_dim, 2))
+        assumed_grounding[:,0] = np.reshape(env_training.reward_matrix_per_align_func(profiles[-1]), (env_real.n_states*env_real.action_dim))
+        assumed_grounding[:,1] = np.reshape(env_training.reward_matrix_per_align_func(profiles[0]),(env_real.n_states*env_real.action_dim))
 
-    target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
-                                                        mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-                                                        assumed_grounding=assumed_grounding,
-                                                        n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
-                                                        n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
-    
-    
-    plot_learned_to_expert_policies_vsi(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs)
+        
+        learned_rewards_per_round = []
+        policies_per_round = []
+        target_align_funcs_to_learned_align_funcs_per_round = []
+        linf_delta_per_round = []
+        grad_norm_per_round = []
+        for rep in range(N_EXPERIMENT_REPETITON):
+            target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
+                                                                mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+                                                                assumed_grounding=assumed_grounding,
+                                                                n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
+                                                                n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
+                                                                use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
+            #plt.plot(linf_delta_per_align_fun)
+            learned_rewards_per_round.append(learned_rewards)
+            policies_per_round.append(deepcopy(max_entropy_algo.learned_policy_per_va)) 
+            target_align_funcs_to_learned_align_funcs_per_round.append(target_align_funcs_to_learned_align_funcs)
+            linf_delta_per_round.append(linf_delta_per_align_fun)
+            grad_norm_per_round.append(grad_norm_per_align_func)
 
-    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
+            plot_learned_to_expert_policies(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, vsi_or_vgl='vsi', namefig=f'test{rep}_firefighters_vsi')
 
-    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
-    # VALUE SYSTEM IDENTIFICATION: Learned grounding.
-    
-    target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
-                                                        mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-                                                        assumed_grounding=reward_net.values_net,
-                                                        n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
-                                                        n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
-    
-    plot_learned_to_expert_policies_vsi(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs)
+            plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi')
 
-    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
+            plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi')
+            # VALUE SYSTEM IDENTIFICATION: Learned grounding.
+        plot_learning_curves(linf_delta_per_round, grad_norm_per_round, name_method=f'expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi', align_func_colors=FIREFIGHTER_ALFUNC_COLORS)
 
-    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
+        plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards_per_round,vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+        
+        plot_learned_to_expert_policies(expert_policy, max_entropy_algo, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi', learnt_policy=policies_per_round,target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+            
+        plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards_per_round, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+            
+    if PERFORM_VSI_FROM_VGL:
+        learned_rewards_per_round = []
+        policies_per_round = []
+        target_align_funcs_to_learned_align_funcs_per_round = []
+        linf_delta_per_round = []
+        grad_norm_per_round = []
+        for rep in range(N_EXPERIMENT_REPETITON):    
+            target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
+                                                                mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+                                                                assumed_grounding=reward_net.values_net,
+                                                                n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
+                                                                n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
+                                                                use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
+            learned_rewards_per_round.append(learned_rewards)
+            policies_per_round.append(deepcopy(max_entropy_algo.learned_policy_per_va))
+            target_align_funcs_to_learned_align_funcs_per_round.append(target_align_funcs_to_learned_align_funcs)
+            linf_delta_per_round.append(linf_delta_per_align_fun)
+            grad_norm_per_round.append(grad_norm_per_align_func)
 
+            plot_learned_to_expert_policies(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, vsi_or_vgl='vsi', namefig=f'test{rep}_firefighters_vsi_from_vgl')
 
+            plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi')
+
+            plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi_from_vgl')
+        plot_learning_curves(linf_delta_per_round, grad_norm_per_round, name_method=f'expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_from_vgl', align_func_colors=FIREFIGHTER_ALFUNC_COLORS)
+
+        plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards_per_round,vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_from_vgl', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+        
+        plot_learned_to_expert_policies(expert_policy, max_entropy_algo, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_from_vgl', learnt_policy=policies_per_round,target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+            
+        plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards_per_round, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_from_vgl',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+            

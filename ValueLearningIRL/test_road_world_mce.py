@@ -6,7 +6,7 @@ import torch
 from deep_maxent_value_grounding_learning import DEST
 from src.envs.roadworld_env import FixedDestRoadWorldGymPOMDP
 from src.me_irl_for_vsl import MaxEntropyIRLForVSL, PolicyApproximators, check_coherent_rewards, mce_partition_fh
-from src.me_irl_for_vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_rewards, plot_learned_to_expert_policies_vgl, plot_learned_to_expert_policies_vsi
+from src.me_irl_for_vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_rewards, plot_learned_to_expert_policies
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldGymPOMDP
 from src.reward_functions import ProfiledRewardFunction, TrainingModes
 from src.utils.load_data import ini_od_dist
@@ -25,7 +25,7 @@ EXPERT_FIXED_TRAJECTORIES = False
 N_EXPERT_SAMPLES_PER_OD = 1 if USE_OM is True else 10 if STOCHASTIC_EXPERT else 1# change True only when USE_OM is not True.
 FEATURE_SELECTION = FeatureSelection.ONLY_COSTS
 USE_OPTIMAL_REWARD_AS_FEATURE =False
-POLICY_APPROXIMATION_METHOD = PolicyApproximators.SOFT_VALUE_ITERATION 
+POLICY_APPROXIMATION_METHOD = PolicyApproximators.MCE_ORIGINAL 
 SINGLE_DEST = True
 PROFILE = (1.0,0.0,0.0)
 SEED = 26
@@ -90,12 +90,12 @@ if __name__ == '__main__':
     env_real = FixedDestRoadWorldGymPOMDP(env=env_single, with_destination=DEST)
     env_real.reset(seed=SEED)
 
-    profiles  = sample_example_profiles(profile_variety=6,n_values=3)
+    profiles  = sample_example_profiles(profile_variety=5,n_values=3)
     profile_to_matrix = {}
     profile_to_assumed_matrix = {}
     
     for w in profiles:
-        reward = np.sum([w[i]*env_real.reward_matrix_per_align_func(bp) for i,bp in enumerate(BASIC_PROFILES)], axis=0)
+        reward = env_real.reward_matrix_per_align_func(w)
         
         _,_, assumed_expert_pi = mce_partition_fh(env_real, discount=1.0,
                                              reward=reward,
@@ -154,31 +154,33 @@ if __name__ == '__main__':
             initial_state_distribution_test=env_real.initial_state_dist,
             policy_approximator = POLICY_APPROXIMATION_METHOD,
             learn_stochastic_policy = LEARN_STOCHASTIC_POLICY,
+            expert_is_stochastic=STOCHASTIC_EXPERT,
+            
             environment_is_stochastic=False,
             discount=1.0,
             
             )
-    check_coherent_rewards(max_entropy_algo, align_funcs_to_test=BASIC_PROFILES, real_grounding=nn.Identity(), policy_approx_method=POLICY_APPROXIMATION_METHOD, stochastic_expert=STOCHASTIC_EXPERT, stochastic_learner=LEARN_STOCHASTIC_POLICY)
+    check_coherent_rewards(max_entropy_algo, align_funcs_to_test=profiles, real_grounding=nn.Identity(), policy_approx_method=POLICY_APPROXIMATION_METHOD, stochastic_expert=STOCHASTIC_EXPERT, stochastic_learner=LEARN_STOCHASTIC_POLICY)
     
-    if False:
-        learned_grounding, learned_rewards, reward_net_learned, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=10, 
+    
+    learned_grounding, learned_rewards, reward_net_learned, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=50, 
                                                             mode=TrainingModes.VALUE_GROUNDING_LEARNING,n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
                                                             n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
                                                             use_probabilistic_reward=False,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
         
-        plot_learned_to_expert_policies_vgl(expert_policy, max_entropy_algo)
+    plot_learned_to_expert_policies(expert_policy, max_entropy_algo, vsi_or_vgl='vgl', namefig='test_roadworld_vgl',show=False)
+
+    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vgl', namefig='test_roadworld_vgl')
     
-        plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vgl')
-        
-        plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vgl')
-        
-        learned = max_entropy_algo.learned_policy_per_va.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=LEARN_STOCHASTIC_POLICY, exploration=0, only_states=True)
-        real = expert_policy.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=STOCHASTIC_EXPERT, exploration=0, only_states=True)
-        print("EXAMPLE TRAJS:")
-        print(learned)
-        print(real)
-        print("LEARNED GROUNDING:")
-        print(learned_grounding)
+    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vgl', namefig='test_roadworld_vgl')
+    
+    learned = max_entropy_algo.learned_policy_per_va.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=LEARN_STOCHASTIC_POLICY, exploration=0, only_states=True)
+    real = expert_policy.obtain_trajectory(alignment_function=profiles[0], seed=5686, stochastic=STOCHASTIC_EXPERT, exploration=0, only_states=True)
+    print("EXAMPLE TRAJS:")
+    print(learned)
+    print(real)
+    print("LEARNED GROUNDING:")
+    print(learned_grounding)
 
 
     target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=50, 
@@ -190,10 +192,11 @@ if __name__ == '__main__':
     
     
     
-    plot_learned_to_expert_policies_vsi(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs)
+    plot_learned_to_expert_policies(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, vsi_or_vgl='vsi', namefig='test_roadworld_vsi')
 
-    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
+    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig='test_roadworld_vsi')
 
+    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig='test_roadworld_vsi')
     
     if False: # TODO Test the abve two functions correspond to the following code,
         fig, axes = plt.subplots(2, len(max_entropy_algo.vsi_target_align_funcs), figsize=(16, 8))
@@ -245,5 +248,8 @@ if __name__ == '__main__':
 
         # Show the plot
         plt.show()
-    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs)
-    
+        
+    # TODO: Vender explicabilidad por el metodo de las probabilidades.
+    # TODO: Vender precisión en términos de expected visitation counts y de expected feature counts
+    # TODO: Podemos aprender el decision making con funciones de alineamiento con el VS (f^j) o bien las probabilidades que reflejan la importancia positiva de cada valor.
+    # TODO: PASAR A STATE_ACTION visitation counts.

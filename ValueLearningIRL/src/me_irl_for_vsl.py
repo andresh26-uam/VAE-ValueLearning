@@ -37,16 +37,54 @@ from copy import deepcopy
 
 from src.envs.firefighters_env import FeatureSelectionFFEnv
 from src.envs.tabularVAenv import TabularVAPOMDP
-from src.reward_functions import AbstractVSLRewardFunction, ProabilisticProfiledRewardFunction, TrainingModes, ProfiledRewardFunction, print_tensor_and_grad_fn, squeeze_r
+from src.reward_functions import AbstractVSLRewardFunction, ProabilisticProfiledRewardFunction, TrainingModes, print_tensor_and_grad_fn, squeeze_r
 
 import pandas as pd
 
-from src.vsl_policies import VAlignedDictSpaceActionPolicy, VAlignedDictDiscreteStateActionPolicyTabularMDP, VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
+from src.vsl_policies import VAlignedDictDiscreteStateActionPolicyTabularMDP, VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
 
 class PolicyApproximators(enum.Enum):
     MCE_ORIGINAL = 'mce_original'
     SOFT_VALUE_ITERATION = 'value_iteration'
     
+def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False):
+    """
+    Modify the policy matrix pi such that for each state s, the policy is concentrated 
+    on the action with the maximum probability, or equally among the actions with maximum probability
+    
+    Parameters:
+    - pi: A 2D numpy array of shape (n_states, n_actions), 
+          representing the policy matrix.
+    - distribute_probability_on_max_prob_actions: boolean, optional
+    
+    Returns:
+    - A modified policy matrix with the distributions concentrated on the 
+      action with the maximum probability.
+    """
+    if distribute_probability_on_max_prob_actions:
+        max_values = np.max(pi, axis=1, keepdims=True)
+
+        # Create a boolean matrix where True indicates a maximum value
+        is_max = (pi == max_values)
+
+        # Count the number of maximum values per row
+        num_max_values = np.sum(is_max, axis=1, keepdims=True)
+
+        # Create the final matrix where each maximum value is divided by the number of max values
+        pi_new = is_max / num_max_values
+    else:
+        # Find the action with the maximum probability for each state
+        max_action_indices = np.argmax(pi, axis=-1)  # Shape: (n_states,)
+        
+        # Create a new matrix of zeros
+        pi_new = np.zeros_like(pi)
+        
+        # Use advanced indexing to set the maximum action probability to 1
+        n_states, n_actions = pi.shape
+        pi_new[np.arange(n_states), max_action_indices] = 1
+    
+    return pi_new
+
 
 def mce_partition_fh(
     env: base_envs.TabularModelPOMDP,
@@ -141,37 +179,16 @@ def mce_partition_fh(
         V, Q, pi = policy_approximator(env, reward, discount, **approximator_kwargs)
 
     if deterministic:
+
         if len(pi.shape) == 2:
-            max_values = np.max(pi, axis=1, keepdims=True)
-
-            # Create a boolean matrix where True indicates a maximum value
-            is_max = (pi == max_values)
-
-            # Count the number of maximum values per row
-            num_max_values = np.sum(is_max, axis=1, keepdims=True)
-
-            # Create the final matrix where each maximum value is divided by the number of max values
-            pi = is_max / num_max_values
-
+            pi = concentrate_on_max_policy(pi)
             for i in range(pi.shape[0]):
                 assert np.allclose(np.sum(pi[i]), 1)
         else:
             for time_t in range(pi.shape[0]):
-                max_values = np.max(pi[time_t], axis=1, keepdims=True)
-
-                # Create a boolean matrix where True indicates a maximum value
-                is_max = (pi[time_t] == max_values)
-
-                # Count the number of maximum values per row
-                num_max_values = np.sum(is_max, axis=1, keepdims=True)
-
-                # Create the final matrix where each maximum value is divided by the number of max values
-                pi[time_t] = is_max / num_max_values
-
+                pi[time_t] = concentrate_on_max_policy(pi[time_t])
                 for i in range(pi[time_t].shape[0]):
                     assert np.allclose(np.sum(pi[time_t,i]), 1)
-        
-
 
     return V, Q, pi
 
@@ -186,7 +203,8 @@ def mce_occupancy_measures(
     deterministic = False,
     policy_approximator = PolicyApproximators.MCE_ORIGINAL,
     approximator_kwargs={},
-    initial_state_distribution = None
+    initial_state_distribution = None,
+    use_action_visitations = True
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Calculate state visitation frequency Ds for each state s under a given policy pi.
 
@@ -222,8 +240,10 @@ def mce_occupancy_measures(
     if pi is None:
         _, _, pi = mce_partition_fh(env, reward=reward, policy_approximator=policy_approximator, discount=discount,approximator_kwargs=approximator_kwargs, deterministic=deterministic)
 
-    D = np.zeros((horizon + 1, n_states))
     initial_state_distribution = env.initial_state_dist if initial_state_distribution is None else initial_state_distribution
+
+    D = np.zeros((horizon + 1, n_states))
+        
     D[0, :] = initial_state_distribution
     for t in range(horizon):
         for a in range(n_actions):
@@ -236,8 +256,58 @@ def mce_occupancy_measures(
             D[t + 1, :] += E @ T[:, a, :]
 
     Dcum = rollout.discounted_sum(D, discount)
-    assert isinstance(Dcum, np.ndarray)
+    
+    if use_action_visitations:
+        if len(pi.shape) == 3:
+            D = np.zeros((horizon+1, n_states, n_actions))
+            D_s = np.zeros((horizon + 1, n_states))
+            
+            D_s[0, :] = initial_state_distribution
+            Dcum = np.zeros((n_states, n_actions))
+            for a in range(n_actions):
+                if len(pi.shape) == 3:
+                    D[0, :, a] = initial_state_distribution*pi[0, :, a]
+                elif len(pi.shape) == 2:
+                    D[0, :, a] = initial_state_distribution*pi[:, a]
+            for t in range(horizon):
+                
+                for a in range(n_actions):
+                    for a_ in range(n_actions):
+                        if len(pi.shape) == 3:
+                            E = D[t, :, a] * pi[t, :, a_]
+                        elif len(pi.shape) == 2:
+                            E = D[t, :, a] * pi[:, a_]
+                        else:
+                            E = D[t, :, a] * (pi == a_) # Multiarmed bandit variant...?
+                        D[t + 1, :, a_] += E @ T[:, a, :] 
+                """for a_ in range(n_actions):
+                    D[t+1, :, a_] = D[t+1, : ,a_] * (pi[t+1, :, a_] if t < horizon-1 else 1)"""
+            
+            for a in range(n_actions):
+                Dcum[:,a] = rollout.discounted_sum(D[:,:,a], discount)
+        else:
+            Dcum = np.multiply(pi, Dcum[:, np.newaxis])
+            assert Dcum.shape == (n_states, n_actions)
+        if __debug__:
+            D = np.zeros((horizon + 1, n_states))
+        
+            D[0, :] = initial_state_distribution
+            for t in range(horizon):
+                for a in range(n_actions):
+                    if len(pi.shape) == 3:
+                        E = D[t] * pi[t, :, a]
+                    elif len(pi.shape) == 2:
+                        E = D[t] * pi[:, a]
+                    else:
+                        E = D[t] * (pi == a) # Multiarmed bandit variant...?
+                    D[t + 1, :] += E @ T[:, a, :]
+
+            Dstates = rollout.discounted_sum(D, discount)
+            #print(np.max(Dstates - np.sum(Dcum, axis=-1)))
+            #assert np.allclose(np.sum(Dcum, axis=-1), Dstates)
+        assert isinstance(Dcum, np.ndarray)
     return D, Dcum
+
 
 def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim, discount, groupby_al_func=True):
     if groupby_al_func:
@@ -324,6 +394,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         learn_stochastic_policy = True,
         expert_is_stochastic = True,
         environment_is_stochastic=False,
+        use_feature_expectations_for_vsi=True,
         *,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
         
@@ -335,7 +406,8 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         self.approximator_kwargs = approximator_kwargs
         self.learn_stochastic_policy = learn_stochastic_policy
         self.expert_is_stochastic = expert_is_stochastic
-        
+        self.use_feature_expectations = use_feature_expectations_for_vsi
+
         self.exposed_state_env = base_envs.ExposePOMDPStateWrapper(env)
         self.vgl_demo_state_om = dict()
         self.vsi_demo_state_om = dict()
@@ -448,7 +520,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
             if state_actions_with_special_reward is not None:
                 predicted_r[state_actions_with_special_reward] = th.as_tensor(
                     self.env.reward_matrix_per_align_func(used_alignment_func)[state_actions_with_special_reward], 
-                    dtype=predicted_r.dtype, device=predicted_r.device).requires_grad_(False)
+                    dtype=predicted_r.dtype, device=predicted_r.device)
             
             return predicted_r, used_alignment_func, probability
     
@@ -457,7 +529,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                           use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10, requires_grad=True):
         
         if obs_mat is None:
-            obs_mat = self.exposed_state_env.unwrapped.observation_matrix
+            obs_mat = self.env.observation_matrix
             obs_mat = th.as_tensor(
                 obs_mat,
                 dtype=self.current_net.dtype,
@@ -468,7 +540,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         if self.current_net.use_one_hot_state_action:
             if obs_action_mat is None:
                 obs_action_mat = th.as_tensor(
-                        np.identity(self.exposed_state_env.state_dim*self.exposed_state_env.action_dim),
+                        np.identity(self.env.state_dim*self.env.action_dim),
                         dtype=self.current_net.dtype,
                         device=self.current_net.device,
                     )
@@ -514,17 +586,16 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
             
         return ret
 
-    def mce_partition_fh_per_align_func(self, align_func, reward_matrix=None, action_mat=None, obs_action_mat=None, next_obs_mat=None, reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING):
+    def mce_partition_fh_per_align_func(self, align_func, reward_matrix=None, action_mat=None, obs_action_mat=None,reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING, use_probabilistic_reward=False):
         
         if reward_matrix is None:
             reward_matrix_torch, reward_matrix = self.calculate_rewards(align_func=align_func, 
                                                    obs_mat=self.env.observation_matrix, 
                                                    action_mat=action_mat, 
                                                    obs_action_mat=obs_action_mat,
-                                                   next_obs_mat=next_obs_mat,
-                                                   reward_mode=reward_mode)
+                                                   reward_mode=reward_mode, requires_grad=False, use_probabilistic_reward=use_probabilistic_reward)
         
-        V,Q, pi = mce_partition_fh(env=self.exposed_state_env, reward=reward_matrix, discount=self.discount, 
+        V,Q, pi = mce_partition_fh(env=self.env, reward=reward_matrix, discount=self.discount, 
                                    policy_approximator=self.policy_approximator, 
                                    approximator_kwargs = self.approximator_kwargs,
                                    deterministic=not self.learn_stochastic_policy)
@@ -538,18 +609,19 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         reward_matrix: Optional[np.ndarray] = None,
         pi: Optional[np.ndarray] = None,
         deterministic = False,
-        train_or_test = 'train'
+        train_or_test = 'train',
+        use_action_visitations = False,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if pi is None:
-            V,Q, pi = mce_partition_fh(self.exposed_state_env, reward=reward_matrix, discount=self.discount, policy_approximator=self.policy_approximator, 
+            V,Q, pi = mce_partition_fh(self.env, reward=reward_matrix, discount=self.discount, policy_approximator=self.policy_approximator, 
                                        approximator_kwargs=self.approximator_kwargs,
                                        deterministic=deterministic)
             
-        D, Dcums = mce_occupancy_measures(env=self.exposed_state_env, pi=pi, 
+        D, Dcums = mce_occupancy_measures(env=self.env, pi=pi, 
                                           discount=self.discount, 
                                           policy_approximator=self.policy_approximator, 
                                           approximator_kwargs=self.approximator_kwargs,
-                                          deterministic=deterministic, initial_state_distribution=self.initial_state_distribution_train if train_or_test=='train' else self.initial_state_distribution_test)
+                                          deterministic=deterministic, initial_state_distribution=self.initial_state_distribution_train if train_or_test=='train' else self.initial_state_distribution_test, use_action_visitations=use_action_visitations)
         return D, Dcums, pi
     from seals.diagnostics.cliff_world import CliffWorldEnv
 
@@ -623,14 +695,14 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                     for align_func in target_align_funcs:
                         if t > 0 and (linf_delta_per_align_func[align_func][-1] <= self.vc_diff_epsilon or grad_norm_per_align_func[align_func][-1] <= self.gradient_norm_epsilon): 
                             continue
-                        old_reward, visitations, old_pi, loss, reward = self._train_step_vgl(torch_obs_mat, 
+                        old_reward, visitations, expert_visitations, old_pi, loss, reward = self._train_step_vgl(torch_obs_mat, 
                                                                                              align_func=align_func, 
                                                                                              action_mat=torch_action_mat, 
                                                                                              obs_action_mat=torch_obs_action_mat,
                                                                                              n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed)
                         rewards_per_target_align_func[align_func] = reward
                         
-                        grad_norm, abs_diff_in_vc = self.train_statistics(t, self.vgl_demo_state_om[align_func], visitations, loss, reward, align_func, learned_grounding=self.current_net.get_learned_grounding())
+                        grad_norm, abs_diff_in_vc = self.train_statistics(t, expert_visitations, visitations, loss, reward, align_func, learned_grounding=self.current_net.get_learned_grounding())
                         linf_delta_per_align_func[align_func].append(np.max(abs_diff_in_vc))
                         grad_norm_per_align_func[align_func].append(grad_norm)
 
@@ -638,7 +710,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                     last_max_grad_norm = max([grlist[-1] for grlist in grad_norm_per_align_func.values()]) 
                     
                     if last_max_vc_diff <= self.vc_diff_epsilon or last_max_grad_norm <= self.gradient_norm_epsilon:
-                        self.print_statistics(t, visitations, loss, reward, align_func, None, grad_norm, abs_diff_in_vc, learned_grounding=self.current_net.get_learned_grounding())
+                        self.print_statistics(t, visitations, expert_visitations, loss, reward, align_func, None, grad_norm, abs_diff_in_vc, learned_grounding=self.current_net.get_learned_grounding())
                         break
 
 
@@ -672,7 +744,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
 
                         def probabilistic_reward_per_target_align_func(target_al):
                             self.probabilistic_reward_net.set_alignment_function(target_align_funcs_to_learned_align_funcs[target_al])
-                            print(self.probabilistic_reward_net.cur_align_func)
+                            
                             _, new_reward_per_rep, align_per_rep, prob_per_rep = self.calculate_rewards(target_align_funcs_to_learned_align_funcs[target_al], 
                                                                     obs_mat=torch_obs_mat, 
                                                                     action_mat=torch_action_mat,
@@ -691,7 +763,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                     self.vsi_optimizer = self.vsi_optimizer_cls(self.current_net.parameters(), **self.vsi_optimizer_kwargs)
                     with networks.training(self.current_net):
                         for t in range(max_iter):
-                            predicted_r_np, visitations, old_pi, loss, reward, learned_al_function = self._train_step_vsi(torch_obs_mat, 
+                            predicted_r_np, visitations, expert_visitations, old_pi, loss, reward, learned_al_function = self._train_step_vsi(torch_obs_mat, 
                                                                                                                         target_align_func=target_align_func, 
                                                                                                                         action_mat=torch_action_mat,
                                                                                                                         obs_action_mat=torch_obs_action_mat, 
@@ -700,12 +772,12 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                             rewards_per_target_align_func[target_align_func] = reward
                             target_align_funcs_to_learned_align_funcs[target_align_func] = learned_al_function
 
-                            grad_norm, abs_diff_in_vc = self.train_statistics(t, self.vsi_demo_state_om[target_align_func], visitations, loss, reward, target_align_func, learned_al_function)
+                            grad_norm, abs_diff_in_vc = self.train_statistics(t, expert_visitations, visitations, loss, reward, target_align_func, learned_al_function)
                             linf_delta_per_align_func[target_align_func].append(np.max(abs_diff_in_vc))
                             grad_norm_per_align_func[target_align_func].append(grad_norm)
 
                             if linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon or grad_norm <= self.gradient_norm_epsilon:
-                                self.print_statistics(t, visitations, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
+                                self.print_statistics(t, visitations, expert_visitations, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
                                 break
                         
                 reward_nets_per_target_align_func[target_align_func] = self.current_net.copy()
@@ -745,13 +817,15 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         grad_norm = util.tensor_iter_norm(grads).item()
         abs_diff_in_visitation_counts = np.abs(expert_demo_om - visitations)
         if self.log_interval is not None and 0 == (t % self.log_interval):
-            self.print_statistics(t, visitations, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_visitation_counts, learned_grounding=learned_grounding)
+            self.print_statistics(t, visitations, expert_demo_om, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_visitation_counts, learned_grounding=learned_grounding)
         return grad_norm,abs_diff_in_visitation_counts
 
-    def print_statistics(self, t, visitations, loss, reward, target_align_func, learned_al_function,  grad_norm, abs_diff_in_visitation_counts, learned_grounding=None):
+    def print_statistics(self, t, visitations, expert_visitations, loss, reward, target_align_func, learned_al_function,  grad_norm, abs_diff_in_visitation_counts, learned_grounding=None):
         avg_linf_delta = np.mean(abs_diff_in_visitation_counts)
         norm_reward = np.linalg.norm(reward)
-        max_error_state = np.argmax(abs_diff_in_visitation_counts)
+        max_error_state = np.where(abs_diff_in_visitation_counts==np.max(abs_diff_in_visitation_counts))
+        max_error_state = (max_error_state[0][0], max_error_state[1][0]) if len(abs_diff_in_visitation_counts.shape) == 2 else max_error_state[0][0]
+        
         params = self.current_net.parameters()
         weight_norm = util.tensor_iter_norm(params).item()
         self.logger.record("iteration", t)
@@ -766,12 +840,15 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         self.logger.record("loss", loss)
         self.logger.record("avg_linf_delta", avg_linf_delta)
         self.logger.record("norm reward", norm_reward)
-        self.logger.record("state_worse", max_error_state)
-        self.logger.record("state_worse_visit", visitations[max_error_state])
-        if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
-            self.logger.record("state_worse_worig", self.vsi_demo_state_om[target_align_func][max_error_state])
-        else:
-            self.logger.record("state_worse_worig", self.vgl_demo_state_om[target_align_func][max_error_state])
+
+        if not (self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION):
+            self.logger.record("state_worse", max_error_state)
+
+            self.logger.record("state_worse_visit", visitations[max_error_state])
+            if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+                self.logger.record("state_worse_worig", expert_visitations[max_error_state])
+            else:
+                self.logger.record("state_worse_worig", expert_visitations[max_error_state])
         self.logger.dump(t)
     
     def _resample_next_observations(self):
@@ -832,15 +909,15 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                 transition_matrix=self.env.transition_matrix)
         return rewards_per_target_align_func_callable  
     
-    def get_expert_demo_om(self, seed_target_align_func, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3):
+    def get_expert_demo_om(self, seed_target_align_func, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3,use_action_visitations=False):
         
         target_align_func = self.target_align_function_sampler(seed_target_align_func)
         
         if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
-
+            
             if self.demo_om_from_policy:
-                if target_align_func not in self.vsi_demo_state_om.keys():
-                    _, self.vsi_demo_state_om[target_align_func], _ =self.mce_occupancy_measures(pi=self.vsi_expert_policy.policy_per_va(target_align_func),deterministic=not self.expert_is_stochastic)
+                if target_align_func not in self.vsi_demo_state_om.keys() or use_action_visitations != (self.vsi_demo_state_om[target_align_func].shape == (self.env.state_dim,self.env.action_dim)):
+                    _, self.vsi_demo_state_om[target_align_func], _ =self.mce_occupancy_measures(pi=self.vsi_expert_policy.policy_per_va(target_align_func),deterministic=not self.expert_is_stochastic, use_action_visitations=use_action_visitations)
                 
             else:
                 if target_align_func not in self.vsi_demo_state_om.keys() or self.expert_is_stochastic: 
@@ -849,9 +926,9 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
             return self.vsi_demo_state_om[target_align_func]
         else:   
             if self.demo_om_from_policy:    
-                if target_align_func not in self.vgl_demo_state_om.keys():
+                if target_align_func not in self.vgl_demo_state_om.keys() or use_action_visitations != (self.vgl_demo_state_om[target_align_func].shape == (self.env.state_dim,self.env.action_dim)):
                     
-                    _, self.vgl_demo_state_om[target_align_func], _ =self.mce_occupancy_measures(pi=self.vgl_expert_policy.policy_per_va(target_align_func), deterministic=not self.expert_is_stochastic)
+                    _, self.vgl_demo_state_om[target_align_func], _ =self.mce_occupancy_measures(pi=self.vgl_expert_policy.policy_per_va(target_align_func), deterministic=not self.expert_is_stochastic, use_action_visitations=use_action_visitations)
             else:
                 if target_align_func not in self.vgl_demo_state_om.keys() or self.expert_is_stochastic: 
                     trajs = self.vgl_expert_sampler([target_align_func], n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
@@ -862,6 +939,8 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
     def _train_vsi_distribution_reward(self, obs_mat, target_align_func, beta=0.999, action_mat=None, obs_action_mat=None, n_reward_reps=10, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3, n_rep_permutations=10, average_losses=0):
         
         learned_al_function = self.probabilistic_reward_net.get_learned_align_function()
+        use_action_visitations = self.current_net.use_action or self.current_net.use_next_state
+
         #print("PREVIOUS ONE", learned_al_function)
         predicted_rs, predicted_rs_np, align_func_used_in_each_repetition, prob_of_each_repetition = self.calculate_rewards(align_func=None, obs_mat=obs_mat, action_mat=action_mat, 
                                                              obs_action_mat=obs_action_mat,
@@ -872,14 +951,18 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
             policy_per_target = dict()
             policy_matrix_per_target = dict()
 
-            visitations_per_repetition = np.zeros((n_reward_reps, self.env.state_dim))
-            demo_om_per_repetition = np.zeros((n_reward_reps, self.env.state_dim))# [[]]*n_reward_reps
+            if not use_action_visitations:
+                visitations_per_repetition = np.zeros((n_reward_reps, self.env.state_dim))
+                demo_om_per_repetition = np.zeros((n_reward_reps, self.env.state_dim))# [[]]*n_reward_reps
+            else:
+                visitations_per_repetition = np.zeros((n_reward_reps, self.env.state_dim, self.env.action_dim))
+                demo_om_per_repetition = np.zeros((n_reward_reps, self.env.state_dim, self.env.action_dim))
             om_per_align_func = dict()
             n_seeds = n_seeds_for_sampled_trajectories
 
             for i, align_func_i in enumerate(align_func_used_in_each_repetition):
                 
-                demo_om_per_repetition[i] = self.get_expert_demo_om(target_align_func, n_seeds_for_sampled_trajectories=n_seeds, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed)
+                demo_om_per_repetition[i] = self.get_expert_demo_om(target_align_func, n_seeds_for_sampled_trajectories=n_seeds, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, use_action_visitations=use_action_visitations)
                 
                 if align_func_i not in policy_matrix_per_target.keys():
                     policy_matrix_per_target[align_func_i] = self.mce_partition_fh_per_align_func(align_func_i, reward_matrix=predicted_rs_np[i], reward_mode=self.current_net.mode)
@@ -887,7 +970,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                 if self.demo_om_from_policy:
                     if align_func_i not in om_per_align_func.keys():
                         _, visitations_per_repetition[i], _ = self.mce_occupancy_measures(
-                            reward_matrix=predicted_rs_np[i], pi=policy_matrix_per_target[align_func_i], deterministic=not self.learn_stochastic_policy)
+                            reward_matrix=predicted_rs_np[i], pi=policy_matrix_per_target[align_func_i], deterministic=not self.learn_stochastic_policy, use_action_visitations=use_action_visitations)
                     else:
                         visitations_per_repetition[i] = om_per_align_func[align_func_i]
                 else:
@@ -897,7 +980,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                     trajs = policy_per_target[align_func_i].obtain_trajectories(
                             n_seeds=n_seeds, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, with_alignfunctions=[align_func_i,], t_max=self.env.horizon, exploration=0
                         )
-                    visitations_per_repetition[i] = get_demo_oms_from_trajectories(trajs=trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False)
+                    visitations_per_repetition[i] = get_demo_oms_from_trajectories(trajs=trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False) # TODO: oms with actions?
 
                     #print(align_func_i, n_seeds, trajs, n_sampled_trajs_per_seed)
                 om_per_align_func[align_func_i] = visitations_per_repetition[i]
@@ -935,9 +1018,14 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                         expected_vc_th += prob_of_each_repetition[i]*visitation_per_repetition_th[i]
                     seen_al_funcs.append(al_i)
                     
-            assert expected_vc_th.size() == th.Size([self.env.state_dim])
+               
             expected_demo_om_th = th.mean(demo_om_per_repetition_th, axis=0)
-            assert expected_demo_om_th.size() == th.Size([self.env.state_dim])
+            if use_action_visitations:
+                assert expected_vc_th.size() == th.Size([self.env.state_dim, self.env.action_dim])
+                assert expected_demo_om_th.size() == th.Size([self.env.state_dim, self.env.action_dim])
+            else:
+                assert expected_vc_th.size() == th.Size([self.env.state_dim])
+                assert expected_demo_om_th.size() == th.Size([self.env.state_dim])
             real_loss = th.mean(th.abs(expected_vc_th-expected_demo_om_th))
             
             real_loss.backward(retain_graph=False)
@@ -958,48 +1046,131 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
             self.vsi_demo_state_om[target_align_func] = demo_om_per_repetition        
 
         return predicted_rs_np, visitations, policy_matrix_per_target, real_loss, avg_oldreward, learned_al_function, average_losses
+    def feature_expectations(self, policy: np.ndarray, features_are_groundings=True, obs_mat: th.Tensor=None, action_mat: th.Tensor=None, 
+                                                             obs_action_mat: th.Tensor=None):
+        initial_state_dist = self.initial_state_distribution_train
 
-    def mce_vsl_loss_calculation(self, target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np):
+        state_dist = initial_state_dist
+        accumulated_feature_expectations = 0
+        for t in range(self.env.horizon):
+            next_state_observations = None
 
-        if self.demo_om_from_policy:
-            _, visitations, prev_pi = self.mce_occupancy_measures(
-                    reward_matrix=predicted_r_np,
-                    deterministic=not self.learn_stochastic_policy
-                )
+            if self.current_net.use_next_state:
+                next_states = self._resample_next_states()
+                next_state_observations = obs_mat[next_states]
             
-        else:
+            if self.current_net.use_one_hot_state_action:
+                if self.current_net.use_next_state:
+                    next_state_observations = next_state_observations.view(*obs_action_mat.shape) 
+                if features_are_groundings:
+                    features = self.current_net.forward_value_groundings(obs_action_mat, None, next_state_observations, None)
+                else:
+                    features = self.current_net.construct_input(obs_action_mat, None, next_state_observations, None)
+                features = th.reshape(features, (self.env.state_dim,self.env.action_dim,features.shape[-1]))
+            elif self.current_net.use_action or self.current_net.use_next_state:
+                if self.current_net.use_action:
+                    assert action_mat is not None
+                    assert action_mat.size() == (self.env.action_dim, obs_mat.shape[0], self.env.action_dim)
+                if self.current_net.use_next_state:
+                    assert next_state_observations is not None
+
+                if features_are_groundings:
+                    features = th.stack([
+                            self.current_net.forward_value_groundings(
+                                obs_mat, 
+                                (action_mat[i] if self.current_net.use_action else None), 
+                                next_state_observations[:,i,:] if self.current_net.use_next_state else None, 
+                                None)
+                                for i in range(self.env.action_dim)], dim=1)
+                else:
+                    features = th.stack([
+                            self.current_net.construct_input(
+                                obs_mat, 
+                                (action_mat[i] if self.current_net.use_action else None), 
+                                next_state_observations[:,i,:] if self.current_net.use_next_state else None, 
+                                None)
+                                for i in range(self.env.action_dim)], dim=1)
+            assert (features.size()[0], features.size()[1])  == (obs_mat.shape[0], self.env.action_dim)
+            features = features.detach().numpy()
+
+            pol_t = policy if len(policy.shape)==2 else policy[0]
+            state_action_prob = np.multiply(pol_t, state_dist[:, np.newaxis])
+
+            features_time_t = np.sum(features * state_action_prob[:,:,np.newaxis], axis=(0,1))/self.env.state_dim  
+
+            if t == 0:
+                accumulated_feature_expectations = features_time_t
+            else:
+                accumulated_feature_expectations += features_time_t
+            state_dist = np.sum(self.env.transition_matrix * state_action_prob[:,:,np.newaxis], axis=(0,1))#/self.env.state_dim
+            assert np.allclose(np.sum(state_dist), 1.0)
+        return accumulated_feature_expectations
+            
+    def mce_vsl_loss_calculation(self, target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
+                                 obs_mat: th.Tensor= None, action_mat: th.Tensor=None, 
+                                                             obs_action_mat: th.Tensor=None):
+        use_action_visitations = self.current_net.use_action or self.current_net.use_next_state
+
+        prev_pi = None
+        if self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             prev_pi = self.mce_partition_fh_per_align_func(target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
-            policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(policy_per_va_dict={target_align_func: prev_pi}, env=self.env)
-                
-            trajs = policy.obtain_trajectories(
-                        n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, with_alignfunctions=[target_align_func], t_max=self.env.horizon, exploration=0
+            visitations_or_feature_expectations = self.feature_expectations(policy=prev_pi, features_are_groundings=True, obs_mat=obs_mat, action_mat=action_mat, obs_action_mat=obs_action_mat)
+            expert_visitations_or_feature_expectation = self.feature_expectations(policy=self.vsi_expert_policy.policy_per_va(target_align_func), features_are_groundings=True, obs_mat=obs_mat, action_mat=action_mat, obs_action_mat=obs_action_mat)# TODO SEGUIR CON FEATURES-
+        else:
+            expert_visitations_or_feature_expectation = self.get_expert_demo_om(target_align_func, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, use_action_visitations=use_action_visitations)
+            if self.demo_om_from_policy:
+                _, visitations_or_feature_expectations, prev_pi = self.mce_occupancy_measures(
+                        reward_matrix=predicted_r_np,
+                        deterministic=not self.learn_stochastic_policy,use_action_visitations=use_action_visitations
                     )
-            visitations = get_demo_oms_from_trajectories(trajs=trajs, state_dim=self.env.state_dim, discount=self.discount)[target_align_func]
+                
+            else:
+                if prev_pi is None:
+                    prev_pi = self.mce_partition_fh_per_align_func(target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
+                policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(policy_per_va_dict={target_align_func: prev_pi}, env=self.env)
+                    
+                trajs = policy.obtain_trajectories(
+                            n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, with_alignfunctions=[target_align_func], t_max=self.env.horizon, exploration=0
+                        )
+                visitations_or_feature_expectations = get_demo_oms_from_trajectories(trajs=trajs, state_dim=self.env.state_dim, discount=self.discount)[target_align_func] # TODO: stateaction visitations or discard...
         # Forward/back/step (grads are zeroed at the top).
         # weights_th(s) = \pi(s) - D(s)
         
-        weights_th = th.as_tensor(
-            visitations - self.get_expert_demo_om(target_align_func, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed),
+        if self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            print(visitations_or_feature_expectations)
+            loss = th.mean(
+                self.current_net.value_system_layer(None)(
+                    th.as_tensor(visitations_or_feature_expectations.reshape((1,-1)), dtype=self.current_net.dtype,device=self.current_net.device)
+                    ) -
+                self.current_net.value_system_layer(None)(
+                    th.as_tensor(expert_visitations_or_feature_expectation.reshape((1,-1)), device=self.current_net.device, dtype=self.current_net.dtype)
+                    ))
+        else:
+            weights_th = th.as_tensor(
+            visitations_or_feature_expectations - expert_visitations_or_feature_expectation,
             dtype=self.current_net.dtype,
             device=self.current_net.device,
             )
-        if self.current_net.use_action is False and self.current_net.use_next_state is False:
-            # The "loss" is then:
-            #   E_\pi[r_\theta(S)] - E_D[r_\theta(S)]
-            loss = th.dot(weights_th, predicted_r)
-            print("LOSS using states only", loss)
-        else: # Use action in the reward.
-            next_state_prob = th.as_tensor(self.env.transition_matrix, dtype=self.current_net.dtype,
-                device=self.current_net.device)
-            # Calculate the expected visitations on the expected next states
-            #loss = th.sum(th.vstack([th.matmul(predicted_r.t(), th.mul(next_state_prob[:,:,k],weights_th[k])) for k in range(self.env.state_dim)]))
-            # Expand dimensions of `weights_th` to align with `next_state_prob`
-            loss_matrix = predicted_r.unsqueeze(2) * (next_state_prob * weights_th.unsqueeze(0).unsqueeze(0))  # Shape: (N, M, K)
-            loss = loss_matrix.sum()
-            # loss = Sum_s,a,s'[R(s,a)*P(s,a,s')*weights_th(s')]
-        
+
+            if len(predicted_r.shape) == 1:
+                # The "loss" is then:
+                #   E_\pi[r_\theta(S)] - E_D[r_\theta(S)]
+                loss = th.dot(weights_th, predicted_r)
+            else: # Use action in the reward.
+                if predicted_r.shape == weights_th.shape:
+                    loss = th.sum(th.multiply(predicted_r, weights_th))
+                else:
+                    next_state_prob = th.as_tensor(self.env.transition_matrix, dtype=self.current_net.dtype,
+                        device=self.current_net.device)
+                    # Calculate the expected visitations on the expected next states
+                    #loss = th.sum(th.vstack([th.matmul(predicted_r.t(), th.mul(next_state_prob[:,:,k],weights_th[k])) for k in range(self.env.state_dim)]))
+                    # Expand dimensions of `weights_th` to align with `next_state_prob`
+                    loss_matrix = predicted_r.unsqueeze(2) * (next_state_prob * weights_th.unsqueeze(0).unsqueeze(0))  # Shape: (N, M, K)
+                    loss = loss_matrix.sum()
+                # loss = Sum_s,a,s'[R(s,a)*P(s,a,s')*weights_th(s')]
+            
         loss.backward()
-        return visitations,prev_pi,loss
+        return visitations_or_feature_expectations, expert_visitations_or_feature_expectation, prev_pi,loss
     
     def _train_step_vsi(self, obs_mat: th.Tensor, target_align_func, action_mat: th.Tensor=None, obs_action_mat: th.Tensor=None, next_obs_mat: th.Tensor=None, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3) -> Tuple[np.ndarray, np.ndarray]:
         
@@ -1010,7 +1181,8 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                                                              reward_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION, 
                                                              recover_previous_config_after_calculation=False)
         
-        visitations, prev_pi, loss = self.mce_vsl_loss_calculation(target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np)
+        visitations, expert_visitations, prev_pi, loss = self.mce_vsl_loss_calculation(target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np, obs_mat=obs_mat, action_mat=action_mat, 
+                                                             obs_action_mat=obs_action_mat,)
         self.vsi_optimizer.step()
 
         learned_al_function = self.current_net.get_learned_align_function()
@@ -1020,7 +1192,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                                                                    obs_action_mat=obs_action_mat,
                                                                    reward_mode=TrainingModes.EVAL, requires_grad=False)
         
-        return predicted_r_np, visitations, prev_pi, loss, new_reward, learned_al_function
+        return predicted_r_np, visitations, expert_visitations, prev_pi, loss, new_reward, learned_al_function
     
     def _train_step_vgl(self, obs_mat: th.Tensor, align_func: Any, action_mat: th.Tensor=None, obs_action_mat: th.Tensor=None, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3) -> Tuple[np.ndarray, np.ndarray]:
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
@@ -1032,7 +1204,9 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                                                              reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING, 
                                                              recover_previous_config_after_calculation=False)
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
-        visitations, prev_pi, loss = self.mce_vsl_loss_calculation(align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np)
+        visitations, expert_visitations, prev_pi, loss = self.mce_vsl_loss_calculation(align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np, 
+                                                                   obs_mat=obs_mat, action_mat=action_mat, 
+                                                             obs_action_mat=obs_action_mat,)
         self.vgl_optimizer.step()
         
         _, new_reward = self.calculate_rewards(align_func, 
@@ -1041,7 +1215,7 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
                                                 obs_action_mat=obs_action_mat,
                                                 reward_mode=TrainingModes.EVAL)
         
-        return predicted_r_np, visitations, prev_pi, loss, new_reward
+        return predicted_r_np, visitations, expert_visitations, prev_pi, loss, new_reward
 
 
     @property
@@ -1049,13 +1223,11 @@ class MaxEntropyIRLForVSL(base.DemonstrationAlgorithm[types.TransitionsMinimal])
         return self.learned_policy_per_va
     
     def _set_vgl_demo_oms_from_policy(self, policy: VAlignedDiscreteSpaceActionPolicy)  -> None:
+        pass
         
-        for al in self.vgl_target_align_funcs:
-            _, self.vgl_demo_state_om[al], _ = self.mce_occupancy_measures(pi=policy.policy_per_va(al), deterministic=not self.expert_is_stochastic)
     
-    def _set_vsi_demo_oms_from_policy(self, policy: VAlignedDiscreteSpaceActionPolicy) -> None:
-        for al in self.vsi_target_align_funcs:
-            _, self.vsi_demo_state_om[al], _ = self.mce_occupancy_measures(pi=policy.policy_per_va(al), deterministic= not self.expert_is_stochastic)
+    def _set_vsi_demo_oms_from_policy(self, policy: VAlignedDiscreteSpaceActionPolicy, ) -> None:
+        pass
     
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory],Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
         pass
@@ -1116,9 +1288,9 @@ def check_coherent_rewards(max_entropy_algo: MaxEntropyIRLForVSL, align_funcs_to
                                                 policy_approximator=policy_approx_method,deterministic=not stochastic_learner)
         
 
-        _,visits,pii = max_entropy_algo.mce_occupancy_measures(rews, assumed_pi, deterministic=not stochastic_learner)
+        _,visits,pii = max_entropy_algo.mce_occupancy_measures(rews, deterministic=not stochastic_learner, use_action_visitations=True)
 
-        _, visits_ok, piii= max_entropy_algo.mce_occupancy_measures(reward,assumed_expert_pi, deterministic=not stochastic_expert)
+        _, visits_ok, piii= max_entropy_algo.mce_occupancy_measures(reward,assumed_expert_pi, deterministic=not stochastic_expert, use_action_visitations=True)
         
         if __debug__:
             print(reward.shape, rews.shape)
@@ -1152,3 +1324,4 @@ def transform_state_only_reward_to_state_action_reward(possibly_state_only_rewar
     else:
         raise ValueError("Unexpected reward form: %s" % possibly_state_only_reward)
         
+

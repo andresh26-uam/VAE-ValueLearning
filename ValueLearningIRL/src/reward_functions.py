@@ -148,11 +148,11 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
 
 
     @abstractmethod
-    def value_system_layer(self, align_func):    
-        pass
+    def value_system_layer(self, align_func) -> Tensor:    
+        ...
     @abstractmethod
-    def value_grounding_layer(self, custom_layer):    
-        pass
+    def value_grounding_layer(self, custom_layer) -> Tensor:    
+        ...
 
     
     def _forward(self, features, align_func=None, grounding=None):
@@ -160,7 +160,16 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         x = self.value_system_layer(align_func=align_func)(x)
         return x 
     
+    def forward_value_groundings(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor):
+        inputs_concat = self.construct_input(state, action, next_state, done)
+        return self.value_grounding_layer(custom_layer=self.cur_value_grounding)(inputs_concat)
+     
     def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
+        inputs_concat = self.construct_input(state, action, next_state, done)
+        
+        return self._forward(inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding) 
+
+    def construct_input(self, state, action, next_state, done):
         inputs = []
 
         if self.use_one_hot_state_action:
@@ -176,8 +185,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                 inputs.append(th.reshape(done, [-1, 1]))
 
         inputs_concat = th.cat(inputs, dim=1)
-        
-        return self._forward(inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding) # If mode is not eval, cur_align_func and cur_value_grounding is not used. This depends on the implementation. 
+        return inputs_concat# If mode is not eval, cur_align_func and cur_value_grounding is not used. This depends on the implementation. 
     
     def get_next_align_func_and_its_probability(self, from_specific_align_func=None):
         used_alignment_func = from_specific_align_func if from_specific_align_func is not None else self.get_learned_align_function()

@@ -149,7 +149,8 @@ if __name__ == "__main__":
             learn_stochastic_policy = LEARN_STOCHASTIC_POLICY,
             expert_is_stochastic= STOCHASTIC_EXPERT,
             discount=discount_factor,
-            environment_is_stochastic=False
+            environment_is_stochastic=False,
+            use_feature_expectations_for_vsi=USE_VA_EXPECTATIONS_INSTEAD_OF_OCC_MEASURES
             )
     
     #vg_learned, learned_rewards = max_entropy_algo.train(max_iter=200, mode=TrainingModes.VALUE_GROUNDING_LEARNING)
@@ -159,14 +160,35 @@ if __name__ == "__main__":
     
     # VALUE SYSTEM IDENTIFICATION:
 
-    target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
-                                                        mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-                                                        assumed_grounding=assumed_grounding,
-                                                        n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
-                                                        n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
-                                                        use_probabilistic_reward=True,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
+    learned_rewards_per_round = []
+    policies_per_round = []
+    target_align_funcs_to_learned_align_funcs_per_round = []
+    for rep in range(N_EXPERIMENT_REPETITON):    
+        target_align_funcs_to_learned_align_funcs, learned_rewards, reward_net_per_target_va, linf_delta_per_align_fun, grad_norm_per_align_func = max_entropy_algo.train(max_iter=200, 
+                                                            mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+                                                            assumed_grounding=assumed_grounding,
+                                                            n_seeds_for_sampled_trajectories=N_SEEDS_MINIBATCH,
+                                                            n_sampled_trajs_per_seed=N_EXPERT_SAMPLES_PER_SEED_MINIBATCH,
+                                                            use_probabilistic_reward=True,n_reward_reps_if_probabilistic_reward=N_REWARD_SAMPLES_PER_ITERATION)
+        learned_rewards_per_round.append(learned_rewards)
+        policies_per_round.append(deepcopy(max_entropy_algo.learned_policy_per_va))
+        target_align_funcs_to_learned_align_funcs_per_round.append(target_align_funcs_to_learned_align_funcs)
+
+        plot_learned_to_expert_policies(expert_policy, max_entropy_algo, target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, vsi_or_vgl='vsi', namefig=f'test{rep}_firefighters_vsi_society')
+
+        plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi_society')
+
+        plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards,vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs, namefig=f'test{rep}_firefighters_vsi_society')
     
-    fig, axes = plt.subplots(2, len(max_entropy_algo.vsi_target_align_funcs), figsize=(16, 8))
+    plot_learning_curves(linf_delta_per_round, grad_norm_per_round, name_method=f'expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_society', align_func_colors=FIREFIGHTER_ALFUNC_COLORS)
+
+    plot_learned_and_expert_occupancy_measures(env_real,max_entropy_algo,expert_policy,learned_rewards_per_round,vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_society', target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+    
+    plot_learned_to_expert_policies(expert_policy, max_entropy_algo, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_society', learnt_policy=policies_per_round,target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+        
+    plot_learned_and_expert_rewards(env_real, max_entropy_algo, learned_rewards_per_round, vsi_or_vgl='vsi', namefig=f'test_expected_over_{N_EXPERIMENT_REPETITON}_firefighters_vsi_society',target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round)
+        
+    """fig, axes = plt.subplots(2, len(max_entropy_algo.vsi_target_align_funcs), figsize=(16, 8))
     for i, al in enumerate(max_entropy_algo.vsi_target_align_funcs):
         # Plot the first matrix
         
@@ -216,5 +238,5 @@ if __name__ == "__main__":
     plt.tight_layout()
 
     # Show the plot
-    plt.show()
+    plt.show()"""
 

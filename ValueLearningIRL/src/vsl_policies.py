@@ -134,8 +134,27 @@ class ValueSystemLearningPolicy(BasePolicy):
     def _save_checkpoint(self, save_last=True):
         self.save("checkpoints/" + self._get_name() + "_" + str(datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')))
 
-
-    
+    def calculate_value_grounding_expectancy(self, value_grounding: Callable[[np.ndarray], np.ndarray], target_align_func, align_function_sampler=None, n_align_func_samples=1, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
+        if align_function_sampler is not None:
+            trajs = []
+            for al_rep in range(n_align_func_samples):
+                al_fun = align_function_sampler(target_align_func)
+                trajs.extend(self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options = options, stochastic=stochastic, repeat_per_seed = n_rep_per_seed, with_alignfunctions=[al_fun,], t_max=t_max, exploration=exploration))
+        else:
+            trajs = self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options = options, stochastic=stochastic, repeat_per_seed = n_rep_per_seed, with_alignfunctions=[al_fun,], t_max=t_max, exploration=exploration)
+        expected_gr = None
+        for t in trajs:
+            cur_t_gr = None
+            for to in t.obs:
+                if cur_t_gr is None:
+                    cur_t_gr = value_grounding(to)
+                else:
+                    cur_t_gr += value_grounding(to)
+            cur_t_gr/=len(t)
+            expected_gr += cur_t_gr
+        expected_gr /= len(trajs)
+        return expected_gr
+        
     """def sb3_policy_call(self, observations: np.ndarray, state = None, dones: np.ndarray = None):
         if isinstance(observations, dict):
             actions = []
@@ -158,6 +177,36 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         policy_state = state if state is not None else 0
         return policy_state
 
+    def calculate_value_grounding_expectancy(self, value_grounding: np.ndarray, align_function, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
+        
+        pi = self.policy_per_va(align_function)
+        self.reset(seed=seed, state=p_state)
+        self.env.reset(seed=env_seed, options=options)
+
+        if initial_state_distribution is None:
+            initial_state_distribution = np.ones((self.env.state_dim))/self.env.state_dim
+        initial_state_dist = initial_state_distribution
+
+        state_dist = initial_state_dist
+        accumulated_feature_expectations = 0
+
+        assert (value_grounding.shape[0], value_grounding.shape[1])  == (self.env.state_dim, self.env.action_dim)
+            
+        for t in range(self.env.horizon):
+            
+
+            pol_t = pi if len(pi.shape)==2 else pi[t]
+            state_action_prob = np.multiply(pol_t, state_dist[:, np.newaxis])
+
+            features_time_t = np.sum(value_grounding * state_action_prob[:,:,np.newaxis], axis=(0,1))/self.env.state_dim  
+
+            if t == 0:
+                accumulated_feature_expectations = features_time_t
+            else:
+                accumulated_feature_expectations += features_time_t
+            state_dist = np.sum(self.env.transition_matrix * state_action_prob[:,:,np.newaxis], axis=(0,1))#/self.env.state_dim
+            assert np.allclose(np.sum(state_dist), 1.0)
+        return accumulated_feature_expectations
 
     def act(self, state_obs: int, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         policy = self.policy_per_va(alignment_function)
@@ -209,7 +258,8 @@ class VAlignedDictDiscreteStateActionPolicyTabularMDP(VAlignedDictSpaceActionPol
         super().__init__(policy_per_va_dict=policy_per_va_dict, env=env, state_encoder=state_encoder, *args, **kwargs)
     
     
-    
+
+
     
 
 def profiled_society_sampler(align_func_as_basic_profile_probs):

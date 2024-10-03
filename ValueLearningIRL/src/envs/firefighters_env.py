@@ -90,7 +90,7 @@ class FireFightersEnv(TabularVAPOMDP):
                                  
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s,a,s] = 1.0
-                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = 0,0
+                    reward_matrix_per_va[(1.0, 0.0)][s,a], reward_matrix_per_va[(0.0, 1.0)][s,a] = self.real_env.calculate_rewards(s_trans, a, s_trans)
         
         self._goal_states = np.asarray(_goal_states)
 
@@ -127,29 +127,8 @@ class FireFightersEnv(TabularVAPOMDP):
         return self._cur_state
     
     
-    
-    """def _step(self, action):
-        # Simulate state transitions and compute rewards
-        
-        next_obs = self.real_env.transition(self.real_env.state, action)
-        rewards = self.real_env.calculate_rewards(self.real_env.state, action, next_obs)
-        self.real_env.state = next_obs
-
-        # Check if the episode is done
-        done = self.real_env.is_done(self.real_env.state)
-        self._cur_state = self.real_env.encrypt(self.real_env.state)
-        # In case
-        info = {'state': self._cur_state}
-        return next_obs, rewards, done, done, info"""
     @property
     def goal_states(self):
         return self._goal_states
-    
-    """def _reset(self, seed=None, options=None, force_new_state=None):
-        s = self.real_env.reset(force_new_state=force_new_state)
-        self._cur_state = self.real_env.encrypt(s)
-        self.real_env.state = s
-        i = {'state': self._cur_state}
-        return s, i"""
     
 

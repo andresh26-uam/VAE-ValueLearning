@@ -7,20 +7,27 @@ import numpy as np
 
 from seals.base_envs import DiscreteSpaceInt
 
+from src.values_and_costs import BASIC_PROFILES
+
 
 class FixedDestRoadWorldGymPOMDP(TabularVAPOMDP):
 
     def _get_reward_matrix_for_profile(self, profile: tuple):
+        
         if profile in self.reward_matrix_dict.keys() and self.reward_matrix_dict[profile].shape == (self.real_environ.state_dim, self.real_environ.action_dim):
             return self.reward_matrix_dict[profile]
-        
-        print(self.real_environ.__class__.__name__)
-        reward_matrix = np.zeros((self.real_environ.state_dim, self.real_environ.action_dim), dtype=np.float32)
-        for s in range(self.real_environ.state_dim):
-            for a in range(self.real_environ.action_dim):
-                reward_matrix[s,a] = self.real_environ.get_reward(s, a, self.real_environ.cur_des, profile=profile)
+        elif profile in BASIC_PROFILES and profile not in self.reward_matrix_dict.keys():
                 
-        self.reward_matrix_dict[profile] = reward_matrix
+            reward_matrix = np.zeros((self.real_environ.state_dim, self.real_environ.action_dim), dtype=np.float32)
+            for s in range(self.real_environ.state_dim):
+                for a in range(self.real_environ.action_dim):
+                    reward_matrix[s,a] = self.real_environ.get_reward(s, a, self.real_environ.cur_des, profile=profile)
+                    
+            self.reward_matrix_dict[profile] = reward_matrix
+        else:
+            
+            return np.sum([self._get_reward_matrix_for_profile(bp) for bp in BASIC_PROFILES], axis=0)
+            
         return self.reward_matrix_dict[profile]
     
     def __init__(self, env: RoadWorldGymPOMDP, with_destination=None, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, **kwargs):
