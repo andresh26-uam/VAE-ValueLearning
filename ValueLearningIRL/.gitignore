@@ -4,6 +4,7 @@ __pycache__*
 runs/
 checkpoints/
 irlvenv/
+results/test*.pdf
 *partial*.png
 *.npy
 *.pickle

@@ -1,5 +1,5 @@
 import enum
-from typing import Any
+from typing import Any, SupportsFloat
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -132,3 +132,10 @@ class FireFightersEnv(TabularVAPOMDP):
         return self._goal_states
     
 
+class FireFightersEnvWithObservation(FireFightersEnv):
+    def __init__(self, feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):
+        super().__init__(feature_selection, horizon, initial_state_distribution)
+
+    def step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
+        s,r,d,t,i = super().step(action)
+        return s, r,d,t,i

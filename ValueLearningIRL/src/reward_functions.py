@@ -2,7 +2,7 @@ from abc import abstractmethod
 from copy import deepcopy
 import enum
 import os
-from typing import Iterator
+from typing import Iterator, Tuple
 import gymnasium as gym
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
@@ -11,7 +11,9 @@ from torch import Tensor
 import torch as th
 import torch.nn.functional as F
 from torch import nn
+
 from src.network_env import RoadWorldGym
+from typing import cast
 
 from stable_baselines3.common import preprocessing
 from itertools import chain
@@ -132,6 +134,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                  **kwargs):
         observation_space = environment.observation_space
         action_space = environment.action_space
+        self.environ = environment
         super().__init__(observation_space, action_space, True)
 
         self.mode = mode
@@ -156,6 +159,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
 
     
     def _forward(self, features, align_func=None, grounding=None):
+        
         x = self.value_grounding_layer(custom_layer=grounding)(features) 
         x = self.value_system_layer(align_func=align_func)(x)
         return x 
@@ -166,14 +170,61 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
      
     def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
         inputs_concat = self.construct_input(state, action, next_state, done)
-        
         return self._forward(inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding) 
 
+    def preprocess(
+        self,
+        state: np.ndarray,
+        action: np.ndarray,
+        next_state: np.ndarray,
+        done: np.ndarray,
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        if self.use_one_hot_state_action:
+        
+            if len(state.shape) > 1 and (state.shape[0] == state.shape[1] and 
+                state.shape[1] == preprocessing.get_flattened_obs_dim(self.observation_space) * preprocessing.get_flattened_obs_dim(self.action_space)):
+                return super().preprocess(state, action, next_state, done)
+            else:
+                num_rows = len(state)
+                row_length = self.environ.state_dim * self.environ.action_dim
+                torch_obs_action_mat = th.zeros((num_rows, row_length), dtype=self.dtype, device=self.device)
+                indices = state * self.environ.action_dim + action
+                # Set the positions corresponding to the calculated indices to 1
+                torch_obs_action_mat[range(num_rows), indices] = 1.0
+
+                
+                # Retrieve the corresponding rows from the matrix for each index
+                state_th = torch_obs_action_mat
+                action_th = cast(
+                    th.Tensor,
+                    preprocessing.preprocess_obs(
+                        th.as_tensor(action,dtype=self.dtype, device=self.device),
+                        self.action_space,
+                        self.normalize_images,
+                    ),
+                )
+                next_state_th = cast(
+                    th.Tensor,
+                    preprocessing.preprocess_obs(
+                        th.as_tensor(next_state,dtype=self.dtype, device=self.device),
+                        self.observation_space,
+                        self.normalize_images,
+                    ),
+                )
+                done_th = th.as_tensor(done,dtype=th.float32, device=self.device).to(th.float32)
+                return state_th, action_th, next_state_th, done_th
+        else:        
+            return super().preprocess(state, action, next_state, done)
+
+    
     def construct_input(self, state, action, next_state, done):
         inputs = []
 
         if self.use_one_hot_state_action:
+            
+            assert state.shape[1] == preprocessing.get_flattened_obs_dim(self.observation_space) * preprocessing.get_flattened_obs_dim(self.action_space)
             inputs.append(th.flatten(state, 1)) # Assume state encodes state-action pairs.
+            
         else:
             if self.use_state:
                 inputs.append(th.flatten(state, 1))
@@ -241,7 +292,7 @@ class ProfiledRewardFunction(AbstractVSLRewardFunction):
             else:
                 return lambda x: self.values_net(x)
         else:
-            if isinstance(custom_layer, nn.Module):
+            if isinstance(custom_layer, nn.Module) or callable(custom_layer):
                 def _call(x):
                     with th.no_grad():
                         custom_layer.requires_grad_(False)
