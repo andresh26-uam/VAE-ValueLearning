@@ -84,7 +84,7 @@ class ValueAlignedEnvironment(gym.Wrapper):
         
     
     
-class TabularVAPOMDP(ValueAlignedEnvironment,base_envs.TabularModelPOMDP):
+class TabularVAMDP(ValueAlignedEnvironment,base_envs.TabularModelPOMDP):
      
     def __init__(self, transition_matrix: ndarray, observation_matrix: ndarray, 
                  reward_matrix_per_va: Callable[[Any], ndarray], 

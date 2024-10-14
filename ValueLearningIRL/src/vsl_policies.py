@@ -15,7 +15,7 @@ import torch
 
 from stable_baselines3.common.policies import BasePolicy
 
-from src.envs.tabularVAenv import TabularVAPOMDP, ValueAlignedEnvironment
+from src.envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
 
 class ValueSystemLearningPolicy(BasePolicy):
 
@@ -66,13 +66,14 @@ class ValueSystemLearningPolicy(BasePolicy):
 
     def obtain_trajectory(self, alignment_function=None, seed=32, options: Union[None, Dict] = None,t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None, recover_previous_alignment_func_in_env=True) -> Union[List, Trajectory]:
         state_obs, info = self.env.reset(seed = seed, options=options) if options is not None else self.env.reset(seed=seed) 
-
+        
         if with_reward:
             if alignment_func_in_env is None:
                 alignment_func_in_env = alignment_function
             if recover_previous_alignment_func_in_env:
                 prev_al_env = self.env.cur_align_func
             self.env.cur_align_func = alignment_func_in_env
+
         policy_state = self.reset(seed=seed)        
         init_state = self.state_encoder(state_obs, info)
         terminated = False
@@ -189,7 +190,7 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         super().__init__(*args, env = env, use_checkpoints=True, state_encoder=state_encoder, **kwargs)
         self.policy_per_va = policy_per_va
         
-        self.env: TabularVAPOMDP = base_envs.ExposePOMDPStateWrapper(env)
+        self.env: TabularVAMDP = base_envs.ExposePOMDPStateWrapper(env)
         self.expose_state = expose_state
         #self.env = env
     
@@ -212,9 +213,12 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
             self.env.cur_align_func = alignment_func_in_env
         policy_state = self.reset(seed=seed)        
         init_state = self.state_encoder(state_obs, info)
+        if alignment_func_in_env is not None:
+            r_matrix = self.env.reward_matrix_per_align_func(alignment_func_in_env)
+        
         terminated = False
         truncated = False
-
+        
         if getattr(self.env, 'horizon', None):
             if t_max is not None:
                 t_max = min(t_max, self.env.horizon)
@@ -248,11 +252,11 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
             t = 0
             while not (terminated or truncated) and (t_max is None or (t < t_max)):
                 action, policy_state = self.act(state_obs, policy_state = policy_state, exploration=exploration, stochastic=stochastic, alignment_function=alignment_function)
-                state_obs, rew, terminated, truncated, info = self.env.step(action)
+                next_state_obs, rew, terminated, truncated, info = self.env.step(action)
                 if self.expose_state is False:
-                    obs_in_state = self.env.obs_from_state(state_obs)
+                    obs_in_state = self.env.obs_from_state(next_state_obs)
                 else:
-                    obs_in_state = state_obs
+                    obs_in_state = next_state_obs
                 obs.append(obs_in_state)
                 #state_des = self.environ.get_edge_to_edge_state(obs)
 
@@ -262,7 +266,9 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
                 info['ended'] = terminated or truncated
                 infos.append(info)
                 if with_reward:
-                    rews.append(rew)
+                    rews.append(r_matrix[state_obs,action])
+                
+                state_obs = next_state_obs
                 t+=1
                 if t_max is not None and t > t_max:
                     break
@@ -355,7 +361,7 @@ class VAlignedDictSpaceActionPolicy(VAlignedDiscreteSpaceActionPolicy):
 from seals import base_envs
 
 class VAlignedDictDiscreteStateActionPolicyTabularMDP(VAlignedDictSpaceActionPolicy):
-    def __init__(self, policy_per_va_dict: Dict[Tuple, NDArray], env: TabularVAPOMDP, state_encoder=None, expose_state=True, *args, **kwargs):
+    def __init__(self, policy_per_va_dict: Dict[Tuple, NDArray], env: TabularVAMDP, state_encoder=None, expose_state=True, *args, **kwargs):
         
         super().__init__(policy_per_va_dict=policy_per_va_dict, env=env, state_encoder=state_encoder, expose_state=expose_state, *args, **kwargs)
     

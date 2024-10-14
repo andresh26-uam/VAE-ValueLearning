@@ -47,11 +47,6 @@ def jensen_shannon_distance_at_weighted_criteria(sample_costs, expert_costs, pre
         cost_distribution_sample = np.histogram(bins=len(sample_costs[:,j]), a = sample_costs[:,j],density=True)[0]
         cost_distribution_expert = np.histogram(bins=len(expert_costs[:,j]), a = expert_costs[:,j],density=True)[0]
 
-        """print(cost_distribution_sample)
-        print(cost_distribution_expert)
-        print(np.histogram(bins=bins, a = sample_costs[:,j], range=range_bins,density=True))
-        print(distance.jensenshannon(cost_distribution_sample, cost_distribution_expert))
-        exit(0)"""
         jsd_per_criterion[j] = distance.jensenshannon(cost_distribution_sample, cost_distribution_expert)
         
         jsd_final += jsd_per_criterion[j]*prw # TODO Jensen shannon does not work for some reason...

@@ -1,7 +1,7 @@
 from typing import Any, Callable, Dict, SupportsFloat, Tuple
 from typing_extensions import override
 from numpy import ndarray
-from src.envs.tabularVAenv import TabularVAPOMDP
+from src.envs.tabularVAenv import TabularVAMDP
 from src.network_env import RoadWorldGymPOMDP
 import numpy as np
 
@@ -10,7 +10,7 @@ from seals.base_envs import DiscreteSpaceInt
 from src.values_and_costs import BASIC_PROFILES
 
 
-class FixedDestRoadWorldGymPOMDP(TabularVAPOMDP):
+class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
 
     def _get_reward_matrix_for_profile(self, profile: tuple):
         
@@ -26,7 +26,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAPOMDP):
             self.reward_matrix_dict[profile] = reward_matrix
         else:
             
-            return np.sum([self._get_reward_matrix_for_profile(bp) for bp in BASIC_PROFILES], axis=0)
+            return np.sum([profile[i]*self._get_reward_matrix_for_profile(bp) for i,bp in enumerate(BASIC_PROFILES)], axis=0)
             
         return self.reward_matrix_dict[profile]
     

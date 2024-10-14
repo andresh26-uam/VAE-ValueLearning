@@ -996,7 +996,6 @@ class RoadWorldGym(RoadWorld,gym.Env):
     
 
 class RoadWorldGymObservationState(RoadWorldGym):
-    # TODO: Unused for now, though much cleaner possibly
     def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=False):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile, visualize_example, feature_selection=FeatureSelection.DEFAULT)
 

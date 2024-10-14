@@ -1,8 +1,10 @@
+import argparse
 import ast
 import itertools
 import json
 from math import ceil
 import os
+from typing import List
 
 import imitation
 import numpy as np
@@ -242,7 +244,7 @@ def train_test_split_initial_state_distributions(n_states, split_percentage=0.7)
     # Output the distributions
     return first_distribution, second_distribution
 
-def sample_example_profiles(profile_variety, n_values=3) -> set:
+def sample_example_profiles(profile_variety, n_values=3) -> List:
     ratios = np.linspace(0, 1, profile_variety)
 
     if n_values < 1:
@@ -283,3 +285,15 @@ def sample_example_profiles(profile_variety, n_values=3) -> set:
     profile_set = [tuple(round(num, 2) for num in t) for t in profile_set]
     
     return profile_set
+
+
+
+def load_json_config(json_file):
+    with open(json_file, 'r') as f:
+        return json.load(f)
+
+
+def filter_none_args(args):
+    """Removes arguments that have a None value."""
+    filtered_args = {k: v for k, v in vars(args).items() if v is not None}
+    return argparse.Namespace(**filtered_args)

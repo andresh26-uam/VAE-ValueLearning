@@ -15,7 +15,7 @@ import torch
 
 from src.road_network_policies import SimplePolicy, ValueIterationPolicyRoadWorld
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
-from src.reward_functions import ProfiledRewardFunction, TrainingModes, plot_avg_value_matrix
+from src.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes, plot_avg_value_matrix
 from src.src_rl.aggregations import SumScore
 from src.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS, PROFILE_NAMES_TO_TUPLE
 from src.utils.load_data import ini_od_dist
@@ -134,7 +134,7 @@ for repeat in range(N_EXPERIMENTS):
     )
     reward_net.set_profile(PROFILE)"""
 
-    reward_net = ProfiledRewardFunction(
+    reward_net = LinearVSLRewardFunction(
         environment=env_single,
         use_state=False,
         use_action=False,

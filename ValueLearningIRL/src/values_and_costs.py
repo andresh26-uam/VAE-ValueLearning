@@ -9,6 +9,8 @@ BASIC_PROFILE_NAMES = {(1.0,0.0,0.0): 'sus', (0.0,1.0,0.0): 'sec', (0.0,0.0,1.0)
 PROFILE_NAMES_TO_TUPLE = {'sus': (1.0,0.0,0.0), 'sec': (0.0,1.0,0.0), 'eff': (0.0,0.0,1.0)}
 
 PROFILE_COLORS = {(1.0,0.0,0.0): 'green', (0.0,1.0,0.0): 'blue', (0.0,0.0,1.0): 'red'} 
+PROFILE_COLORS_VEC = {(1.0,0.0,0.0): [0,1,0], (0.0,1.0,0.0): [0,0,1], (0.0,0.0,1.0): [1,0,0]} 
+
 
 FULL_NAME_VALUES = OrderedDict({'sus': 'Sustainability', 'sec': 'Security', 'eff': 'Efficiency'} )
 

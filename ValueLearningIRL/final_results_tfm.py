@@ -23,7 +23,7 @@ if OBTAIN_CORRECTED_CSVS:
 
     from stable_baselines3.common.vec_env import DummyVecEnv
 
-    from deep_maxent_value_grounding_learning import SAVED_REWARD_NET_FILE
+    from several_destination_roadworld_value_grounding_learning import SAVED_REWARD_NET_FILE
     from src.mce_irl_for_road_network import (
         TrainingModes,
         TrainingSetModes,
@@ -33,7 +33,7 @@ if OBTAIN_CORRECTED_CSVS:
 
     from src.road_network_policies import SimplePolicy, check_policy_gives_optimal_paths
     from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
-    from src.reward_functions import PositiveBoundedLinearModule, ProfiledRewardFunction
+    from src.vsl_reward_functions import PositiveBoundedLinearModule, LinearVSLRewardFunction
 
     from src.values_and_costs import BASIC_PROFILES
     from src.utils.load_data import ini_od_dist
@@ -119,7 +119,7 @@ if OBTAIN_CORRECTED_CSVS:
         PLOT_HISTS = False
         
 
-        reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
+        reward_net: LinearVSLRewardFunction = LinearVSLRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
 
         od_list, od_dist = ini_od_dist(train_p)
         print("DEBUG MODE", __debug__)
@@ -225,8 +225,7 @@ if OBTAIN_CORRECTED_CSVS:
         
         df_train.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_society_train.csv")
         df_test.to_csv(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_society_test.csv")
-        #df_train.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_train.md")
-        #df_test.to_markdown(f"results/value_system_identification/def_{name_of_files}_statistics_learning_from_expert_test.md")
+        
         for metric, df in similarities_train.items():
 
             df.to_csv(f"results/value_system_identification/def_{name_of_files}_similarities_{metric}_learning_from_society_train.csv")

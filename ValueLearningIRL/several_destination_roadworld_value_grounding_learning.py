@@ -14,7 +14,7 @@ import torch
 
 from src.road_network_policies import SimplePolicy, ValueIterationPolicyRoadWorld, check_policy_gives_optimal_paths
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
-from src.reward_functions import TrainingModes, ProfiledRewardFunction
+from src.vsl_reward_functions import TrainingModes, LinearVSLRewardFunction
 from src.src_rl.aggregations import SumScore
 from src.values_and_costs import BASIC_PROFILES
 from src.utils.load_data import ini_od_dist
@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
     state_venv = DummyVecEnv([state_env_creator] * 1)
 
-    reward_net = ProfiledRewardFunction(
+    reward_net = LinearVSLRewardFunction(
         environment=env_single,
         use_state=False,
         use_action=False,

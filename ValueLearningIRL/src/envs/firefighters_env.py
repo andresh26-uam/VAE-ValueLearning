@@ -10,7 +10,7 @@ from firefighters_use_case.constants import ACTION_AGGRESSIVE_FIRE_SUPPRESSION
 
 from gymnasium import spaces
 
-from src.envs.tabularVAenv import TabularVAPOMDP
+from src.envs.tabularVAenv import TabularVAMDP
 
 class FeatureSelectionFFEnv(enum.Enum):
 
@@ -22,7 +22,7 @@ class FeatureSelectionFFEnv(enum.Enum):
     ORDINAL_AND_ONE_HOT_FEATURES = 'ordinal_and_one_hot' # TODO: Ordinal Features may remain as 0, 1, 2 but categorical ones are one hot encoded. 
     DEFAULT = None
 
-class FireFightersEnv(TabularVAPOMDP):
+class FireFightersEnv(TabularVAMDP):
     """
     A simplified two-objective MDP environment for an urban high-rise fire scenario.
     Objectives: Professionalism and Proximity

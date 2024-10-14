@@ -9,7 +9,7 @@ import numpy as np
 
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from deep_maxent_value_grounding_learning import SAVED_REWARD_NET_FILE
+from several_destination_roadworld_value_grounding_learning import SAVED_REWARD_NET_FILE
 from src.mce_irl_for_road_network import (
     TrainingModes,
     TrainingSetModes,
@@ -19,7 +19,7 @@ import torch
 
 from src.road_network_policies import SimplePolicy, check_policy_gives_optimal_paths
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldPOMDPStateAsTuple
-from src.reward_functions import PositiveBoundedLinearModule, ProfiledRewardFunction
+from src.vsl_reward_functions import PositiveBoundedLinearModule, LinearVSLRewardFunction
 
 from src.values_and_costs import BASIC_PROFILES
 from src.utils.load_data import ini_od_dist
@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
         PLOT_HISTS = False
 
-        reward_net: ProfiledRewardFunction = ProfiledRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
+        reward_net: LinearVSLRewardFunction = LinearVSLRewardFunction.from_checkpoint(SAVED_REWARD_NET_FILE)
 
         od_list, od_dist = ini_od_dist(train_p)
         print("DEBUG MODE", __debug__)
