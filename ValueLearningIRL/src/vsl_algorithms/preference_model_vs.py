@@ -1,5 +1,5 @@
+import enum
 from typing import Sequence
-from imitation.algorithms.preference_comparisons import PreferenceModel
 from imitation.data.types import TrajectoryPair
 
 from src.vsl_algorithms.base_tabular_vsl_algorithm import BaseTabularMDPVSLAlgorithm
@@ -32,7 +32,7 @@ def _trajectory_pair_includes_reward(fragment_pair: TrajectoryPair) -> bool:
     return isinstance(frag1, TrajectoryWithRew) and isinstance(frag2, TrajectoryWithRew)
 
 
-class PreferenceModelTabularVS(PreferenceModel):
+class PreferenceModelTabularVS(preference_comparisons.PreferenceModel):
     """Class to convert two fragments' rewards into preference probability."""
     """
     Extension of https://imitation.readthedocs.io/en/latest/algorithms/preference_comparisons.html
@@ -200,6 +200,70 @@ class PreferenceModelTabularVS(PreferenceModel):
         return rews
 
 
+class SupportedFragmenters(enum.Enum):
+        ACTIVE_FRAGMENTER_LOGIT = 'logit'
+        ACTIVE_FRAGMENTER_PROBABILITY = 'probability'
+        ACTIVE_FRAGMENTER_LABEL = 'label'
+        RANDOM_FRAGMENTER = 'random'
+
+class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.RewardLoss):
+    """Compute the cross entropy reward loss."""
+
+    def __init__(self) -> None:
+        """Create cross entropy reward loss."""
+        super().__init__()
+
+    def forward(
+        self,
+        fragment_pairs: Sequence[TrajectoryPair],
+        preferences: np.ndarray,
+        preference_model: preference_comparisons.PreferenceModel,
+    ) -> preference_comparisons.LossAndMetrics:
+        """Computes the loss. Same as Cross Entropy but does not overfit to class certainty."""
+        probs, gt_probs = preference_model(fragment_pairs)
+        #print(preference_model.model.get_learned_align_function())
+        #probs_real, gt_probs_real = preference_model.eval_on_align_func((0.0, 1.0), fragment_pairs)
+        
+        """print("P", probs)
+        print("P real", probs_real)
+        print("GT", gt_probs)
+        print("GT real", gt_probs_real)
+        exit(0)
+        print("prf", preferences)"""
+        # TODO(ejnnr): Here and below, > 0.5 is problematic
+        #  because getting exactly 0.5 is actually somewhat
+        #  common in some environments (as long as sample=False or temperature=0).
+        #  In a sense that "only" creates class imbalance
+        #  but it's still misleading.
+        predictions = probs >= 0.5
+
+        #print(predictions)
+        
+        preferences_th = th.as_tensor(preferences, dtype=th.float32)
+       
+        #comparable_things = np.where(preferences_th.detach().numpy() - 0.5 != 0.0)[0]# TODO oh well this is tricky... Makes loss converge to 0 even when ground truth reward loss does not.
+        
+        ground_truth = preferences_th >= 0.5
+        #print(ground_truth)
+
+        """if preference_model.model.get_learned_align_function()[1] > 0.96:
+            exit(0)"""
+        metrics = {}
+        metrics["accuracy"] = (predictions == ground_truth).float().mean()
+
+        misclassified_pairs = predictions != ground_truth
+        if gt_probs is not None:
+            metrics["gt_reward_loss"] = th.nn.functional.binary_cross_entropy(
+                gt_probs,
+                preferences_th,
+            )
+        metrics = {key: value.detach().cpu() for key, value in metrics.items()}
+        return preference_comparisons.LossAndMetrics(
+            loss=th.nn.functional.binary_cross_entropy(probs[misclassified_pairs], preferences_th[misclassified_pairs]),
+            metrics=metrics,
+        )
+
+
 class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
     def train_vsl_probabilistic(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, n_reward_reps_if_probabilistic_reward, reward_nets_per_target_align_func, target_align_func):
         raise NotImplementedError(
@@ -232,6 +296,8 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                  preference_sampling_temperature=0,
                  reward_trainer_kwargs={
                      'epochs': 5, 'lr': 0.05, 'regularizer_factory': None, 'batch_size': 32, 'minibatch_size': None, },
+                loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
+                active_fragmenter_on='random',
                  *, custom_logger=None):
         super().__init__(env=env, reward_net=reward_net, vgl_optimizer_cls=vgl_optimizer_cls, vsi_optimizer_cls=vsi_optimizer_cls,
                          vgl_optimizer_kwargs=vgl_optimizer_kwargs, vsi_optimizer_kwargs=vsi_optimizer_kwargs, discount=discount,
@@ -264,7 +330,13 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         self.reward_trainer_kwargs = reward_trainer_kwargs
         self.temperature = preference_sampling_temperature
         self.query_schedule = query_schedule
+        self.loss_class = loss_class
+        self.loss_kwargs = loss_kwargs
+        self.active_fragmenter_on = active_fragmenter_on
+        assert active_fragmenter_on in [f.value for f in SupportedFragmenters]
 
+        
+    
     @property
     def logger(self):
         return self.pref_comparisons.logger
@@ -289,10 +361,13 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                  discount_factor=self.discount_factor_preferences,
                                                                  sample=self.sample, temperature=self.temperature)
 
-        self.fragmenter = preference_comparisons.RandomFragmenter(
-            warning_threshold=1,
-            rng=self.rng,
-        )
+        if self.active_fragmenter_on == SupportedFragmenters.RANDOM_FRAGMENTER:
+            self.fragmenter = preference_comparisons.RandomFragmenter(
+                warning_threshold=1,
+                rng=self.rng,
+            )
+        else:
+            pass # It will be initialized in _train_global.
         self.last_accuracies_per_align_func = {al: [] for al in (
             self.vsi_target_align_funcs if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.vgl_target_align_funcs)}
 
@@ -370,9 +445,22 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         self.preference_model = PreferenceModelTabularVS(
             self.current_net, algorithm=self, noise_prob=0, alingment=alignment, discount_factor=self.discount_factor_preferences)
 
+        
+        if self.active_fragmenter_on != SupportedFragmenters.RANDOM_FRAGMENTER:
+            self.fragmenter = preference_comparisons.ActiveSelectionFragmenter(
+                preference_model=self.preference_model,
+                base_fragmenter=preference_comparisons.RandomFragmenter(
+                warning_threshold=1,
+                rng=self.rng,
+            ),
+            fragment_sample_factor=0.5,
+            uncertainty_on=self.active_fragmenter_on
+
+            )
+
         reward_trainer = preference_comparisons.BasicRewardTrainer(
             preference_model=self.preference_model,
-            loss=preference_comparisons.CrossEntropyRewardLoss(),
+            loss=self.loss_class(**self.loss_kwargs),
             rng=self.rng,
             **self.reward_trainer_kwargs
         )

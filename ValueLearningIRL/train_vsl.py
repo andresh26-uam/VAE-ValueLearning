@@ -3,11 +3,12 @@ from copy import deepcopy
 
 import numpy as np
 import torch
-from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL, EnvDataForIRLFireFighters, EnvDataForRoadWorld
+from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL, EnvDataForIRLFireFighters, EnvDataForRoadWorld, PrefLossClasses
 
 from src.values_and_costs import BASIC_PROFILES, PROFILE_COLORS_VEC
 from src.vsl_algorithms.me_irl_for_vsl import MaxEntropyIRLForVSL, check_coherent_rewards, PolicyApproximators
-from src.vsl_algorithms.preference_model_vs import PreferenceBasedTabularMDPVSL
+from src.vsl_algorithms.preference_model_vs import PreferenceBasedTabularMDPVSL, CrossEntropyRewardLossForQualitativePreferences, SupportedFragmenters
+from imitation.algorithms.preference_comparisons import CrossEntropyRewardLoss, RewardLoss
 from src.vsl_algorithms.vsl_plot_utils import get_color_gradient, get_linear_combination_of_colors, plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies, plot_learning_curves
 from src.vsl_reward_functions import TrainingModes
 from utils import filter_none_args, load_json_config
@@ -76,6 +77,13 @@ def parse_args():
                           'hyperbolic', 'constant'], help='Query schedule for Preference Comparisons')
     pc_group.add_argument('-fl', '--fragment_length', type=int,
                           default=None, help='Fragment length. Default is Horizon')
+    pc_group.add_argument('-loss', '--loss_class', type=str,
+                          default=PrefLossClasses.CROSS_ENTROPY, choices=[e.value for e in PrefLossClasses],help='Loss Class')
+    pc_group.add_argument('-losskw', '--loss_kwargs', type=dict,
+                          default={},help='Loss Kwargs as a Python dictionary')
+    pc_group.add_argument('-frag', '--active_fragmenter_on', type=str,
+                          default=SupportedFragmenters.RANDOM_FRAGMENTER, choices=[e.value for e in SupportedFragmenters], help='Active fragmenter criterion')
+
 
     debug_params = parser.add_argument_group('Debug Parameters')
     debug_params.add_argument('-db', '--check_rewards', action='store_true',
@@ -92,6 +100,8 @@ def parse_args():
                            default=413, help='Destination for roadworld')
     env_group.add_argument('-ffpm', '--use_pmovi_expert', action='store_true',
                            default=False, help='Use PMOVI expert for firefighters')
+    
+    
 
     return parser.parse_args()
 
@@ -185,6 +195,9 @@ if __name__ == "__main__":
                                                 use_quantified_preference=parser_args.use_quantified_preference,
                                                 preference_sampling_temperature=parser_args.preference_sampling_temperature,
                                                 reward_trainer_kwargs=training_data.reward_trainer_kwargs,
+                                                loss_class=training_data.loss_class,
+                                                loss_kwargs=training_data.loss_kwargs,
+                                                active_fragmenter_on=training_data.active_fragmenter_on,
                                                 **training_data.pc_config[vgl_or_vsi])
 
     if parser_args.check_rewards:

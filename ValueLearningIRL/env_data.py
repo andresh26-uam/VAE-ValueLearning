@@ -2,6 +2,7 @@
 
         
 from abc import abstractmethod
+import enum
 from functools import partial
 import pickle
 import gymnasium as gym
@@ -17,10 +18,12 @@ from src.values_and_costs import BASIC_PROFILES
 from src.vsl_algorithms.me_irl_for_vsl import PolicyApproximators, mce_partition_fh
 from torch import nn, optim
 
+from src.vsl_algorithms.preference_model_vs import CrossEntropyRewardLossForQualitativePreferences
 from src.vsl_algorithms.vsl_plot_utils import get_color_gradient
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, profiled_society_sampler, random_sampler_among_trajs, sampler_from_policy
 from src.vsl_reward_functions import ConvexAlignmentLayer, LinearAlignmentLayer, LinearVSLRewardFunction, TrainingModes
 from utils import sample_example_profiles
+from imitation.algorithms.preference_comparisons import CrossEntropyRewardLoss
 
 USE_PMOVI_EXPERT = False
 FIRE_FIGHTERS_ENV_NAME = 'FireFighters-v0'
@@ -29,6 +32,9 @@ ROAD_WORLD_ENV_NAME = 'FixedDestRoadWorld-v0'
 
 FIREFIGHTER_ALFUNC_COLORS = lambda align_func: get_color_gradient([1,0,0], [0,0,1], align_func[0])
 
+class PrefLossClasses(enum.Enum):
+    CROSS_ENTROPY = 'cross_entropy'
+    CROSS_ENTROPY_MODIFIED = 'cross_entropy_modified'
 
 class EnvDataForIRL():
     DEFAULT_HORIZON = 50
@@ -42,6 +48,8 @@ class EnvDataForIRL():
 
     def __init__(self, env_name, discount_factor, **kwargs):
 
+        
+        
         self.env = None
         self.env_name = env_name
         self.discount_factor = discount_factor
@@ -98,9 +106,10 @@ class EnvDataForIRL():
         self.n_reward_samples_per_iteration = self.__class__.DEFAULT_N_REWARD_SAMPLES_PER_ITERATION
         self.n_expert_samples_per_seed_minibatch = self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH
         self.n_seeds_minibatch = self.__class__.DEFAULT_N_SEEDS_MINIBATCH
+    
+
+
         
-
-
         self.set_defaults()
         for kw, kwv in kwargs.items():
             setattr(self, kw, kwv)
@@ -109,6 +118,16 @@ class EnvDataForIRL():
         assert len(self.hid_sizes) == len(self.basic_layer_classes) -1
         self.custom_reward_net_initializer = None 
         self.discount_factor_preferences = self.discount_factor if self.discount_factor_preferences is None else self.discount_factor_preferences
+        if 'loss_class' in vars(self).keys():
+            if self.loss_class == PrefLossClasses.CROSS_ENTROPY_MODIFIED: 
+                self.loss_class = CrossEntropyRewardLossForQualitativePreferences 
+            elif self.loss_class == PrefLossClasses.CROSS_ENTROPY:
+                self.loss_class = CrossEntropyRewardLoss 
+            else:
+                self.loss_class = CrossEntropyRewardLoss 
+            self.loss_kwargs = self.loss_kwargs
+
+
     @abstractmethod
     def set_defaults(self):
         pass
