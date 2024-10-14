@@ -5,6 +5,7 @@ runs/
 checkpoints/
 irlvenv/
 results/test*.pdf
+results/*.pdf
 *partial*.png
 *.npy
 *.pickle
