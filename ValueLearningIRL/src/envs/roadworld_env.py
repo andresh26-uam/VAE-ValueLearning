@@ -10,6 +10,7 @@ from seals.base_envs import DiscreteSpaceInt
 from src.values_and_costs import BASIC_PROFILES
 
 
+
 class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
 
     def _get_reward_matrix_for_profile(self, profile: tuple):
@@ -25,7 +26,6 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                     
             self.reward_matrix_dict[profile] = reward_matrix
         else:
-            
             return np.sum([profile[i]*self._get_reward_matrix_for_profile(bp) for i,bp in enumerate(BASIC_PROFILES)], axis=0)
             
         return self.reward_matrix_dict[profile]
@@ -33,7 +33,6 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
     def __init__(self, env: RoadWorldGymPOMDP, with_destination=None, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, **kwargs):
         self.reward_matrix_dict = dict()
         env.cur_des = with_destination
-        
         reward_matrix_per_va = self._get_reward_matrix_for_profile
         self.real_environ = env
         self._invalid_states = [s for s in range(env.n_states) if s not in env.valid_edges]
@@ -47,7 +46,10 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         self.cur_align_func = env.last_profile
         self._goal_states=[env.cur_des,]
 
-        
+    def step(self, action):
+        s,r,d,t,i = super().step(action)
+        d = self.state in self.goal_states
+        return s,r,d,t,i
 
     def get_state_actions_with_known_reward(self, align_func):
         return self.real_environ.state_actions_with_known_reward

@@ -121,6 +121,7 @@ class FireFightersEnv(TabularVAMDP):
     def get_state_actions_with_known_reward(self, align_func):
         return self._states_with_known_reward
     
+    
     @property
     def state(self) -> np.dtype:
         """Data type of state vectors (must be np.int64)."""

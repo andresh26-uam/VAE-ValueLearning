@@ -76,9 +76,15 @@ class ConvexTensorModule(nn.Module):
 
 
 class LinearAlignmentLayer(nn.Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
         self.use_bias = bias
+        with th.no_grad():
+            state_dict = self.state_dict()
+            state_dict['weight'] = th.nn.functional.sigmoid(
+                state_dict['weight'])
+
+            self.load_state_dict(state_dict)
 
     def forward(self, input: Tensor) -> Tensor:
         w_bounded, b_bounded = self.get_alignment_layer()
@@ -98,7 +104,17 @@ class LinearAlignmentLayer(nn.Linear):
             b_bounded = self.bias
         return w_bounded, b_bounded
 
-
+class PositiveLinearAlignmentLayer(LinearAlignmentLayer):
+    def __init__(self, in_features, out_features, bias = False, device=None, dtype=None, data=None):
+        super().__init__(in_features, out_features, False, device, dtype, data)
+    
+    def get_alignment_layer(self):
+        w_bounded = nn.functional.softplus(self.weight)
+        # assert th.allclose(w_bounded, nn.functional.softmax(self.weight))
+        b_bounded = 0.0
+        if self.use_bias:
+            b_bounded = nn.functional.sigmoid(self.bias)
+        return w_bounded, b_bounded
 class ConvexAlignmentLayer(LinearAlignmentLayer):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype, data)
@@ -151,8 +167,12 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             return
         self.cur_value_grounding = grounding
 
-    def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None, observation_space=None, action_space=None, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
+    def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None, 
+                 observation_space=None, action_space=None, 
+                 use_state=False, use_action=False, use_next_state=True, 
+                 use_done=True, use_one_hot_state_action=False,
                  mode=TrainingModes.VALUE_GROUNDING_LEARNING,
+                 clamp_rewards=None,
                  **kwargs):
         if environment is None and (observation_space is None or action_space is None):
             raise ValueError(
@@ -196,6 +216,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         self.use_one_hot_state_action = use_one_hot_state_action
         self.cur_align_func = None
         self.cur_value_grounding = None
+        self.clamp_rewards = clamp_rewards
 
     @abstractmethod
     def value_system_layer(self, align_func) -> Tensor:
@@ -208,12 +229,15 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def _forward(self, features, align_func=None, grounding=None):
 
         x = self.value_grounding_layer(custom_layer=grounding)(features)
+        
         x = self.value_system_layer(align_func=align_func)(x)
+        
         return x
 
     def forward_value_groundings(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor):
         inputs_concat = self.construct_input(state, action, next_state, done)
         return self.value_grounding_layer(custom_layer=self.cur_value_grounding)(inputs_concat)
+    
 
     def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
         inputs_concat = self.construct_input(state, action, next_state, done)
@@ -286,7 +310,6 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         inputs = []
 
         if self.use_one_hot_state_action:
-
             assert state.shape[1] == preprocessing.get_flattened_obs_dim(
                 self.observation_space) * preprocessing.get_flattened_obs_dim(self.action_space)
             # Assume state encodes state-action pairs.
@@ -336,6 +359,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                  reward_bias=0,
                  use_bias=False,
                  negative_grounding_layer=False,
+                 clamp_rewards = None,
                  **kwargs):
 
         if isinstance(environment, RoadWorldGym):
@@ -349,6 +373,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                          use_action=use_action,
                          use_next_state=use_next_state,
                          use_done=use_done,
+                         clamp_rewards=clamp_rewards,
                          use_one_hot_state_action=use_one_hot_state_action, mode=mode,)
         combined_size = 0
 
@@ -422,13 +447,17 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                     th.as_tensor([list(new_align_func)]).clone())
 
                 self.trained_profile_net.load_state_dict(state_dict)
-
+    def clamp_tensor(self, x):
+        if self.clamp_rewards is not None:
+            x = th.clamp(x, self.clamp_rewards[0], self.clamp_rewards[1])
+        
+        return x
     def value_grounding_layer(self, custom_layer=None):
         if custom_layer is None or self.mode in [TrainingModes.VALUE_GROUNDING_LEARNING, TrainingModes.SIMULTANEOUS]:
             if self.negative_grounding_layer:
-                return lambda x: -self.values_net(x)
+                return lambda x: -self.clamp_tensor(self.values_net(x))
             else:
-                return lambda x: self.values_net(x)
+                return lambda x: self.clamp_tensor(self.values_net(x))
         else:
             if isinstance(custom_layer, nn.Module) or callable(custom_layer):
                 def _call(x):
@@ -443,7 +472,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
 
                         assert x.shape[-1] == self.hid_sizes[-1]
 
-                        return x
+                        return self.clamp_tensor(x)
             else:
                 def _call(x):
                     assert custom_layer.shape == (
@@ -459,7 +488,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                         assert th.all(x <= 0)
                     else:
                         x = F.linear(x, pt.T)
-                    return x
+                    return self.clamp_tensor(x)
             return _call
 
     def value_system_layer(self, align_func=None):
@@ -472,13 +501,13 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                 pt = th.tensor(align_func, requires_grad=False,
                                dtype=th.float32)
                 x = F.linear(x, pt)
-                x = self.final_activation(x) + self.reward_bias
+                x = self.clamp_tensor(self.final_activation(x) + self.reward_bias)
                 return x
         elif self.mode == TrainingModes.SIMULTANEOUS or self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             def _call(x):
                 x = self.trained_profile_net(x)
                 x = self.final_activation(x) + self.reward_bias
-                return x
+                return self.clamp_tensor(x)
         return _call
 
     def reset_learned_grounding_function(self, new_grounding_func=None):

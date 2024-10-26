@@ -162,13 +162,13 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         if mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             self.vgl_optimizer = self.vgl_optimizer_cls(
                 self.current_net.parameters(), **self.vgl_optimizer_kwargs)
-
+            self.target_align_funcs_to_learned_align_funcs = {
+                al: al for al in self.vgl_target_align_funcs}
             with networks.training(self.current_net):
                 reward_nets_per_target_align_func = self.train_vgl(
                     max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
 
-            self.target_align_funcs_to_learned_align_funcs = {
-                al: al for al in self.vgl_target_align_funcs}
+            
         elif mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             reward_nets_per_target_align_func = dict()
             self.target_align_funcs_to_learned_align_funcs = dict()
@@ -215,6 +215,16 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             return self.current_net.get_learned_grounding(), reward_nets_per_target_align_func, self.get_metrics()
         else:
             return self.current_net.get_learned_grounding(), self.target_align_funcs_to_learned_align_funcs, reward_nets_per_target_align_func, self.get_metrics()
+
+    @abstractmethod
+    def test_accuracy_for_align_funcs(self, learned_rewards_nets_per_rep,
+                               target_align_funcs_to_learned_align_funcs=None,
+                                testing_align_funcs=[]):
+        pass
+    
+    @abstractmethod
+    def get_policy_from_reward_per_align_func(self, align_funcs, reward_net=None):
+        pass
 
     def state_action_callable_reward_from_computed_rewards_per_target_align_func(self, rewards_per_target_align_func: Union[Dict, Callable]):
         if isinstance(rewards_per_target_align_func, dict):

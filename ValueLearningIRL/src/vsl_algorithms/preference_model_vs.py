@@ -1,5 +1,5 @@
 import enum
-from typing import Sequence
+from typing import Dict, List, NoReturn, Sequence
 from imitation.data.types import TrajectoryPair
 
 from src.vsl_algorithms.base_tabular_vsl_algorithm import BaseTabularMDPVSLAlgorithm
@@ -22,6 +22,7 @@ from imitation.data.types import (
     TrajectoryPair,
     TrajectoryWithRew,
     Transitions,
+    TrajectoryWithRewPair,
 )
 from imitation.algorithms import preference_comparisons
 
@@ -32,7 +33,114 @@ def _trajectory_pair_includes_reward(fragment_pair: TrajectoryPair) -> bool:
     return isinstance(frag1, TrajectoryWithRew) and isinstance(frag2, TrajectoryWithRew)
 
 
-class PreferenceModelTabularVS(preference_comparisons.PreferenceModel):
+  
+class ActiveSelectionFragmenterVSL(preference_comparisons.Fragmenter):
+    def __init__(
+        self,
+        preference_model: preference_comparisons.PreferenceModel,
+        base_fragmenter: preference_comparisons.Fragmenter,
+        fragment_sample_factor: float,
+        uncertainty_on: str = "logit",
+        custom_logger = None,
+    ) -> None:
+        """Initialize the active selection fragmenter.
+
+        Args:
+            preference_model: an ensemble model that predicts the
+                preference of the first fragment over the other.
+            base_fragmenter: fragmenter instance to get
+                fragment pairs from trajectories
+            fragment_sample_factor: the factor of the number of
+                fragment pairs to sample from the base_fragmenter
+            uncertainty_on: the variable to calculate the variance on.
+                Can be logit|probability|label.
+            custom_logger: Where to log to; if None (default), creates a new logger.
+
+        Raises:
+            ValueError: Preference model not wrapped over an ensemble of networks.
+        """
+        super().__init__(custom_logger=custom_logger)
+        self.preference_model = preference_model
+        self.base_fragmenter = base_fragmenter
+        self.fragment_sample_factor = fragment_sample_factor
+        self._uncertainty_on = uncertainty_on
+        if not (uncertainty_on in ["logit", "probability", "label"]):
+            self.raise_uncertainty_on_not_supported()
+
+    @property
+    def uncertainty_on(self) -> str:
+        return self._uncertainty_on
+    
+
+    def __call__(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+
+        num_pairs: int,
+    ) -> Sequence[TrajectoryWithRewPair]:
+        # sample a large number (self.fragment_sample_factor*num_pairs)
+        # of fragments from all the trajectories
+        fragments_to_sample = int(self.fragment_sample_factor * num_pairs)
+        fragment_pairs = self.base_fragmenter(
+            trajectories=trajectories,
+            fragment_length=fragment_length,
+            num_pairs=fragments_to_sample,
+        )
+        var_estimates = np.zeros(len(fragment_pairs))
+        for i, fragment in enumerate(fragment_pairs):
+            frag1, frag2 = fragment
+            trans1 = rollout.flatten_trajectories([frag1])
+            trans2 = rollout.flatten_trajectories([frag2])
+            with th.no_grad():
+                rews1 = self.preference_model.rewards(trans1)
+                rews2 = self.preference_model.rewards(trans2)
+            var_estimate = self.variance_estimate(rews1, rews2)
+            var_estimates[i] = var_estimate
+        fragment_idxs = np.argsort(var_estimates)[::-1]  # sort in descending order
+        # return fragment pairs that have the highest uncertainty
+        return [fragment_pairs[idx] for idx in fragment_idxs[:num_pairs]]
+
+    
+
+    def raise_uncertainty_on_not_supported(self) -> NoReturn:
+        raise ValueError(
+            f"""{self.uncertainty_on} not supported.
+            `uncertainty_on` should be from `logit`, `probability`, or `label`""",
+        )
+
+
+    def variance_estimate(self, rews1: th.Tensor, rews2: th.Tensor) -> float:
+        """Gets the variance estimate from the rewards of a fragment pair.
+
+        Args:
+            rews1: rewards obtained by all the ensemble models for the first fragment.
+                Shape - (fragment_length, num_ensemble_members)
+            rews2: rewards obtained by all the ensemble models for the second fragment.
+                Shape - (fragment_length, num_ensemble_members)
+
+        Returns:
+            the variance estimate based on the `uncertainty_on` flag.
+        """
+        if self.uncertainty_on == "logit":
+            returns1, returns2 = rews1.sum(0), rews2.sum(0)
+            var_estimate = (returns1 - returns2).var().item()
+        else:  # uncertainty_on is probability or label
+            probs = self.preference_model.probability(rews1, rews2)
+            probs_np = probs.cpu().numpy()
+            if self.uncertainty_on == "probability":
+                var_estimate = probs_np.var()
+            elif self.uncertainty_on == "label":  # uncertainty_on is label
+                preds = (probs_np > 0.5).astype(np.float32)
+                # probability estimate of Bernoulli random variable
+                prob_estimate = preds.mean()
+                # variance estimate of Bernoulli random variable
+                var_estimate = prob_estimate * (1 - prob_estimate)
+            else:
+                self.raise_uncertainty_on_not_supported()
+        return var_estimate
+    
+class PreferenceModelTabularVSL(preference_comparisons.PreferenceModel):
     """Class to convert two fragments' rewards into preference probability."""
     """
     Extension of https://imitation.readthedocs.io/en/latest/algorithms/preference_comparisons.html
@@ -138,13 +246,6 @@ class PreferenceModelTabularVS(preference_comparisons.PreferenceModel):
             frag2 = cast(TrajectoryWithRew, frag2)
             gt_rews_1 = th.from_numpy(frag1.rews)
             gt_rews_2 = th.from_numpy(frag2.rews)
-
-        
-            print("R, GR", rews1, gt_rews_1)
-            print("R2, GR2", rews2, gt_rews_2)
-            print(frag1)
-            print(frag2)
-
             
             
             ret = self.forward(fragment_pairs)
@@ -209,9 +310,10 @@ class SupportedFragmenters(enum.Enum):
 class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.RewardLoss):
     """Compute the cross entropy reward loss."""
 
-    def __init__(self) -> None:
+    def __init__(self, beta=5) -> None:
         """Create cross entropy reward loss."""
         super().__init__()
+        self.beta=beta
 
     def forward(
         self,
@@ -224,12 +326,6 @@ class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.Rew
         #print(preference_model.model.get_learned_align_function())
         #probs_real, gt_probs_real = preference_model.eval_on_align_func((0.0, 1.0), fragment_pairs)
         
-        """print("P", probs)
-        print("P real", probs_real)
-        print("GT", gt_probs)
-        print("GT real", gt_probs_real)
-        exit(0)
-        print("prf", preferences)"""
         # TODO(ejnnr): Here and below, > 0.5 is problematic
         #  because getting exactly 0.5 is actually somewhat
         #  common in some environments (as long as sample=False or temperature=0).
@@ -251,18 +347,32 @@ class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.Rew
         metrics = {}
         metrics["accuracy"] = (predictions == ground_truth).float().mean()
 
-        misclassified_pairs = predictions != ground_truth
+        #misclassified_pairs = predictions != ground_truth
         if gt_probs is not None:
             metrics["gt_reward_loss"] = th.nn.functional.binary_cross_entropy(
                 gt_probs,
                 preferences_th,
             )
         metrics = {key: value.detach().cpu() for key, value in metrics.items()}
-        return preference_comparisons.LossAndMetrics(
+
+
+        """return preference_comparisons.LossAndMetrics(
             loss=th.nn.functional.binary_cross_entropy(probs[misclassified_pairs], preferences_th[misclassified_pairs]),
             metrics=metrics,
+        )"""
+        loss_per_case = th.nn.functional.binary_cross_entropy(probs, preferences_th, reduce=False)
+        loss_per_case += -th.multiply(probs, self.beta*th.log(probs)) # Subtract entropy
+        # This idea is CONFIDENT PENALTY: https://openreview.net/pdf?id=HyhbYrGYe ICLR 2017
+        # TODO: Idea for future work:
+        # from pairwise comparisons, minimize divergence from a prior that consists on the expected class probability, 
+        # being it estimated online.
+        # Under the assumption of convergence, we should find a single only possible function that is equivalent to the original
+        # preferences (up to some operation, probably multiplication by a constant).
+        loss = th.mean(loss_per_case)
+        return preference_comparisons.LossAndMetrics(
+            loss=loss,
+            metrics=metrics,
         )
-
 
 class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
     def train_vsl_probabilistic(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, n_reward_reps_if_probabilistic_reward, reward_nets_per_target_align_func, target_align_func):
@@ -292,18 +402,19 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                  stochastic_sampling_in_reference_policy=True,
                  query_schedule="hyperbolic",
                  learn_stochastic_policy=True,
+                 expert_is_stochastic=True,
                  # 0 for deterministic preference sampling, 1 for totally random according to softmax probabilities
                  preference_sampling_temperature=0,
                  reward_trainer_kwargs={
                      'epochs': 5, 'lr': 0.05, 'regularizer_factory': None, 'batch_size': 32, 'minibatch_size': None, },
                 loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
-                active_fragmenter_on='random',
+                active_fragmenter_on=SupportedFragmenters.RANDOM_FRAGMENTER,
                  *, custom_logger=None):
         super().__init__(env=env, reward_net=reward_net, vgl_optimizer_cls=vgl_optimizer_cls, vsi_optimizer_cls=vsi_optimizer_cls,
                          vgl_optimizer_kwargs=vgl_optimizer_kwargs, vsi_optimizer_kwargs=vsi_optimizer_kwargs, discount=discount,
                          log_interval=log_interval, vgl_expert_policy=vgl_expert_policy, vsi_expert_policy=vsi_expert_policy,
                          target_align_func_sampler=target_align_func_sampler, vsi_target_align_funcs=vsi_target_align_funcs,
-                         vgl_target_align_funcs=vgl_target_align_funcs, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy)
+                         vgl_target_align_funcs=vgl_target_align_funcs, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy,stochastic_expert=expert_is_stochastic)
 
         self.rng = rng
         if discount_factor_preferences is None:
@@ -333,10 +444,14 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         self.loss_class = loss_class
         self.loss_kwargs = loss_kwargs
         self.active_fragmenter_on = active_fragmenter_on
-        assert active_fragmenter_on in [f.value for f in SupportedFragmenters]
+        for k in SupportedFragmenters:
+            if active_fragmenter_on == k or active_fragmenter_on == k.value:
+                self.active_fragmenter_on = k
+        assert self.active_fragmenter_on in [f for f in SupportedFragmenters]
 
-        
-    
+      
+
+
     @property
     def logger(self):
         return self.pref_comparisons.logger
@@ -391,20 +506,31 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 self.logger.record("Learned grounding: ",
                                    self.current_net.get_learned_grounding())
 
-    def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
+    def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, epoch_partition = 0.1):
         # return super().train_vgl(max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_funcs)
-        reference_trajs_per_profile = self.extract_trajectories(
+        """reference_trajs_per_profile = self.extract_trajectories(
             n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
+        """
         reward_net_per_target = dict()
-        for target_align_func in self.vgl_target_align_funcs:
-            self._train_global(max_iter, target_align_func,
-                               reference_trajs_per_profile)
+        n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
+        for rep in range(n_steps_per_change_of_target):
+            """TODO: need further testing, to retrain the reference policy after updates...:
+            if rep > 0:
+                self.vgl_reference_policy = self.calculate_learned_policies(self.vgl_target_align_funcs)
+            """
+            reference_trajs_per_profile = self.extract_trajectories(
+            int(n_seeds_for_sampled_trajectories*epoch_partition), n_sampled_trajs_per_seed, True)
+        
+            for target_align_func in self.vgl_target_align_funcs:
+                self._train_global(max_iter, target_align_func,
+                                reference_trajs_per_profile, partition=n_steps_per_change_of_target,starting_t=rep*n_steps_per_change_of_target)
 
             reward_net_per_target[target_align_func] = self.current_net.copy()
         return reward_net_per_target
 
     def extract_trajectories(self, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, resample_trajs=False):
         seed = int(self.rng.random()*1000)
+        
         if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             if self.vgl_reference_trajs_with_rew_per_profile is None or resample_trajs:
                 self.vgl_reference_trajs_with_rew_per_profile = {
@@ -414,7 +540,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                           pr,],
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
-                                                                      alignments_in_env=[pr,])
+                                                                      alignments_in_env=[pr,],custom_discount=self.discount_factor_preferences)
                     for pr in self.vgl_target_align_funcs}
             reference_trajs_per_profile = self.vgl_reference_trajs_with_rew_per_profile
         else:
@@ -426,35 +552,38 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                           pr,],
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
+                                                                      custom_discount=self.discount_factor_preferences,
                                                                       alignments_in_env=[pr,])
                     for pr in self.vsi_target_align_funcs}
             reference_trajs_per_profile = self.vsi_reference_trajs_with_rew_per_profile
         return reference_trajs_per_profile
 
-    def _train_global(self, max_iter, target_align_func, reference_trajs_per_profile):
+    def _train_global(self, max_iter, target_align_func, reference_trajs_per_profile, partition=1, starting_t=0):
         self.current_target = target_align_func
         if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             alignment = None
         else:
             alignment = self.current_target
-
+        #idxs = list(range(len(reference_trajs_per_profile[target_align_func])))
+        #chosen_trajs = np.random.choice(idxs, size=len(reference_trajs_per_profile[target_align_func])//partition)
+        
         traj_dataset = preference_comparisons.TrajectoryDataset(
             reference_trajs_per_profile[target_align_func],
             rng=self.rng
         )
-        self.preference_model = PreferenceModelTabularVS(
+        self.preference_model = PreferenceModelTabularVSL(
             self.current_net, algorithm=self, noise_prob=0, alingment=alignment, discount_factor=self.discount_factor_preferences)
 
         
         if self.active_fragmenter_on != SupportedFragmenters.RANDOM_FRAGMENTER:
-            self.fragmenter = preference_comparisons.ActiveSelectionFragmenter(
+            self.fragmenter = ActiveSelectionFragmenterVSL(
                 preference_model=self.preference_model,
                 base_fragmenter=preference_comparisons.RandomFragmenter(
                 warning_threshold=1,
                 rng=self.rng,
             ),
             fragment_sample_factor=0.5,
-            uncertainty_on=self.active_fragmenter_on
+            uncertainty_on=self.active_fragmenter_on.value
 
             )
 
@@ -468,7 +597,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         self.pref_comparisons = preference_comparisons.PreferenceComparisons(
             trajectory_generator=traj_dataset,
             reward_model=self.current_net,
-            num_iterations=self.interactive_imitation_iterations,
+            num_iterations=self.interactive_imitation_iterations//partition,
             fragmenter=self.fragmenter,
             preference_gatherer=self.gatherer,
             reward_trainer=reward_trainer,
@@ -481,7 +610,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         )
 
         metric = self.pref_comparisons.train(
-            max_iter, total_comparisons=self.total_comparisons, callback=self.train_callback)
+            max_iter, total_comparisons=self.total_comparisons//partition, callback=lambda t: self.train_callback(t+starting_t))
         self.last_accuracies_per_align_func[self.current_target].append(
             metric['reward_accuracy'])
 
@@ -512,3 +641,4 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         metrics = super().get_metrics()
         metrics.update({'accuracy': self.last_accuracies_per_align_func})
         return metrics
+    

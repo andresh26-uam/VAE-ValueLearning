@@ -9,4 +9,6 @@ results/*.pdf
 *partial*.png
 *.npy
 *.pickle
+results/*.csv
+results/*.tex
 .DS-Store

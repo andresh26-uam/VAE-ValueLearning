@@ -4,6 +4,7 @@
 from abc import abstractmethod
 import enum
 from functools import partial
+import itertools
 import pickle
 import gymnasium as gym
 import numpy as np
@@ -14,8 +15,9 @@ from src.envs.firefighters_env import FeatureSelectionFFEnv, FireFightersEnv
 from src.envs.roadworld_env import FixedDestRoadWorldGymPOMDP
 from src.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldGymPOMDP
 from src.utils.load_data import ini_od_dist
-from src.values_and_costs import BASIC_PROFILES
-from src.vsl_algorithms.me_irl_for_vsl import PolicyApproximators, mce_partition_fh
+from src.values_and_costs import BASIC_PROFILES, BASIC_PROFILE_NAMES
+from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
+from src.vsl_algorithms.me_irl_for_vsl import mce_partition_fh
 from torch import nn, optim
 
 from src.vsl_algorithms.preference_model_vs import CrossEntropyRewardLossForQualitativePreferences
@@ -58,7 +60,7 @@ class EnvDataForIRL():
         self.vsi_targets = None
         self.vgl_optimizer_cls = optim.Adam
         self.vsi_optimizer_cls = optim.Adam
-        self.vsi_optimizer_kwargs={"lr": 0.15, "weight_decay": 0.0000}
+        self.vsi_optimizer_kwargs={"lr": 0.1, "weight_decay": 0.0000}
         self.vgl_optimizer_kwargs={"lr": 0.1, "weight_decay": 0.0000}
         self.vgl_expert_policy = None
         self.vsi_expert_policy = None
@@ -98,7 +100,9 @@ class EnvDataForIRL():
         self.activations = [nn.Tanh, nn.Identity]
         self.use_bias = False
         self.reward_bias = False
+        self.clamp_rewards = None
         self.discount_factor_preferences = None
+        self.testing_profiles = None
 
         # Override defaults with specific method for other environments
         self.n_seeds_total = 100
@@ -118,15 +122,15 @@ class EnvDataForIRL():
         assert len(self.hid_sizes) == len(self.basic_layer_classes) -1
         self.custom_reward_net_initializer = None 
         self.discount_factor_preferences = self.discount_factor if self.discount_factor_preferences is None else self.discount_factor_preferences
+        
         if 'loss_class' in vars(self).keys():
-            if self.loss_class == PrefLossClasses.CROSS_ENTROPY_MODIFIED: 
+            if self.loss_class == PrefLossClasses.CROSS_ENTROPY_MODIFIED.value: 
                 self.loss_class = CrossEntropyRewardLossForQualitativePreferences 
-            elif self.loss_class == PrefLossClasses.CROSS_ENTROPY:
+            elif self.loss_class == PrefLossClasses.CROSS_ENTROPY.value:
                 self.loss_class = CrossEntropyRewardLoss 
             else:
                 self.loss_class = CrossEntropyRewardLoss 
             self.loss_kwargs = self.loss_kwargs
-
 
     @abstractmethod
     def set_defaults(self):
@@ -146,13 +150,14 @@ class EnvDataForIRL():
             activations=self.activations,
             negative_grounding_layer=self.negative_grounding_layer,
             use_bias = self.use_bias,
+            clamp_rewards = self.clamp_rewards,
             mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION
         )
     
     @abstractmethod
     def get_assumed_grounding(self):
         return nn.Identity()    
-
+    
     @property
     def pc_config(self):
         return {'vgl': dict(query_schedule='hyperbolic',
@@ -165,12 +170,12 @@ class EnvDataForIRL():
     def me_config(self):
         return {'vgl': dict(
             vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-6,
+            gradient_norm_epsilon=1e-8,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy = True
         ), 'vsi': dict(
             vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-6,
+            gradient_norm_epsilon=1e-8,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy = True
         )}
@@ -184,8 +189,8 @@ class EnvDataForIRL():
     @property
     def pc_train_config(self):
         return {'vgl': dict(
-            resample_trajectories_if_not_already_sampled=True, new_rng=None,
-        ), 'vsi': dict(resample_trajectories_if_not_already_sampled=True, new_rng=None,
+            resample_trajectories_if_not_already_sampled=False, new_rng=None,
+        ), 'vsi': dict(resample_trajectories_if_not_already_sampled=False, new_rng=None,
                        )}
     
     
@@ -197,17 +202,19 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 10
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 5
+    DEFAULT_FEATURE_SELECTION = FeatureSelectionFFEnv.ONE_HOT_FEATURES
+    VALUES_NAMES = {(1.0, 0.0): 'Prof', (0.0, 1.0): 'Prox'}
 
-    def __init__(self, env_name, discount_factor=0.7, feature_selection= FeatureSelectionFFEnv.ONE_HOT_OBSERVATIONS, horizon=DEFAULT_HORIZON, is_society=False, initial_state_dist=DEFAULT_INITIAL_STATE_DISTRIBUTION, learn=False, use_pmovi_expert=USE_PMOVI_EXPERT, n_seeds_for_samplers = DEFAULT_N_SEEDS, 
+    def __init__(self, env_name, discount_factor=1.0, feature_selection= DEFAULT_FEATURE_SELECTION, horizon=DEFAULT_HORIZON, is_society=False, initial_state_dist=DEFAULT_INITIAL_STATE_DISTRIBUTION, learn=False, use_pmovi_expert=USE_PMOVI_EXPERT, n_seeds_for_samplers = DEFAULT_N_SEEDS, 
                  sampler_over_precalculated_trajs = False, **kwargs):
         super().__init__(env_name, discount_factor, **kwargs)
+
         self.horizon = horizon
         self.n_seeds_total = n_seeds_for_samplers
         self.target_align_func_sampler=profiled_society_sampler if is_society else lambda al_func: al_func
-
         env_real: FireFightersEnv = gym.make(self.env_name, feature_selection = feature_selection, horizon=self.horizon, initial_state_distribution=initial_state_dist)
         env_real.reset(seed=self.seed)
-        
+        self.feature_selection = feature_selection
         #train_init_state_distribution, test_init_state_distribution = train_test_split_initial_state_distributions(env_real.state_dim, 0.7)
         #env_training: FireFightersEnv = gym.make('FireFighters-v0', feature_selection = FEATURE_SELECTION, horizon=HORIZON, initial_state_distribution=train_init_state_distribution)
         env_training = env_real
@@ -276,6 +283,10 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.env = env_real
         self.vgl_expert_policy = expert_policy_train
         self.vsi_expert_policy = expert_policy_train
+
+        self.vgl_reference_policy = expert_policy_train
+        self.vsi_reference_policy = expert_policy_train
+
         self.vsi_targets = profiles
 
         if sampler_over_precalculated_trajs:
@@ -288,8 +299,6 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
     def set_defaults(self):
         
-        self.stochastic_expert = True
-        self.learn_stochastic_policy = True
         
         self.stochastic_expert =True
         self.learn_stochastic_policy = True
@@ -297,31 +306,32 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
 
         self.vgl_targets = [(1.0, 0.0), (0.0,1.0)]
-        self.vsi_optimizer_kwargs={"lr": 0.1, "weight_decay": 0.0000}
-        self.vgl_optimizer_kwargs={"lr": 0.3, "weight_decay": 0.0000}
+        self.vsi_optimizer_kwargs={"lr": 0.15, "weight_decay": 0.000}
+        self.vgl_optimizer_kwargs={"lr": 0.1, "weight_decay": 0.0001}
         
         self.use_state = True
         self.use_action = True
-        self.use_one_hot_state_action = True
+        self.use_one_hot_state_action = True if EnvDataForIRLFireFighters.DEFAULT_FEATURE_SELECTION == FeatureSelectionFFEnv.ONE_HOT_OBSERVATIONS else False
         self.use_next_state = False
         self.use_done = False
         self.n_values = 2
-        self.hid_sizes = [self.n_values,]
+        self.testing_profiles = list(itertools.product(
+            [0.0, 0.2, 0.4 , 0.6, 0.8, 1.0], [0.0, 0.2, 0.4 , 0.6, 0.8, 1.0]))
+        #self.clamp_rewards = [-1.0,1.0] 
+        
         #self.basic_layer_classes = [nn.Linear, ConvexAlignmentLayer]
-        self.basic_layer_classes = [nn.Linear, LinearAlignmentLayer]
-        self.activations=[nn.Tanh, nn.Identity]
+        
         self.profile_variety = 6
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs={'value_iteration_tolerance': 0.0000001, 'iterations': 100}
-        self.vgl_reference_policy = 'random'
-        self.vsi_reference_policy = 'random'
+        #self.vgl_reference_policy = 'random'
+        #self.vsi_reference_policy = 'random'
 
         self.reward_trainer_kwargs = {
                                  'epochs': 1,
-                                 'lr': 0.08,
-                                 'batch_size': 512,
-                                 'minibatch_size': 32,
+                                 'lr': 0.001,
+                                 'batch_size': 1024,
                              }
         
     @property
@@ -334,19 +344,19 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=20000,
             
-            n_seeds_for_sampled_trajectories=200,
+            n_seeds_for_sampled_trajectories=3000,
             n_sampled_trajs_per_seed=10,
-            fragment_length=self.horizon, interactive_imitation_iterations=100, 
-            total_comparisons=2000, initial_comparison_frac=0.1, 
-                    initial_epoch_multiplier=1, transition_oversampling=5,
+            fragment_length=int(self.horizon), interactive_imitation_iterations=200, 
+            total_comparisons=50000, initial_comparison_frac=0.1, 
+                    initial_epoch_multiplier=15, transition_oversampling=4,
         ))
         base['vsi'].update(dict(
             max_iter=20000,
-            n_seeds_for_sampled_trajectories=200,
-            n_sampled_trajs_per_seed=10,
+            n_seeds_for_sampled_trajectories=1000,
+            n_sampled_trajs_per_seed=3,
             fragment_length=self.horizon, interactive_imitation_iterations=100, 
-            total_comparisons=2000, initial_comparison_frac=0.1, 
-                    initial_epoch_multiplier=1, transition_oversampling=5,
+            total_comparisons=3000, initial_comparison_frac=0.1, 
+                    initial_epoch_multiplier=1, transition_oversampling=3,
         )
         )
         return base
@@ -361,7 +371,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(max_iter=200,))
-        base['vsi'].update(dict(max_iter=200))
+        base['vsi'].update(dict(max_iter=400))
         return base
 
     def get_assumed_grounding(self):
@@ -373,7 +383,20 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             return assumed_grounding
         else:
             raise NotImplementedError("No knwon closed-form grounding with other feature configuration than one-hot encoded state-action pairs")
-    
+    def get_reward_net(self, algorithm='me'):
+        if not self.use_one_hot_state_action:
+
+            self.use_bias = True
+            self.hid_sizes = [50, 50, 50, self.n_values,]
+            self.basic_layer_classes = [nn.Linear, nn.Linear, nn.Linear,nn.Linear, LinearAlignmentLayer]
+            self.activations=[nn.LeakyReLU, nn.LeakyReLU, nn.LeakyReLU, nn.Tanh, nn.Identity]
+        else:
+            self.use_bias = False
+            self.hid_sizes = [self.n_values,]
+            self.basic_layer_classes = [nn.Linear, LinearAlignmentLayer]
+            self.activations=[nn.Tanh, nn.Identity]
+        
+        return super().get_reward_net(algorithm)
 class EnvDataForRoadWorld(EnvDataForIRL):
     DEFAULT_HORIZON = 40
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
@@ -383,6 +406,8 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 30
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 5
     DEFAULT_DEST = 413
+
+    VALUES_NAMES = BASIC_PROFILE_NAMES
 
     def __init__(self, env_name=ROAD_WORLD_ENV_NAME, horizon=DEFAULT_HORIZON, dest=DEFAULT_DEST, n_seeds_for_samplers=DEFAULT_N_SEEDS, sampler_over_precalculated_trajs=False, **kwargs):
         super().__init__(env_name=env_name, **kwargs)
@@ -498,8 +523,8 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             
             n_seeds_for_sampled_trajectories=1500,
             n_sampled_trajs_per_seed=1,
-            fragment_length=10, interactive_imitation_iterations=150, 
-            total_comparisons=1000, initial_comparison_frac=0.1, 
+            fragment_length=self.horizon, interactive_imitation_iterations=200, 
+            total_comparisons=4000, initial_comparison_frac=0.1, 
                     initial_epoch_multiplier=1, transition_oversampling=3,
         ))
         base['vsi'].update(dict(
@@ -537,7 +562,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.use_done = False
         self.environment_is_stochastic = False
         self.hid_sizes = [3,]
-        
+        self.use_bias = False
         self.basic_layer_classes = [nn.Linear, ConvexAlignmentLayer]
         self.activations=[nn.Identity, nn.Identity]
         self.vgl_targets = BASIC_PROFILES
@@ -550,12 +575,16 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs={'value_iteration_tolerance': 0.0000001, 'iterations': 1000}
-        self.vgl_reference_policy = 'random'
-        self.vsi_reference_policy = 'random'
+        #self.vgl_reference_policy = 'random' # SEE __INIT__!
+        #self.vsi_reference_policy = 'random' # SEE __INIT__!
         
+        self.testing_profiles = list(itertools.product(
+            [0.0, 0.3, 0.7, 1.0], [0.0, 0.3, 0.7, 1.0], [0.0, 0.3, 0.7, 1.0]))
+        #self.testing_profiles.remove([0.0, 0.0,0.0])
+        self.testing_profiles.remove((0.0, 0.0,0.0))
         self.reward_trainer_kwargs = {
                                  'epochs': 1,
-                                 'lr': 0.02,
+                                 'lr': 0.03,
                                  'batch_size': 1024,
                              }
    

@@ -135,7 +135,11 @@ class ValueSystemLearningPolicy(BasePolicy):
             else:
                 return Trajectory(obs=obs, acts=acts, infos = infos, terminal=terminated)
 
-    def obtain_trajectories(self, n_seeds=100, seed=32, options: Union[None, List, Dict] = None, stochastic=True, repeat_per_seed = 1, with_alignfunctions=[None,], t_max=None, exploration=0,with_reward=False, alignments_in_env=[None,], use_observations=False) -> List[Trajectory]:
+    def obtain_trajectories(self, n_seeds=100, seed=32, 
+                            options: Union[None, List, Dict] = None, stochastic=True, 
+                            custom_discount=None, repeat_per_seed = 1, with_alignfunctions=[None,], t_max=None, 
+                            exploration=0,with_reward=False, alignments_in_env=[None,], 
+                            use_observations=False, end_trajectories_when_ended=False) -> List[Trajectory]:
         trajs = []
         if len(alignments_in_env) != len(with_alignfunctions):
             alignments_in_env = with_alignfunctions
@@ -145,7 +149,13 @@ class ValueSystemLearningPolicy(BasePolicy):
             for r in range(repeat_per_seed):
                 for af, af_in_env in zip(with_alignfunctions, alignments_in_env):
                     trajs.append(
-                        self.obtain_trajectory(af, seed=seed if si == 0 else None, exploration=exploration, options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False, with_reward=with_reward,alignment_func_in_env=af_in_env))
+                        self.obtain_trajectory(af, 
+                                               seed=seed if si == 0 else None, 
+                                               exploration=exploration, 
+                                               custom_discount=custom_discount,
+                                               end_trajectories_when_ended=end_trajectories_when_ended,
+                                               options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False, with_reward=with_reward,alignment_func_in_env=af_in_env)
+                        )
         return trajs
     
     def _save_checkpoint(self, save_last=True):
@@ -198,7 +208,8 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         policy_state = state if state is not None else 0
         return policy_state
     
-    def obtain_trajectory(self, alignment_function=None, seed=32, options = None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None, recover_previous_alignment_func_in_env=True) -> Trajectory:
+    def obtain_trajectory(self, alignment_function=None, seed=32, options = None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None, 
+                          custom_discount=None, recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False) -> Trajectory:
         state_obs, info = self.env.reset(seed = seed, options=options) if options is not None else self.env.reset(seed=seed) 
         if self.expose_state is False:
             obs_in_state = self.env.obs_from_state(state_obs)
@@ -250,7 +261,7 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
             infos = []
             #edge_path.append(self.environ.cur_state)
             t = 0
-            while not (terminated or truncated) and (t_max is None or (t < t_max)):
+            while not ((terminated or truncated) and end_trajectories_when_ended) and (t_max is None or (t < t_max)):
                 action, policy_state = self.act(state_obs, policy_state = policy_state, exploration=exploration, stochastic=stochastic, alignment_function=alignment_function)
                 next_state_obs, rew, terminated, truncated, info = self.env.step(action)
                 if self.expose_state is False:
@@ -270,7 +281,7 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
                 
                 state_obs = next_state_obs
                 t+=1
-                if t_max is not None and t > t_max:
+                if (t_max is not None and t > t_max) or (end_trajectories_when_ended and info['ended'] ):
                     break
             acts = np.asarray(acts)
             infos = np.asarray(infos)
