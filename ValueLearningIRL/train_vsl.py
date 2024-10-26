@@ -1,7 +1,6 @@
 import argparse
 import ast
 from copy import deepcopy
-import itertools
 import json
 
 import numpy as np
@@ -9,11 +8,11 @@ import torch
 from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL, EnvDataForIRLFireFighters, EnvDataForRoadWorld, PrefLossClasses
 
 from src.envs.firefighters_env import FeatureSelectionFFEnv
-from src.values_and_costs import BASIC_PROFILES, PROFILE_COLORS_VEC
+
 from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
 from src.vsl_algorithms.me_irl_for_vsl import MaxEntropyIRLForVSL, check_coherent_rewards
 from src.vsl_algorithms.preference_model_vs import PreferenceBasedTabularMDPVSL, SupportedFragmenters
-from src.vsl_algorithms.vsl_plot_utils import get_color_gradient, get_linear_combination_of_colors, plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies, plot_learning_curves, plot_f1_and_jsd
+from src.vsl_algorithms.vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies, plot_learning_curves, plot_f1_and_jsd
 from src.vsl_reward_functions import TrainingModes
 from utils import filter_none_args, load_json_config
 
@@ -34,7 +33,8 @@ def parse_args():
         description="Value System Learning Script configuration. Arguments which default is None have specific values depending on the algorithm and the domain. See the env_data.py file")
 
     general_group = parser.add_argument_group('General Parameters')
-    general_group.add_argument('-ename', '--experiment_name', type=str, default='', help='Experiment name')
+    general_group.add_argument(
+        '-ename', '--experiment_name', type=str, default='', help='Experiment name')
     general_group.add_argument('-cf', '--config_file', type=str, default='cmd',
                                help='Path to JSON configuration file (overrides command line arguments)')
     general_group.add_argument('-sh', '--show', action='store_true', default=False,
@@ -107,9 +107,11 @@ def parse_args():
     env_group.add_argument('-ffpm', '--use_pmovi_expert', action='store_true',
                            default=False, help='Use PMOVI expert for firefighters')
     testing_args = parser.add_argument_group('Testing options')
-    testing_args.add_argument('-tn', '--n_trajs_testing', default=100, type=int, help='Number of trajectories to sample for testing')
-    testing_args.add_argument('-tr', '--expert_to_random_ratios', default=[1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0], type=lambda x: list(ast.literal_eval(x)), help='Percentages of routes that are from expert instead of from random policy for testing purposes.')
-    
+    testing_args.add_argument('-tn', '--n_trajs_testing', default=100,
+                              type=int, help='Number of trajectories to sample for testing')
+    testing_args.add_argument('-tr', '--expert_to_random_ratios', default=[1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0], type=lambda x: list(
+        ast.literal_eval(x)), help='Percentages of routes that are from expert instead of from random policy for testing purposes.')
+
     return parser.parse_args()
 
 
@@ -129,42 +131,39 @@ if __name__ == "__main__":
 
     training_data: EnvDataForIRL
 
-    experiment = parser_args.task
+    task = parser_args.task
     environment = parser_args.environment
 
-    if experiment == 'vsi' and environment == 'firefighters':
+    if task == 'vsi' and environment == 'firefighters':
         parser_args.feature_selection = FeatureSelectionFFEnv.ONE_HOT_OBSERVATIONS
         parser_args.use_one_hot_state_action = True
     if parser_args.environment == 'firefighters':
         value_names = EnvDataForIRLFireFighters.VALUES_NAMES
-        def align_colors(align_func): return get_color_gradient(
-            [1, 0, 0], [0, 0, 1], align_func)
+
         training_data = EnvDataForIRLFireFighters(
             env_name=FIRE_FIGHTERS_ENV_NAME,
             **dict(parser_args._get_kwargs()))
     elif parser_args.environment == 'roadworld':
         value_names = EnvDataForRoadWorld.VALUES_NAMES
-        def align_colors(align_func): return get_linear_combination_of_colors(
-            BASIC_PROFILES, PROFILE_COLORS_VEC, align_func)
+
         training_data = EnvDataForRoadWorld(
             env_name=ROAD_WORLD_ENV_NAME,
             **dict(parser_args._get_kwargs()))
 
-    if experiment == 'vgl':
+    if task == 'vgl':
         vgl_or_vsi = 'vgl'
-        experiment = 'vgl'
-    elif experiment == 'vsi':
+        task = 'vgl'
+    elif task == 'vsi':
         vgl_or_vsi = 'vsi'
-        experiment = 'vsi'
+        task = 'vsi'
         target_align_funcs_to_learned_align_funcs_per_round = []
     else:
-        assert experiment == 'all'
+        assert task == 'all'
         vgl_or_vsi = 'vsi'
-        experiment = 'all'
+        task = 'all'
         target_align_funcs_to_learned_align_funcs_per_round = []
 
-    
-    algorithm= parser_args.algorithm
+    algorithm = parser_args.algorithm
     environment = parser_args.environment
 
     if algorithm == 'me':
@@ -214,31 +213,30 @@ if __name__ == "__main__":
                                                 loss_kwargs=training_data.loss_kwargs,
                                                 active_fragmenter_on=training_data.active_fragmenter_on,
                                                 **training_data.pc_config[vgl_or_vsi])
-    if experiment == 'all':
+    if task == 'all':
         # TODO: for now the only option to learn grounding is Preference comparison quantitative
         vgl_before_vsi_vsl_algo = PreferenceBasedTabularMDPVSL(env=training_data.env,
-                                                reward_net=vsl_algo.reward_net,
-                                                discount=training_data.discount_factor,
-                                                discount_factor_preferences=training_data.discount_factor_preferences,
-                                                log_interval=parser_args.log_interval,
-                                                vgl_reference_policy=training_data.vgl_reference_policy,
-                                                vsi_reference_policy=training_data.vsi_reference_policy,
-                                                vgl_expert_policy=training_data.vgl_expert_policy,
-                                                vsi_expert_policy=training_data.vsi_expert_policy,
-                                                vgl_target_align_funcs=training_data.vgl_targets,
-                                                vsi_target_align_funcs=training_data.vsi_targets,
-                                                rng=training_data.rng,
-                                                learn_stochastic_policy=training_data.learn_stochastic_policy,
-                                                use_quantified_preference=True,
-                                                expert_is_stochastic=training_data.stochastic_expert,
-                                                preference_sampling_temperature=1,
-                                                reward_trainer_kwargs=training_data.reward_trainer_kwargs,
-                                                loss_class=training_data.loss_class,
-                                                loss_kwargs=training_data.loss_kwargs,
-                                                active_fragmenter_on=training_data.active_fragmenter_on,
-                                                **training_data.pc_config['vgl'])
-        
-        
+                                                               reward_net=vsl_algo.reward_net,
+                                                               discount=training_data.discount_factor,
+                                                               discount_factor_preferences=training_data.discount_factor_preferences,
+                                                               log_interval=parser_args.log_interval,
+                                                               vgl_reference_policy=training_data.vgl_reference_policy,
+                                                               vsi_reference_policy=training_data.vsi_reference_policy,
+                                                               vgl_expert_policy=training_data.vgl_expert_policy,
+                                                               vsi_expert_policy=training_data.vsi_expert_policy,
+                                                               vgl_target_align_funcs=training_data.vgl_targets,
+                                                               vsi_target_align_funcs=training_data.vsi_targets,
+                                                               rng=training_data.rng,
+                                                               learn_stochastic_policy=training_data.learn_stochastic_policy,
+                                                               use_quantified_preference=True,
+                                                               expert_is_stochastic=training_data.stochastic_expert,
+                                                               preference_sampling_temperature=1,
+                                                               reward_trainer_kwargs=training_data.reward_trainer_kwargs,
+                                                               loss_class=training_data.loss_class,
+                                                               loss_kwargs=training_data.loss_kwargs,
+                                                               active_fragmenter_on=training_data.active_fragmenter_on,
+                                                               **training_data.pc_config['vgl'])
+
     if parser_args.check_rewards:
         assumed_grounding = training_data.get_assumed_grounding()
         check_coherent_rewards(vsl_algo, align_funcs_to_test=training_data.vsi_targets, real_grounding=assumed_grounding,
@@ -262,13 +260,14 @@ if __name__ == "__main__":
     n_experiment_reps = parser_args.n_experiments
     for rep in range(parser_args.n_experiments):
 
-        if experiment == 'all':
+        if task == 'all':
             assumed_grounding, reward_net_learned_per_al_func, metrics = vgl_before_vsi_vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING,
-                                                                                        use_probabilistic_reward=False,
-                                                                                        n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                        **training_data.pc_train_config['vgl'])
+                                                                                                       use_probabilistic_reward=False,
+                                                                                                       n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
+                                                                                                       **training_data.pc_train_config['vgl'])
             vsl_algo.reward_net = vgl_before_vsi_vsl_algo.reward_net
-        elif experiment == 'vsi':
+            
+        elif task == 'vsi':
             assumed_grounding = training_data.get_assumed_grounding()
 
         pp.pprint((training_data.me_train_config[vgl_or_vsi] if algorithm ==
@@ -312,102 +311,106 @@ if __name__ == "__main__":
             extras += "with_qpref_"
 
     plot_learning_curves(algo=vsl_algo, historic_metric=plot_metric_per_round,
-                         ylim = (0.0, 1.1),
+                         ylim=(0.0, 1.1),
                          name_metric=name_metric if algorithm == 'me' else 'Accuracy',
-                         name_method=f'{parser_args.experiment_name}{algorithm}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{experiment}', 
-                         align_func_colors=align_colors)
+                         name_method=f'{parser_args.experiment_name}{algorithm}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{task}',
+                         align_func_colors=training_data.align_colors)
 
-    testing_profiles_grounding=None
-    if vgl_or_vsi == 'vgl':
+    testing_profiles_grounding = None
+    if task == 'all' or task == 'vgl':
         testing_profiles = training_data.testing_profiles
         testing_profiles_grounding = training_data.vgl_targets
     else:
         testing_profiles = vsl_algo.vsi_target_align_funcs
-    #testing_profiles = [(1.0,3.0), (0.0,1.0)]
+    # testing_profiles = [(1.0,3.0), (0.0,1.0)]
     testing_policy_per_round = []
     random_policy_tests = vsl_algo.get_policy_from_reward_per_align_func(testing_profiles,
-                                                                                      reward_net_per_al=None,
-                                                                                      expert=False, random=True,
-                                                                                      n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                      use_probabilistic_reward=parser_args.use_probabilistic_reward
-                                                                                      )[0]
+                                                                         reward_net_per_al=None,
+                                                                         expert=False, random=True,
+                                                                         n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
+                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward
+                                                                         )[0]
     expert_policy_tests = vsl_algo.get_policy_from_reward_per_align_func(testing_profiles,
-                                                                                      reward_net_per_al=None,
-                                                                                      expert=True, random=False,
-                                                                                      n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                      use_probabilistic_reward=parser_args.use_probabilistic_reward
-                                                                                      )[0]
+                                                                         reward_net_per_al=None,
+                                                                         expert=True, random=False,
+                                                                         n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
+                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward
+                                                                         )[0]
     learned_reward_per_test_al_round = []
 
     for r in range(n_experiment_reps):
-        
-        #print(testing_profiles)
+
+        # print(testing_profiles)
         policy_r, learned_reward_per_test_al_r = vsl_algo.get_policy_from_reward_per_align_func(align_funcs=testing_profiles,
                                                                                                 use_custom_grounding=assumed_grounding if vgl_or_vsi == 'vsi' else None,
                                                                                                 target_to_learned=None if vgl_or_vsi == 'vgl' else target_align_funcs_to_learned_align_funcs_per_round[
                                                                                                     r],
                                                                                                 reward_net_per_al={al:
                                                                                                                    (reward_nets_per_round[r][al] if al in
-                                                                                                                   reward_nets_per_round[r].keys() else
-                                                                                                                   reward_nets_per_round[r][list(reward_nets_per_round[r].keys())[0]
-                                                                                                                                            ]) for al in testing_profiles},
+                                                                                                                    reward_nets_per_round[r].keys() else
+                                                                                                                    reward_nets_per_round[r][list(reward_nets_per_round[r].keys())[0]
+                                                                                                                                             ]) for al in testing_profiles},
                                                                                                 expert=False, random=False, n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
                                                                                                 use_probabilistic_reward=parser_args.use_probabilistic_reward
                                                                                                 )
         learned_reward_per_test_al_round.append(learned_reward_per_test_al_r)
-        #print(learned_reward_per_test_al_r)
+        # print(learned_reward_per_test_al_r)
         testing_policy_per_round.append(policy_r)
-    
-    f1_and_jsd_expert_random, value_expectations_per_ratio = vsl_algo.test_accuracy_for_align_funcs(learned_rewards_per_round=learned_reward_per_test_al_round,
-                                        testing_policy_per_round=testing_policy_per_round,
-                                        expert_policy=expert_policy_tests,
-                                        random_policy=random_policy_tests,
-                                        target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                        n_seeds=parser_args.n_trajs_testing,#parser_args.n_trajs_for_testing,
-                                        seed=training_data.seed+2321489,
-                                        ratios_expert_random=parser_args.expert_to_random_ratios,
-                                        n_samples_per_seed=1,
-                                        testing_align_funcs=testing_profiles)
-    plot_f1_and_jsd(f1_and_jsd_expert_random, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}',
-                                        align_func_colors=align_colors,
-                                        values_names=value_names,
-                                        target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                        show=parser_args.show,value_expectations_per_ratio=value_expectations_per_ratio)
+
+    f1_and_jsd_expert_random, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(learned_rewards_per_round=learned_reward_per_test_al_round,
+                                                                                                    testing_policy_per_round=testing_policy_per_round,
+                                                                                                    expert_policy=expert_policy_tests,
+                                                                                                    random_policy=random_policy_tests,
+                                                                                                    target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+                                                                                                    n_seeds=parser_args.n_trajs_testing,  # parser_args.n_trajs_for_testing,
+                                                                                                    seed=training_data.seed+2321489,
+                                                                                                    ratios_expert_random=parser_args.expert_to_random_ratios,
+                                                                                                    n_samples_per_seed=1,
+                                                                                                    testing_align_funcs=testing_profiles)
+    plot_f1_and_jsd(f1_and_jsd_expert_random, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}',
+                    align_func_colors=training_data.align_colors,
+                    values_names=value_names,
+                    target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+                    show=parser_args.show, value_expectations_per_ratio=value_expectations_per_ratio,
+                    value_expectations_per_ratio_expert=value_expectations_per_ratio_expert)
     if testing_profiles_grounding is not None:
-        f1_and_jsd_expert_random_vgl, value_expectations_per_ratio = vsl_algo.test_accuracy_for_align_funcs(learned_rewards_per_round=learned_reward_per_test_al_round,
-                                        testing_policy_per_round=testing_policy_per_round,
-                                        expert_policy=expert_policy_tests,
-                                        random_policy=random_policy_tests,
-                                        target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                        n_seeds=parser_args.n_trajs_testing,
-                                        seed=training_data.seed+2321489,
-                                        ratios_expert_random=parser_args.expert_to_random_ratios,
-                                        n_samples_per_seed=1,
-                                        testing_align_funcs=testing_profiles_grounding)
-        plot_f1_and_jsd(f1_and_jsd_expert_random_vgl, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}', show=parser_args.show, 
-                                            align_func_colors=align_colors,
-                                            values_names=value_names,
-                                            value_expectations_per_ratio=value_expectations_per_ratio
-                                        )
+        f1_and_jsd_expert_random_vgl, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(learned_rewards_per_round=learned_reward_per_test_al_round,
+                                                                                                            testing_policy_per_round=testing_policy_per_round,
+                                                                                                            expert_policy=expert_policy_tests,
+                                                                                                            random_policy=random_policy_tests,
+                                                                                                            target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+                                                                                                            n_seeds=parser_args.n_trajs_testing,
+                                                                                                            seed=training_data.seed+2321489,
+                                                                                                            ratios_expert_random=parser_args.expert_to_random_ratios,
+                                                                                                            n_samples_per_seed=1,
+                                                                                                            testing_align_funcs=testing_profiles_grounding)
+        plot_f1_and_jsd(f1_and_jsd_expert_random_vgl, namefig=f'{parser_args.experiment_name}{algorithm}_GROUNDING_ERROR_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', 
+                        show=parser_args.show,
+                        target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+                        align_func_colors=training_data.align_colors,
+                        values_names=value_names,
+                        value_expectations_per_ratio=value_expectations_per_ratio,
+                        value_expectations_per_ratio_expert=value_expectations_per_ratio_expert
+                        )
+    print("Plotting learned and expert reward pairs")
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl=vgl_or_vsi,
                                          target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                         namefig=f'{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}', show=parser_args.show)
-
+                                         namefig=f'{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
+    
+    print("Plotting learned and expert policies")
     plot_learned_to_expert_policies(vsl_algo=vsl_algo, expert_policy=training_data.vgl_expert_policy,
                                     target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                    vsi_or_vgl=vgl_or_vsi, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}',
+                                    vsi_or_vgl=vgl_or_vsi, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}',
                                     learnt_policy=policies_per_round, show=parser_args.show)
-
+    print("Plotting learned and expert rewards")
     plot_learned_and_expert_rewards(vsl_algo=vsl_algo,
                                     learned_rewards_per_al_func=learned_rewards_per_round,
                                     target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                                     vsi_or_vgl=vgl_or_vsi,
-                                    namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}', show=parser_args.show)
-
+                                    namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
+    print("Plotting learned and expert occupancy measures")
     if algorithm == 'me':
         plot_learned_and_expert_occupancy_measures(vsl_algo=vsl_algo, expert_policy=training_data.vgl_expert_policy,
                                                    target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                                                    learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl=vgl_or_vsi,
-                                                   namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{experiment}',show=parser_args.show)
-
-    
+                                                   namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)

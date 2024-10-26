@@ -12,13 +12,11 @@ import torch as th
 import torch.nn.functional as F
 from torch import nn
 from imitation.util import util
-from src.network_env import RoadWorldGym
 from typing import cast
 
 from stable_baselines3.common import preprocessing
 from itertools import chain
 
-from src.values_and_costs import BASIC_PROFILES, VALUE_COSTS_PRE_COMPUTED_FEATURES
 from utils import CHECKPOINTS
 
 
@@ -104,10 +102,11 @@ class LinearAlignmentLayer(nn.Linear):
             b_bounded = self.bias
         return w_bounded, b_bounded
 
+
 class PositiveLinearAlignmentLayer(LinearAlignmentLayer):
-    def __init__(self, in_features, out_features, bias = False, device=None, dtype=None, data=None):
+    def __init__(self, in_features, out_features, bias=False, device=None, dtype=None, data=None):
         super().__init__(in_features, out_features, False, device, dtype, data)
-    
+
     def get_alignment_layer(self):
         w_bounded = nn.functional.softplus(self.weight)
         # assert th.allclose(w_bounded, nn.functional.softmax(self.weight))
@@ -115,6 +114,8 @@ class PositiveLinearAlignmentLayer(LinearAlignmentLayer):
         if self.use_bias:
             b_bounded = nn.functional.sigmoid(self.bias)
         return w_bounded, b_bounded
+
+
 class ConvexAlignmentLayer(LinearAlignmentLayer):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype, data)
@@ -167,9 +168,9 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             return
         self.cur_value_grounding = grounding
 
-    def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None, 
-                 observation_space=None, action_space=None, 
-                 use_state=False, use_action=False, use_next_state=True, 
+    def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None,
+                 observation_space=None, action_space=None,
+                 use_state=False, use_action=False, use_next_state=True,
                  use_done=True, use_one_hot_state_action=False,
                  mode=TrainingModes.VALUE_GROUNDING_LEARNING,
                  clamp_rewards=None,
@@ -229,15 +230,14 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def _forward(self, features, align_func=None, grounding=None):
 
         x = self.value_grounding_layer(custom_layer=grounding)(features)
-        
+
         x = self.value_system_layer(align_func=align_func)(x)
-        
+
         return x
 
     def forward_value_groundings(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor):
         inputs_concat = self.construct_input(state, action, next_state, done)
         return self.value_grounding_layer(custom_layer=self.cur_value_grounding)(inputs_concat)
-    
 
     def forward(self, state: Tensor, action: Tensor, next_state: Tensor, done: Tensor) -> Tensor:
         inputs_concat = self.construct_input(state, action, next_state, done)
@@ -359,10 +359,10 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                  reward_bias=0,
                  use_bias=False,
                  negative_grounding_layer=False,
-                 clamp_rewards = None,
+                 clamp_rewards=None,
                  **kwargs):
 
-        if isinstance(environment, RoadWorldGym):
+        if hasattr(environment, 'last_profile'):
             self.cur_align_func = environment.last_profile
 
         self.negative_grounding_layer = negative_grounding_layer
@@ -447,11 +447,13 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                     th.as_tensor([list(new_align_func)]).clone())
 
                 self.trained_profile_net.load_state_dict(state_dict)
+
     def clamp_tensor(self, x):
         if self.clamp_rewards is not None:
             x = th.clamp(x, self.clamp_rewards[0], self.clamp_rewards[1])
-        
+
         return x
+
     def value_grounding_layer(self, custom_layer=None):
         if custom_layer is None or self.mode in [TrainingModes.VALUE_GROUNDING_LEARNING, TrainingModes.SIMULTANEOUS]:
             if self.negative_grounding_layer:
@@ -501,7 +503,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                 pt = th.tensor(align_func, requires_grad=False,
                                dtype=th.float32)
                 x = F.linear(x, pt)
-                x = self.clamp_tensor(self.final_activation(x) + self.reward_bias)
+                x = self.clamp_tensor(
+                    self.final_activation(x) + self.reward_bias)
                 return x
         elif self.mode == TrainingModes.SIMULTANEOUS or self.mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             def _call(x):
@@ -606,7 +609,6 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
         self.trained_profile_net = ConvexTensorModule(
             size=self.hid_sizes[-1], init_tuple=new_align_func)
         self.cur_align_func = None
-        
 
     def fix_alignment_function(self, align_func=None, random=True):
         if align_func is None:
@@ -755,47 +757,3 @@ def squeeze_r(r_output: th.Tensor) -> th.Tensor:
         return th.squeeze(r_output, 1)
     assert r_output.ndim == 1
     return r_output
-
-
-def cost_model_from_reward_net(reward_net: LinearVSLRewardFunction, env: RoadWorldGym, precalculated_rewards_per_pure_pr=None):
-
-    def apply(profile, normalization):
-        if np.allclose(list(reward_net.get_learned_profile()), list(profile)):
-            def call(state_des):
-                data = th.tensor(
-                    [[VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*env.get_separate_features(
-                        state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],],
-                    dtype=reward_net.dtype)
-
-                return -squeeze_r(reward_net.forward(None, None, data, th.tensor([state_des[0] == state_des[1], ])))
-            return call
-        else:
-            if precalculated_rewards_per_pure_pr is not None:
-
-                def call(state_des):
-                    if profile in BASIC_PROFILES:
-                        return -precalculated_rewards_per_pure_pr[profile][state_des[0], state_des[1]]
-
-                    final_cost = 0.0
-                    for i, pr in enumerate(BASIC_PROFILES):
-                        final_cost += profile[i] * \
-                            precalculated_rewards_per_pure_pr[pr][state_des[0],
-                                                                  state_des[1]]
-                    return -final_cost
-                return call
-            else:
-                def call(state_des):
-                    prev_mode = reward_net.mode
-                    reward_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
-                    reward_net.set_alignment_function(profile)
-                    data = th.tensor(
-                        [[VALUE_COSTS_PRE_COMPUTED_FEATURES[v](*env.get_separate_features(
-                            state_des[0], state_des[1], normalization)) for v in VALUE_COSTS_PRE_COMPUTED_FEATURES.keys()],],
-                        dtype=reward_net.dtype)
-                    result = squeeze_r(reward_net.forward(
-                        None, None, data, th.tensor([state_des[0] == state_des[1], ])))
-                    reward_net.set_mode(prev_mode)
-                    return -result
-                return call
-
-    return apply

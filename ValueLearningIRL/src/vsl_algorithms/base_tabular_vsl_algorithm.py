@@ -47,10 +47,14 @@ from scipy.stats import entropy
 from numpy.linalg import norm
 import numpy as np
 def JSD(P, Q):
-    _P = P / norm(P, ord=1)
-    _Q = Q / norm(Q, ord=1)
-    _M = 0.5 * (_P + _Q)
-    return 0.5 * (entropy(_P, _M) + entropy(_Q, _M))
+    n = len(P)
+    avg_jsd = 0.0
+    for p,q in zip(P,Q):
+        dist_p = np.array([p,1.0-p])
+        dist_q = np.array([q,1.0-q])
+        M = 0.5 * (dist_p + dist_q)
+        avg_jsd += ((0.5 * (entropy(dist_p, M) + entropy(dist_q,M)))/n)
+    return avg_jsd
 
 def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False):
     """
@@ -561,16 +565,17 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         targets = testing_align_funcs
         basic_profiles = [tuple(v) for v in np.eye(self.reward_net.hid_sizes[-1])]
         
-        expert_trajs = expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+        expert_trajs = {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                          seed=seed,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[testing_align_funcs[0],],with_reward=True)
-        random_trajs = random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                         with_alignfunctions=[al,],with_reward=True) for al in testing_align_funcs}
+        random_trajs = {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                          seed=seed,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[testing_align_funcs[0],],with_reward=True)
+                                                         with_alignfunctions=[al,],with_reward=True) for al in testing_align_funcs}
         metrics_per_ratio = dict()
         value_expectations_per_ratio  = dict()
+        value_expectations_per_ratio_expert = dict()
 
         policy_trajs = {rep: {al: testing_policy_per_round[rep].obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                          seed=seed,stochastic=self.stochastic_expert,
@@ -579,21 +584,24 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         for rep in range(len(testing_policy_per_round))}
         for ratio in ratios_expert_random:
             
-            all_trajs = [*((np.random.permutation(np.asarray(expert_trajs))[0:floor(n_seeds*ratio)]).tolist()), 
-                         *((np.random.permutation(np.asarray(random_trajs))[0:ceil(n_seeds*(1-ratio))]).tolist())]
+            
             
             qualitative_loss_per_al_func = {al: [] for al in testing_align_funcs}
             ce_per_al_func = {al: [] for al in testing_align_funcs}
 
             v_exps = {al: [] for al in testing_align_funcs}
-
+            v_exps_expert = {al: [] for al in testing_align_funcs}
             for rep, reward_rep in enumerate(learned_rewards_per_round):
                 
                 for al in testing_align_funcs:
                     
+                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[al]))[0:floor(n_seeds*ratio)]).tolist()), 
+                         *((np.random.permutation(np.asarray(random_trajs[al]))[0:ceil(n_seeds*(1-ratio))]).tolist())]
+                    
                     returns_expert = []
                     returns_estimated = []
                     returns_real_from_learned_policy = {alb: [] for alb in basic_profiles}
+                    returns_real_from_expert_policy = {alb: [] for alb in basic_profiles}
                     for i in range(len(all_trajs)):
                         ti = all_trajs[i]
                         
@@ -603,13 +611,20 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         returns_expert.append(real_return_i)
                         returns_estimated.append(estimated_return_i)
                         
-                    for lti in policy_trajs[rep][al]:
-                        for al_basic in basic_profiles:
+                    
+                    for al_basic in basic_profiles:
+                        for lti in policy_trajs[rep][al]:
                             real_return_in_learned_pol = rollout.discounted_sum(
                                 self.env.reward_matrix_per_align_func(al_basic)[lti.obs[:-1], lti.acts], 
                                 gamma=self.discount)
                             
                             returns_real_from_learned_policy[al_basic].append(real_return_in_learned_pol)
+                        for exp in expert_trajs[al]:
+                            
+                            real_return_basic_expert = rollout.discounted_sum(
+                                self.env.reward_matrix_per_align_func(al_basic)[exp.obs[:-1], exp.acts], 
+                                gamma=self.discount)
+                            returns_real_from_expert_policy[al_basic].append(real_return_basic_expert)
                     
                     probs_real = []
 
@@ -654,9 +669,13 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     v_exps[al].append({
                         alb: np.mean(returns_real_from_learned_policy[alb]) for alb in basic_profiles
                         })
-                        
+                    
+                    v_exps_expert[al].append({
+                        alb: np.mean(returns_real_from_expert_policy[alb]) for alb in basic_profiles
+                        })
 
             metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': ce_per_al_func}
             value_expectations_per_ratio[ratio] = v_exps # TODO ratio is not actually needed...
+            value_expectations_per_ratio_expert[ratio] = v_exps_expert # TODO ratio is not actually needed...
          #TODO: poner todo per ratio!
-        return metrics_per_ratio, value_expectations_per_ratio
+        return metrics_per_ratio, value_expectations_per_ratio, value_expectations_per_ratio_expert

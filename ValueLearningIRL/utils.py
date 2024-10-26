@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.values_and_costs import BASIC_PROFILES
+from roadworld_env_use_case.values_and_costs import BASIC_PROFILES
+
 
 MODULE_PATH = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINTS = os.path.join(MODULE_PATH, "checkpoints/")
@@ -244,7 +245,7 @@ def train_test_split_initial_state_distributions(n_states, split_percentage=0.7)
     # Output the distributions
     return first_distribution, second_distribution
 
-def sample_example_profiles(profile_variety, n_values=3) -> List:
+def sample_example_profiles(profile_variety, n_values=3, basic_profiles=BASIC_PROFILES) -> List:
     ratios = np.linspace(0, 1, profile_variety)
 
     if n_values < 1:
@@ -274,8 +275,8 @@ def sample_example_profiles(profile_variety, n_values=3) -> List:
     
     if n_values >= 3:
         profile_set = list(set(tuple(float(f"{a_i:0.3f}") for a_i in a) for l in profile_combinations for a in l))
-        [profile_set.remove(pr) for pr in BASIC_PROFILES]
-        for pr in reversed(BASIC_PROFILES):
+        [profile_set.remove(pr) for pr in basic_profiles]
+        for pr in reversed(basic_profiles):
             profile_set.insert(0, pr)
 
     a = np.array(profile_set, dtype=np.dtype([(f'{i}', float) for i in range(n_values)]))

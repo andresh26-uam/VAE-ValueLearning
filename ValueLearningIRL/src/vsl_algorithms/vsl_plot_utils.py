@@ -471,19 +471,21 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
                                         align_func_colors=None,
                                         usecmap = 'viridis',
                                         value_expectations_per_ratio=None,
+                                        value_expectations_per_ratio_expert=None,
                                         target_align_funcs_to_learned_align_funcs = None,
                                         values_names = None,
                                     ):
     
     # Compute stats for 'f1' and 'ce'
     ratios, f1_means, f1_stds, f1_labels, n = compute_stats(f1_and_jsd_per_ratio, 'f1')
-    ratios, ce_means, ce_stds, ce_labels, n = compute_stats(f1_and_jsd_per_ratio, 'jsd')
+    ratios, jsd_means, jsd_stds, ce_labels, n = compute_stats(f1_and_jsd_per_ratio, 'jsd')
     
     # Plot 'f1'
     plt.figure(figsize=(16, 8))
     
     viridis = cm.get_cmap(usecmap, len(f1_means))  # Get 'viridis' colormap with number of AL strategies
-    
+    target_al_func_ro_mean_align_func = None
+
     for idx, al in enumerate(f1_means.keys()):
         if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
             color = align_func_colors(al)
@@ -491,6 +493,8 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             color = viridis(idx / (len(f1_means) - 1))
 
         if target_align_funcs_to_learned_align_funcs is not None:
+            if target_al_func_ro_mean_align_func is None:
+                target_al_func_ro_mean_align_func = {}
             all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
                 target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
 
@@ -500,18 +504,20 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             else:
                 learned_al = all_learned_al
                 std_learned_al = [0 for _ in learned_al]
-
+            
             orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
             std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
             learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
+            learned_al_short = tuple([float("{0:.2f}".format(v)) for v in learned_al])
             label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
+            target_al_func_ro_mean_align_func[al] = learned_al_short
         else:
             label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
         plt.errorbar(ratios,f1_means[al], yerr=f1_stds[al], label=label
                      , capsize=5, marker='o',color=color,ecolor=color)
 
-    plt.title(f'Avg. Acc score over {n} runs')
-    plt.ylabel('Acc')
+    plt.title(f'Avg. F1 score over {n} runs')
+    plt.ylabel('F1 score (weighted)')
     plt.xlabel('Ratios')
     plt.ylim((0.0,1.1))
     
@@ -519,7 +525,7 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
     plt.legend(title="Alignment function", bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     
-    plt.savefig('results/'+ 'acc_score_' + namefig + f'_{n}_runs.pdf')
+    plt.savefig('results/'+ 'f1_score_' + namefig + f'_{n}_runs.pdf')
     # Show the plot
     if show:
         plt.show()
@@ -527,7 +533,7 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
     plt.figure(figsize=(16, 8))
     
 
-    for al in ce_means.keys():
+    for al in jsd_means.keys():
         color = align_func_colors(al)
         if target_align_funcs_to_learned_align_funcs is not None:
             all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
@@ -546,7 +552,7 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
         else:
             label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
-        plt.errorbar(ratios,ce_means[al], yerr=ce_stds[al], label=label
+        plt.errorbar(ratios,jsd_means[al], yerr=jsd_stds[al], label=label
                      , capsize=5, marker='o',color=color,ecolor=color)
 
     plt.title(f'Avg. Jensen Shannon div. over {n} runs')
@@ -555,78 +561,126 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
     plt.legend(title="Alignment function", bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
 
-    plt.savefig('results/' + 'jsd_score' + namefig + f'_{n}_runs.pdf')
+    plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
     # Show the plot
     if show:
         plt.show()
         
     plt.close()
 
-    save_stats_to_csv_and_latex(f1_means, f1_stds, ce_means, ce_stds, f1_labels, namefig, n, value_expectations_per_ratio, values_names)
+    save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, f1_labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=target_al_func_ro_mean_align_func)
 
 
-def save_stats_to_csv_and_latex(f1_means, f1_stds, ce_means, ce_stds, labels, namefig, n, value_expectations_per_ratio, values_names):
+def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=None):
     # File names
-    csv_file = f'results/{namefig}_{n}_runs.csv'
-    latex_file = f'results/{namefig}_{n}_runs.tex'
+    csv_file_1 = f'results/tables/{namefig}_{n}_runs_metrics_table.csv'
+    csv_file_2 = f'results/tables/{namefig}_{n}_runs_expected_alignments_table.csv'
+    latex_file_1 = f'results/tables/{namefig}_{n}_runs_metrics_table.tex'
+    latex_file_2 = f'results/tables/{namefig}_{n}_runs_expected_alignments_table.tex'
 
-    # Prepare data for saving: columns [Label, F1@0, F1@1, JSD@0, JSD@1]
-    pprint.pprint(value_expectations_per_ratio)
-    v_ratio0 = value_expectations_per_ratio[min(value_expectations_per_ratio.keys())]
-    
-    data = v_ratio0
-    print(values_names)
-    
-    # Initialize data for CSV and LaTeX
-    data_rows = []
-    for label in labels:
-        # Gather F1 and JSD stats
-        f1_at_0 = f'{f1_means[label][0]:.3f} ± {f1_stds[label][0]:.3f}'  # F1 at ratio 0 with ± STD
-        f1_at_1 = f'{f1_means[label][1]:.3f} ± {f1_stds[label][1]:.3f}'  # F1 at ratio 1 with ± STD
-        jsd_at_0 = f'{ce_means[label][0]:.3e} ± {ce_stds[label][0]:.3e}'    # JSD at ratio 0 with ± STD
-        jsd_at_1 = f'{ce_means[label][1]:.3e} ± {ce_stds[label][1]:.3e}'    # JSD at ratio 1 with ± STD
+    # Process value expectations for the learned and expert policies
+    value_expectations_learned = value_expectations_per_ratio[max(value_expectations_per_ratio.keys())]
+    value_expectations_expert = value_expectations_per_ratio_expert[max(value_expectations_per_ratio_expert.keys())]
 
-        additional_values = []
-        # Calculate means and stds for the nested data (switching the order of the first and second keys)
-        label_data = []
+    # Initialize data rows for each table
+    metrics_rows = []
+    expected_alignments_rows = []
+
+    for target_vs_function in labels:
+        # Gather F1 and JSD stats for metrics table
+        f1_at_0 = f'{f1_means[target_vs_function][0]:.3f} ± {f1_stds[target_vs_function][0]:.3f}'
+        f1_at_1 = f'{f1_means[target_vs_function][1]:.3f} ± {f1_stds[target_vs_function][1]:.3f}'
+        jsd_at_0 = f'{jsd_means[target_vs_function][0]:.3e} ± {jsd_stds[target_vs_function][0]:.3e}'
+        jsd_at_1 = f'{jsd_means[target_vs_function][1]:.3e} ± {jsd_stds[target_vs_function][1]:.3e}'
+
+        # Prepare metrics row with conditional "Learned VS" column
+        metrics_row = [str(target_vs_function), f1_at_0, f1_at_1, jsd_at_0, jsd_at_1]
+        if target_align_funcs_to_learned_align_funcs:
+            learned_vs = target_align_funcs_to_learned_align_funcs[target_vs_function]
+            metrics_row.insert(1, learned_vs)  # Insert "Learned VS" as the second column
+        metrics_rows.append(metrics_row)
+
+        # Prepare expert and learned policy averages for policy table
+        expert_values = []
+        learned_values = []
         for alb in values_names.keys():
+            expert_data = [data_rep[alb] for data_rep in value_expectations_expert[target_vs_function]]
+            learned_data = [data_rep[alb] for data_rep in value_expectations_learned[target_vs_function]]
+            expert_values.append(f'{np.mean(expert_data):.3f} ± {np.std(expert_data):.3f}')
+            learned_values.append(f'{np.mean(learned_data):.3f} ± {np.std(learned_data):.3f}')
+        
+        expected_alignments_row = [str(target_vs_function), *expert_values, *learned_values]
+        if target_align_funcs_to_learned_align_funcs:
+            expected_alignments_row.insert(1, str(learned_vs))  # Insert "Learned VS" as the second column
+        expected_alignments_rows.append(expected_alignments_row)
+        print(expected_alignments_rows)
 
-            label_data = [data_rep[alb] for data_rep in data[label]]
-            
-            # TODO terminar esto....
-
-            additional_values.append(f'{np.mean(label_data):.3f} ± {np.std(label_data):.3f}')  # Format mean ± STD
-
-        # Append the row for each label
-        data_rows.append([str(label), f1_at_0, f1_at_1, jsd_at_0, jsd_at_1, *additional_values])
-
-    # Write to CSV
-    with open(csv_file, 'w', newline='') as f:
+    # Write metrics table to CSV
+    with open(csv_file_1, 'w', newline='') as f:
         writer = csv.writer(f)
-        header = ['Label', 'F1@0 ± STD', 'F1@1 ± STD', 'JSD@0 ± STD', 'JSD@1 ± STD'] + list(values_names.values())
-        writer.writerow(header)  # Write header
-        writer.writerows(data_rows)  # Write data rows
+        header = ['VS Function']
+        if target_align_funcs_to_learned_align_funcs:
+            header.append('Learned VS')
+        header.extend(['F1 (random)', 'F1 (expert)', 'JSD (random)', 'JSD (expert)'])
+        writer.writerow(header)
+        writer.writerows(metrics_rows)
 
-    # Save to LaTeX
-    with open(latex_file, 'w') as f:
+    # Write policy table to CSV
+    with open(csv_file_2, 'w', newline='') as f:
+        writer = csv.writer(f)
+        header = ['VS Function']
+        if target_align_funcs_to_learned_align_funcs:
+            header.append('Learned VS')
+        header.extend([f'Expert Policy Avg. \A_{{{v}}}' for v in values_names.values()])
+        header.extend([f'Learned Policy Avg. \A_{{{v}}}' for v in values_names.values()])
+        writer.writerow(header)
+        writer.writerows(expected_alignments_rows)
+
+    # Write metrics table to LaTeX
+    with open(latex_file_1, 'w') as f:
         f.write('\\begin{table}[ht]\n')
         f.write('\\centering\n')
-        f.write(f'\\caption{{Results for {namefig} over {n} runs}}\n')
-        f.write('\\begin{tabular}{|l|c|c|c|c|' + 'c|' * len(values_names) + '}\n')  # Extra columns for additional values
+        f.write(f'\\caption{{Metrics Results for {namefig} over {n} runs}}\n')
+        col_format = '|l|'
+        if target_align_funcs_to_learned_align_funcs:
+            col_format += 'l|'
+        col_format += 'c|c|c|c|'
+        f.write(f'\\begin{{tabular}}{{{col_format}}}\n')
         f.write('\\hline\n')
-        
-        # Header for LaTeX table
-        header_latex = 'VS Function & F1@0 ± STD & F1@1 ± STD & JSD@0 ± STD & JSD@1 ± STD'
-        for label in values_names.values():
-            header_latex += f' & {label}'
+        header_latex = 'VS Function'
+        if target_align_funcs_to_learned_align_funcs:
+            header_latex += ' & Learned VS'
+        header_latex += ' & F1 (random) & F1 (expert) & JSD (random) & JSD (expert)'
         f.write(header_latex + ' \\\\\n')
         f.write('\\hline\n')
-        
-        for row in data_rows:
-            print(row)
-            f.write(' & '.join(row) + ' \\\\\n')  # Write each row in LaTeX format
+        for row in metrics_rows:
+            f.write(' & '.join([str(v) for v in row]) + ' \\\\\n')
         f.write('\\hline\n')
         f.write('\\end{tabular}\n')
         f.write('\\end{table}\n')
 
-    print(f"Results saved in CSV: {csv_file} and LaTeX: {latex_file}")
+    # Write policy table to LaTeX
+    with open(latex_file_2, 'w') as f:
+        f.write('\\begin{table}[ht]\n')
+        f.write('\\centering\n')
+        f.write(f'\\caption{{Policy Averages for {namefig} over {n} runs}}\n')
+        col_format = '|l|'
+        if target_align_funcs_to_learned_align_funcs:
+            col_format += 'l|'
+        col_format += 'c|' * (len(values_names) * 2)
+        f.write(f'\\begin{{tabular}}{{{col_format}}}\n')
+        f.write('\\hline\n')
+        header_latex = 'VS Function'
+        if target_align_funcs_to_learned_align_funcs:
+            header_latex += ' & Learned VS'
+        header_latex += ''.join([f' & Expert Policy Avg. \\A_{{{v}}}' for v in values_names.values()])
+        header_latex += ''.join([f' & Learned Policy Avg. \\A_{{{v}}}' for v in values_names.values()])
+        f.write(header_latex + ' \\\\\n')
+        f.write('\\hline\n')
+        for row in expected_alignments_rows:
+            f.write(' & '.join([str(v) for v in row]) + ' \\\\\n')
+        f.write('\\hline\n')
+        f.write('\\end{tabular}\n')
+        f.write('\\end{table}\n')
+
+    print(f"Results saved in CSV: {csv_file_1}, {csv_file_2} and LaTeX: {latex_file_1}, {latex_file_2}")

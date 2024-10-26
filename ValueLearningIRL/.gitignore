@@ -11,4 +11,7 @@ results/*.pdf
 *.pickle
 results/*.csv
 results/*.tex
+results/tables/*
+plots/*.pdf
+plots/*.png
 .DS-Store
