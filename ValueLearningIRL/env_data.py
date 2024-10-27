@@ -190,10 +190,10 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     DEFAULT_HORIZON = 30
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
     DEFAULT_N_SEEDS = 100
-    DEFAULT_N_SEEDS_MINIBATCH = 30
+    DEFAULT_N_SEEDS_MINIBATCH = 10
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 10
-    DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 5
+    DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 10
     DEFAULT_FEATURE_SELECTION = FeatureSelectionFFEnv.ONE_HOT_FEATURES
     VALUES_NAMES = {(1.0, 0.0): 'Prof', (0.0, 1.0): 'Prox'}
 
@@ -306,7 +306,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.environment_is_stochastic = False
 
         self.vgl_targets = [(1.0, 0.0), (0.0, 1.0)]
-        self.vsi_optimizer_kwargs = {"lr": 0.05, "weight_decay": 0.0000}
+        self.vsi_optimizer_kwargs = {"lr": 0.05, "weight_decay": 0.0000} # FOR DEMO_OM_TRUE
+        #self.vsi_optimizer_kwargs = {"lr": 0.01, "weight_decay": 0.0000} # DEMO_OM_FALSE
         self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.000}
 
         self.use_state = True
@@ -317,6 +318,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.n_values = 2
         self.testing_profiles = list(itertools.product(
             [0.0, 0.2, 0.4, 0.6, 0.8, 1.0], [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]))
+        self.testing_profiles.remove((0.0, 0.0))
         # self.clamp_rewards = [-1.0,1.0]
 
         # self.basic_layer_classes = [nn.Linear, ConvexAlignmentLayer]
@@ -325,7 +327,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs = {
-            'value_iteration_tolerance': 0.0000001, 'iterations': 100}
+            'value_iteration_tolerance': 0.0000001, 'iterations': 10000}
         # self.vgl_reference_policy = 'random'
         # self.vsi_reference_policy = 'random'
 
@@ -373,6 +375,12 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     @property
     def me_config(self):
         base = super().me_config
+        base['vsi'].update(dict(
+            vc_diff_epsilon=1e-3,
+            gradient_norm_epsilon=1e-7,
+            use_feature_expectations_for_vsi=False,
+            demo_om_from_policy=True
+        ))
         return base
 
     @property

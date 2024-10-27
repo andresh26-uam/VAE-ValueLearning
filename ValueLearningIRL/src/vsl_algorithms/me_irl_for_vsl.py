@@ -393,6 +393,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 self._print_statistics(t, visitations, expert_visitations, loss, reward,
                                        target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
                 break
+        del self._learning_policy
         return learned_al_function
 
     def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10) -> np.ndarray:
@@ -810,8 +811,11 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def mce_vsl_loss_calculation(self, target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
                                  obs_mat: th.Tensor = None, action_mat: th.Tensor = None,
                                  obs_action_mat: th.Tensor = None):
-        use_action_visitations = self.current_net.use_action or self.current_net.use_next_state
-
+        use_action_visitations = self.current_net.use_action or self.current_net.use_next_state or self.current_net.use_one_hot_state_action
+        #use_action_visitations = False
+        if not hasattr(self, '_learning_policy'):
+            self._learning_policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(
+                    policy_per_va_dict={}, env=self.env)
         prev_pi = None
         if self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             prev_pi = self.mce_partition_fh_per_align_func(
@@ -833,10 +837,9 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 if prev_pi is None:
                     prev_pi = self.mce_partition_fh_per_align_func(
                         target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
-                policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(
-                    policy_per_va_dict={target_align_func: prev_pi}, env=self.env)
-
-                trajs = policy.obtain_trajectories(
+                
+                self._learning_policy.set_policy_for_va(target_align_func, prev_pi)
+                trajs = self._learning_policy.obtain_trajectories(
                     n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, with_alignfunctions=[
                         target_align_func], t_max=self.env.horizon, exploration=0
                 )
@@ -869,7 +872,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 loss = th.dot(weights_th, predicted_r)
             else:  # Use action in the reward.
                 if predicted_r.shape == weights_th.shape:
-                    loss = th.mean(th.multiply(predicted_r, weights_th))
+                    loss = th.multiply(predicted_r, weights_th).mean()
                 else:
                     next_state_prob = th.as_tensor(self.env.transition_matrix, dtype=self.current_net.dtype,
                                                    device=self.current_net.device)

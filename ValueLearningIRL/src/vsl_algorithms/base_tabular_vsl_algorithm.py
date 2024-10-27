@@ -509,7 +509,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         else:
             prev_net = self.current_net
             for w in align_funcs: 
-
+                learned_w_or_real_w = w
                 if expert:
                     deterministic = not self.stochastic_expert
                     reward = self.env.reward_matrix_per_align_func(w)
@@ -523,8 +523,10 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     self.current_net = reward_net_per_al[w]
                     if target_to_learned is not None and w in target_to_learned.keys():
                         learned_w_or_real_w = target_to_learned[w]
+                        
                     else:
                         learned_w_or_real_w = w
+                    
                     ret = self.calculate_rewards(learned_w_or_real_w, grounding=assumed_grounding, 
                                                     obs_mat=self.torch_obs_mat,
                                                     action_mat=self.torch_action_mat,
@@ -536,8 +538,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         _,reward = ret
                     else:
                         raise NotImplementedError("Probabilistic reward is yet to be tested")
-                        
-                    
+                print(w, learned_w_or_real_w) 
+                print(reward[350,:], self.env.reward_matrix_per_align_func(w)[350,:])    
                 _,_, assumed_expert_pi = mce_partition_fh(self.env, discount=self.discount,
                                                     reward=reward,
                                                     approximator_kwargs=self.approximator_kwargs,
@@ -565,80 +567,82 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         targets = testing_align_funcs
         basic_profiles = [tuple(v) for v in np.eye(self.reward_net.hid_sizes[-1])]
         
-        expert_trajs = {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
-                                                         seed=seed,stochastic=self.stochastic_expert,
-                                                         end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True) for al in testing_align_funcs}
-        random_trajs = {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
-                                                         seed=seed,stochastic=self.stochastic_expert,
-                                                         end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True) for al in testing_align_funcs}
         metrics_per_ratio = dict()
-        value_expectations_per_ratio  = dict()
-        value_expectations_per_ratio_expert = dict()
 
-        policy_trajs = {rep: {al: testing_policy_per_round[rep].obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
-                                                         seed=seed,stochastic=self.stochastic_expert,
+        expert_trajs = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                         seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True) for al in testing_align_funcs}
+                                                         with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                    for rep in range(len(testing_policy_per_round))}
+        random_trajs = {rep: {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                                seed=(seed+34355)*rep,stochastic=self.stochastic_expert,
+                                                                end_trajectories_when_ended=True,
+                                                                with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                for rep in range(len(testing_policy_per_round))}
+        policy_trajs = {rep: {al: testing_policy_per_round[rep].obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                         seed=(seed+74571)*rep,stochastic=self.stochastic_expert,
+                                                         end_trajectories_when_ended=True,
+                                                         with_alignfunctions=[al,],with_reward=True,alignments_in_env=[al,]) for al in testing_align_funcs}
                         for rep in range(len(testing_policy_per_round))}
+        real_matrix = {al: self.env.reward_matrix_per_align_func(al) for al in testing_align_funcs}
+        value_expectations = {al: [] for al in testing_align_funcs}
+        value_expectations_expert = {al: [] for al in testing_align_funcs}
         for ratio in ratios_expert_random:
             
             
             
             qualitative_loss_per_al_func = {al: [] for al in testing_align_funcs}
             ce_per_al_func = {al: [] for al in testing_align_funcs}
-
-            v_exps = {al: [] for al in testing_align_funcs}
-            v_exps_expert = {al: [] for al in testing_align_funcs}
+            
             for rep, reward_rep in enumerate(learned_rewards_per_round):
                 
                 for al in testing_align_funcs:
-                    
-                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[al]))[0:floor(n_seeds*ratio)]).tolist()), 
-                         *((np.random.permutation(np.asarray(random_trajs[al]))[0:ceil(n_seeds*(1-ratio))]).tolist())]
+                    real_matrix_al = real_matrix[al]
+                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[rep][al]))[0:floor(n_seeds*ratio)]).tolist()), 
+                         *((np.random.permutation(np.asarray(random_trajs[rep][al]))[0:ceil(n_seeds*(1.0-ratio))]).tolist())]
                     
                     returns_expert = []
                     returns_estimated = []
                     returns_real_from_learned_policy = {alb: [] for alb in basic_profiles}
                     returns_real_from_expert_policy = {alb: [] for alb in basic_profiles}
-                    for i in range(len(all_trajs)):
-                        ti = all_trajs[i]
+                    for ti in all_trajs:
+                        
                         
                         estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
-                        real_return_i = rollout.discounted_sum(self.env.reward_matrix_per_align_func(al)[ti.obs[:-1], ti.acts], gamma=self.discount)
+                        real_return_i = rollout.discounted_sum(real_matrix_al[ti.obs[:-1], ti.acts], gamma=self.discount)
                         
+                        assert np.sum(ti.rews) == np.sum(real_return_i)
                         returns_expert.append(real_return_i)
                         returns_estimated.append(estimated_return_i)
+                    returns_expert = np.asarray(returns_expert)
+                    returns_estimated = np.asarray(returns_estimated)    
+                    if float(ratio) == 1.0:
+                        for al_basic in basic_profiles:
+                            rb = real_matrix[al_basic]
+                            for lti in policy_trajs[rep][al]:
+                                real_return_in_learned_pol = rollout.discounted_sum(
+                                    rb[lti.obs[:-1], lti.acts], 
+                                    gamma=self.discount)
+                                
+                                returns_real_from_learned_policy[al_basic].append(real_return_in_learned_pol)
+                            for exp in expert_trajs[rep][al]:
+                                
+                                real_return_basic_expert = rollout.discounted_sum(
+                                    rb[exp.obs[:-1], exp.acts], 
+                                    gamma=self.discount)
+                                returns_real_from_expert_policy[al_basic].append(real_return_basic_expert)
                         
                     
-                    for al_basic in basic_profiles:
-                        for lti in policy_trajs[rep][al]:
-                            real_return_in_learned_pol = rollout.discounted_sum(
-                                self.env.reward_matrix_per_align_func(al_basic)[lti.obs[:-1], lti.acts], 
-                                gamma=self.discount)
-                            
-                            returns_real_from_learned_policy[al_basic].append(real_return_in_learned_pol)
-                        for exp in expert_trajs[al]:
-                            
-                            real_return_basic_expert = rollout.discounted_sum(
-                                self.env.reward_matrix_per_align_func(al_basic)[exp.obs[:-1], exp.acts], 
-                                gamma=self.discount)
-                            returns_real_from_expert_policy[al_basic].append(real_return_basic_expert)
-                    
-                    probs_real = []
+                    N = len(all_trajs)
+                    i_j = np.random.choice(N, size=(N*10, 2), replace=True)
+                    i_indices, j_indices = i_j[:, 0], i_j[:, 1]
 
-                    probs_estimated = []
-                    for i in range(len(all_trajs)):
-                        for j in range(i, len(all_trajs)):
-                            estimated_diff = np.clip(returns_estimated[i]-returns_estimated[j], -100, 100)
-                            prob_estimated = 1 / (1 + np.exp(estimated_diff))
-                            
-                            real_diff = np.clip(returns_expert[i]-returns_expert[j], -100, 100)
-                            prob_real = 1 / (1 + np.exp(real_diff))
+                    estimated_diffs = np.clip(returns_estimated[i_indices] - returns_estimated[j_indices], -100.0, 100.0)
+                    real_diffs = np.clip(returns_expert[i_indices] - returns_expert[j_indices], -100.0, 100.0)
 
-                            probs_real.append(prob_real)
-                            probs_estimated.append(prob_estimated)
+                    probs_estimated = 1 / (1 + np.exp(estimated_diffs))
+                    probs_real = 1 / (1 + np.exp(real_diffs))
+
                     probs_real = np.array(probs_real) 
                     probs_estimated = np.array(probs_estimated) 
                 
@@ -658,24 +662,23 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     #qualitative_loss = qualitative_loss_score(real_labels, estimated_labels, multi_class="ovr")
                     # ACC average (dumb). qualitative_loss = np.mean([np.mean(np.array(real_labels[ri]==estimated_labels[ri], dtype=np.float32)) for ri in range(len(real_labels)) ])
                     # F1 score.
-                    qualitative_loss = f1_score(real_labels, estimated_labels, average='weighted')
+                    qualitative_loss = f1_score(real_labels, estimated_labels, average='weighted',zero_division=np.nan)
                     # F1 score.
 
                     qualitative_loss_per_al_func[al].append(qualitative_loss)
                     
                     #ce_per_al_func[al].append(th.nn.functional.binary_cross_entropy(th.tensor(probs_real), th.tensor(probs_estimated)).detach().numpy())
                     ce_per_al_func[al].append(JSD(probs_real, probs_estimated))
-
-                    v_exps[al].append({
-                        alb: np.mean(returns_real_from_learned_policy[alb]) for alb in basic_profiles
-                        })
-                    
-                    v_exps_expert[al].append({
-                        alb: np.mean(returns_real_from_expert_policy[alb]) for alb in basic_profiles
-                        })
+                    if float(ratio) == 1.0:
+                        value_expectations[al].append({
+                            alb: np.mean(returns_real_from_learned_policy[alb]) for alb in basic_profiles
+                            })
+                        
+                        value_expectations_expert[al].append({
+                            alb: np.mean(returns_real_from_expert_policy[alb]) for alb in basic_profiles
+                            })
 
             metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': ce_per_al_func}
-            value_expectations_per_ratio[ratio] = v_exps # TODO ratio is not actually needed...
-            value_expectations_per_ratio_expert[ratio] = v_exps_expert # TODO ratio is not actually needed...
+            
          #TODO: poner todo per ratio!
-        return metrics_per_ratio, value_expectations_per_ratio, value_expectations_per_ratio_expert
+        return metrics_per_ratio, value_expectations, value_expectations_expert

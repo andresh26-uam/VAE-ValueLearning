@@ -109,7 +109,7 @@ def parse_args():
     testing_args = parser.add_argument_group('Testing options')
     testing_args.add_argument('-tn', '--n_trajs_testing', default=100,
                               type=int, help='Number of trajectories to sample for testing')
-    testing_args.add_argument('-tr', '--expert_to_random_ratios', default=[1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0], type=lambda x: list(
+    testing_args.add_argument('-tr', '--expert_to_random_ratios', default=[1, 0.8, 0.6, 0.4, 0.2, 0.0], type=lambda x: list(
         ast.literal_eval(x)), help='Percentages of routes that are from expert instead of from random policy for testing purposes.')
 
     return parser.parse_args()
@@ -188,7 +188,6 @@ if __name__ == "__main__":
             expert_is_stochastic=training_data.stochastic_expert,
             discount=training_data.discount_factor,
             environment_is_stochastic=training_data.environment_is_stochastic,
-
             **training_data.me_config[vgl_or_vsi]
         )
     if algorithm == 'pc':
@@ -258,7 +257,7 @@ if __name__ == "__main__":
     print(pp.pprint(vars(vsl_algo.reward_net)))
 
     n_experiment_reps = parser_args.n_experiments
-    for rep in range(parser_args.n_experiments):
+    for rep in range(n_experiment_reps):
 
         if task == 'all':
             assumed_grounding, reward_net_learned_per_al_func, metrics = vgl_before_vsi_vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING,
@@ -317,8 +316,8 @@ if __name__ == "__main__":
                          align_func_colors=training_data.align_colors)
 
     testing_profiles_grounding = None
-    if task == 'all' or task == 'vgl':
-        testing_profiles = training_data.testing_profiles
+    if task == 'vgl':
+        testing_profiles = vsl_algo.vsi_target_align_funcs
         testing_profiles_grounding = training_data.vgl_targets
     else:
         testing_profiles = vsl_algo.vsi_target_align_funcs
@@ -328,13 +327,15 @@ if __name__ == "__main__":
                                                                          reward_net_per_al=None,
                                                                          expert=False, random=True,
                                                                          n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward
+                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward,
+                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None
                                                                          )[0]
     expert_policy_tests = vsl_algo.get_policy_from_reward_per_align_func(testing_profiles,
                                                                          reward_net_per_al=None,
                                                                          expert=True, random=False,
                                                                          n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward
+                                                                         use_probabilistic_reward=parser_args.use_probabilistic_reward,
+                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None
                                                                          )[0]
     learned_reward_per_test_al_round = []
 
@@ -342,7 +343,7 @@ if __name__ == "__main__":
 
         # print(testing_profiles)
         policy_r, learned_reward_per_test_al_r = vsl_algo.get_policy_from_reward_per_align_func(align_funcs=testing_profiles,
-                                                                                                use_custom_grounding=assumed_grounding if vgl_or_vsi == 'vsi' else None,
+                                                                                                use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None,
                                                                                                 target_to_learned=None if vgl_or_vsi == 'vgl' else target_align_funcs_to_learned_align_funcs_per_round[
                                                                                                     r],
                                                                                                 reward_net_per_al={al:
@@ -353,11 +354,13 @@ if __name__ == "__main__":
                                                                                                 expert=False, random=False, n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
                                                                                                 use_probabilistic_reward=parser_args.use_probabilistic_reward
                                                                                                 )
+        
         learned_reward_per_test_al_round.append(learned_reward_per_test_al_r)
         # print(learned_reward_per_test_al_r)
         testing_policy_per_round.append(policy_r)
 
-    f1_and_jsd_expert_random, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(learned_rewards_per_round=learned_reward_per_test_al_round,
+    f1_and_jsd_expert_random, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(
+        learned_rewards_per_round=learned_reward_per_test_al_round,
                                                                                                     testing_policy_per_round=testing_policy_per_round,
                                                                                                     expert_policy=expert_policy_tests,
                                                                                                     random_policy=random_policy_tests,

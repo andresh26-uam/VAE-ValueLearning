@@ -508,9 +508,8 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
             std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
             learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
-            learned_al_short = tuple([float("{0:.2f}".format(v)) for v in learned_al])
             label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
-            target_al_func_ro_mean_align_func[al] = learned_al_short
+            target_al_func_ro_mean_align_func[al] = learned_al
         else:
             label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
         plt.errorbar(ratios,f1_means[al], yerr=f1_stds[al], label=label
@@ -579,8 +578,8 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
     latex_file_2 = f'results/tables/{namefig}_{n}_runs_expected_alignments_table.tex'
 
     # Process value expectations for the learned and expert policies
-    value_expectations_learned = value_expectations_per_ratio[max(value_expectations_per_ratio.keys())]
-    value_expectations_expert = value_expectations_per_ratio_expert[max(value_expectations_per_ratio_expert.keys())]
+    value_expectations_learned = value_expectations_per_ratio
+    value_expectations_expert = value_expectations_per_ratio_expert
 
     # Initialize data rows for each table
     metrics_rows = []
@@ -673,8 +672,8 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
         header_latex = 'VS Function'
         if target_align_funcs_to_learned_align_funcs:
             header_latex += ' & Learned VS'
-        header_latex += ''.join([f' & Expert Policy Avg. \\A_{{{v}}}' for v in values_names.values()])
-        header_latex += ''.join([f' & Learned Policy Avg. \\A_{{{v}}}' for v in values_names.values()])
+        header_latex += ''.join([f' & Expert Policy Avg. $\\A_{{{v}}}$' for v in values_names.values()])
+        header_latex += ''.join([f' & Learned Policy Avg. $\\A_{{{v}}}$' for v in values_names.values()])
         f.write(header_latex + ' \\\\\n')
         f.write('\\hline\n')
         for row in expected_alignments_rows:
