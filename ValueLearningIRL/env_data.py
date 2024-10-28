@@ -358,7 +358,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             n_seeds_for_sampled_trajectories=3000,
             n_sampled_trajs_per_seed=10,
             fragment_length=self.horizon, interactive_imitation_iterations=200,
-            total_comparisons=50000, initial_comparison_frac=0.1,
+            total_comparisons=50000, initial_comparison_frac=0.1, 
             initial_epoch_multiplier=15, transition_oversampling=4,
         ))
         base['vsi'].update(dict(

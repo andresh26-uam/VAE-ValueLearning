@@ -310,7 +310,7 @@ if __name__ == "__main__":
             extras += "with_qpref_"
 
     plot_learning_curves(algo=vsl_algo, historic_metric=plot_metric_per_round,
-                         ylim=(0.0, 1.1),
+                         ylim=None if name_metric != 'Accuracy' else (0.0, 1.1),
                          name_metric=name_metric if algorithm == 'me' else 'Accuracy',
                          name_method=f'{parser_args.experiment_name}{algorithm}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{task}',
                          align_func_colors=training_data.align_colors)
@@ -398,7 +398,7 @@ if __name__ == "__main__":
     print("Plotting learned and expert reward pairs")
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl=vgl_or_vsi,
                                          target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                         namefig=f'{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
+                                         namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
     
     print("Plotting learned and expert policies")
     plot_learned_to_expert_policies(vsl_algo=vsl_algo, expert_policy=training_data.vgl_expert_policy,

@@ -42,7 +42,7 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
     plt.ylabel(f"{name_metric}")
 
     for al in historic_metric[0].keys():
-        if al not in algo.vgl_target_align_funcs:
+        if al not in historic_metric[0].keys():
             continue
         max_length = np.max([len(historic_metric[rep][al])
                             for rep in range(len(historic_metric))])
@@ -63,7 +63,8 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
                          avg_vals+std_vals, edgecolor=color, alpha=0.3, facecolor=color)
         # plt.fill_between([i for i in range(len(avg_grad_norms))], avg_grad_norms-std_grad_norms, avg_grad_norms+std_grad_norms,edgecolor='black',alpha=0.1, facecolor='black')
         
-    plt.ylim(ylim)
+    if ylim is not None:
+        plt.ylim(ylim)
     plt.legend()
     plt.grid()
     plt.savefig(f'plots/Learning_curves_{name_method}.pdf')
@@ -533,7 +534,13 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
     
 
     for al in jsd_means.keys():
-        color = align_func_colors(al)
+
+        if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
+            color = align_func_colors(al)
+        else:
+            color = viridis(idx / (len(f1_means) - 1))
+
+
         if target_align_funcs_to_learned_align_funcs is not None:
             all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
                 target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
@@ -587,10 +594,10 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
 
     for target_vs_function in labels:
         # Gather F1 and JSD stats for metrics table
-        f1_at_0 = f'{f1_means[target_vs_function][0]:.3f} ± {f1_stds[target_vs_function][0]:.3f}'
-        f1_at_1 = f'{f1_means[target_vs_function][1]:.3f} ± {f1_stds[target_vs_function][1]:.3f}'
-        jsd_at_0 = f'{jsd_means[target_vs_function][0]:.3e} ± {jsd_stds[target_vs_function][0]:.3e}'
-        jsd_at_1 = f'{jsd_means[target_vs_function][1]:.3e} ± {jsd_stds[target_vs_function][1]:.3e}'
+        f1_at_0 = f'{f1_means[target_vs_function][-1]:.3f} ± {f1_stds[target_vs_function][-1]:.2f}'
+        f1_at_1 = f'{f1_means[target_vs_function][0]:.3f} ± {f1_stds[target_vs_function][0]:.2f}'
+        jsd_at_0 = f'{jsd_means[target_vs_function][-1]:.2e} ± {jsd_stds[target_vs_function][-1]:.2e}'
+        jsd_at_1 = f'{jsd_means[target_vs_function][0]:.2e} ± {jsd_stds[target_vs_function][0]:.2e}'
 
         # Prepare metrics row with conditional "Learned VS" column
         metrics_row = [str(target_vs_function), f1_at_0, f1_at_1, jsd_at_0, jsd_at_1]

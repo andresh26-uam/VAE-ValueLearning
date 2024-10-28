@@ -637,8 +637,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     i_j = np.random.choice(N, size=(N*10, 2), replace=True)
                     i_indices, j_indices = i_j[:, 0], i_j[:, 1]
 
-                    estimated_diffs = np.clip(returns_estimated[i_indices] - returns_estimated[j_indices], -100.0, 100.0)
-                    real_diffs = np.clip(returns_expert[i_indices] - returns_expert[j_indices], -100.0, 100.0)
+                    estimated_diffs = np.clip(returns_estimated[i_indices] - returns_estimated[j_indices], -50.0, 50.0)
+                    real_diffs = np.clip(returns_expert[i_indices] - returns_expert[j_indices], -50.0, 50.0)
 
                     probs_estimated = 1 / (1 + np.exp(estimated_diffs))
                     probs_real = 1 / (1 + np.exp(real_diffs))
