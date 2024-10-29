@@ -158,13 +158,13 @@ class EnvDataForIRL():
     @property
     def me_config(self):
         return {'vgl': dict(
-            vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-8,
+            vc_diff_epsilon=1e-8,
+            gradient_norm_epsilon=1e-9,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         ), 'vsi': dict(
-            vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-8,
+            vc_diff_epsilon=1e-8,
+            gradient_norm_epsilon=1e-9,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         )}
@@ -268,6 +268,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             _, _, assumed_expert_pi = mce_partition_fh(env_real, discount=discount_factor,
                                                        reward=env_real.reward_matrix_per_align_func(
                                                            w),
+                                                       horizon = env_real.horizon,
                                                        approximator_kwargs=self.approximator_kwargs,
                                                        policy_approximator=self.policy_approximation_method,
                                                        deterministic=not self.stochastic_expert)
@@ -276,10 +277,9 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         expert_policy_train = VAlignedDictSpaceActionPolicy(
             policy_per_va_dict=profile_to_matrix if use_pmovi_expert else profile_to_assumed_matrix, env=env_training, state_encoder=None)
-        expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=n_seeds_for_samplers, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
-                                                                     with_alignfunctions=profiles, t_max=self.horizon)
-
+        
         self.env = env_real
+        
         self.vgl_expert_policy = expert_policy_train
         self.vsi_expert_policy = expert_policy_train
 
@@ -289,6 +289,9 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.vsi_targets = profiles
 
         if sampler_over_precalculated_trajs:
+            expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=n_seeds_for_samplers, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
+                                                                     with_alignfunctions=profiles, t_max=self.horizon)
+
             self.vgl_expert_train_sampler = partial(
                 random_sampler_among_trajs, expert_trajs_train)
             self.vsi_expert_train_sampler = partial(
@@ -306,7 +309,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.environment_is_stochastic = False
 
         self.vgl_targets = [(1.0, 0.0), (0.0, 1.0)]
-        self.vsi_optimizer_kwargs = {"lr": 0.05, "weight_decay": 0.0000} # FOR DEMO_OM_TRUE
+        self.vsi_optimizer_kwargs = {"lr": 0.015, "weight_decay": 0.0000} # FOR DEMO_OM_TRUE 0.05 before
         #self.vsi_optimizer_kwargs = {"lr": 0.01, "weight_decay": 0.0000} # DEMO_OM_FALSE
         self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.000}
 
@@ -327,24 +330,24 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs = {
-            'value_iteration_tolerance': 0.0000001, 'iterations': 10000}
+            'value_iteration_tolerance': 0.0000001, 'iterations': 1000000}
         # self.vgl_reference_policy = 'random'
         # self.vsi_reference_policy = 'random'
 
         self.reward_trainer_kwargs = {
-            'epochs': 1,
-            'lr': 0.001,
-            'batch_size': 1024,
+            'epochs': 2, # 1, 3
+            'lr': 0.0015, # 0.001 0.0005
+            'batch_size': 1024, # 4096
         }
 
     @property
     def pc_config(self):
         
         base = super().pc_config
-        base['vgl'].update(dict(query_schedule='hyperbolic',
+        base['vgl'].update(dict(query_schedule='constant',
                             stochastic_sampling_in_reference_policy=True))
         base['vsi'].update(dict(
-                query_schedule='hyperbolic',
+                query_schedule='constant', #need constant
             stochastic_sampling_in_reference_policy=True,))
         return base
 
@@ -353,13 +356,12 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         base = super().pc_train_config
 
         base['vgl'].update(dict(
-            max_iter=20000,
-
-            n_seeds_for_sampled_trajectories=3000,
-            n_sampled_trajs_per_seed=10,
-            fragment_length=self.horizon, interactive_imitation_iterations=200,
-            total_comparisons=50000, initial_comparison_frac=0.1, 
-            initial_epoch_multiplier=15, transition_oversampling=4,
+            max_iter=10000,
+            n_seeds_for_sampled_trajectories=2000, # 3000, 3500
+            n_sampled_trajs_per_seed=2, #10, 2
+            fragment_length=self.horizon, interactive_imitation_iterations=100, #total | 200, 150
+            total_comparisons=10000, initial_comparison_frac=0.1,  #50000, 20000
+            initial_epoch_multiplier=10, transition_oversampling=1.5 #15,5 | 4,1
         ))
         base['vsi'].update(dict(
             max_iter=20000,
@@ -376,7 +378,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_config(self):
         base = super().me_config
         base['vsi'].update(dict(
-            vc_diff_epsilon=1e-3,
+            vc_diff_epsilon=1e-4 if self.discount_factor < 1.0 else 1e-3,
             gradient_norm_epsilon=1e-7,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
@@ -395,9 +397,9 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             assumed_grounding = np.zeros(
                 (self.env.n_states*self.env.action_dim, 2), dtype=np.float64)
             assumed_grounding[:, 0] = np.reshape(self.env.reward_matrix_per_align_func(
-                (1.0, 0.0)), (self.env.n_states*self.env.action_dim))
+                (1.0, 0.0)), (self.env.n_states*self.env.action_dim,))
             assumed_grounding[:, 1] = np.reshape(self.env.reward_matrix_per_align_func(
-                (0.0, 1.0)), (self.env.n_states*self.env.action_dim))
+                (0.0, 1.0)), (self.env.n_states*self.env.action_dim,))
 
             return assumed_grounding
         else:
@@ -490,6 +492,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
             _, _, assumed_expert_pi = mce_partition_fh(env_real, discount=self.discount_factor,
                                                        reward=reward,
+                                                       horizon = env_real.horizon,
                                                        approximator_kwargs=self.approximator_kwargs,
                                                        policy_approximator=self.policy_approximation_method,
                                                        deterministic=not self.stochastic_expert)
@@ -497,10 +500,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         expert_policy_train = VAlignedDictSpaceActionPolicy(
             policy_per_va_dict=profile_to_assumed_matrix, env=env_real, state_encoder=None)
-        expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
-                                                                     seed=self.seed, stochastic=self.stochastic_expert,
-                                                                     repeat_per_seed=self.n_expert_samples_per_seed, with_alignfunctions=profiles,
-                                                                     t_max=self.horizon)
+        
 
         self.env = env_real
         self.vgl_expert_policy = expert_policy_train
@@ -513,6 +513,10 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.vsi_targets = profiles
 
         if sampler_over_precalculated_trajs:
+            expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
+                                                                     seed=self.seed, stochastic=self.stochastic_expert,
+                                                                     repeat_per_seed=self.n_expert_samples_per_seed, with_alignfunctions=profiles,
+                                                                     t_max=self.horizon)
             self.vgl_expert_train_sampler = partial(
                 random_sampler_among_trajs, expert_trajs_train)
             self.vsi_expert_train_sampler = partial(

@@ -2,6 +2,7 @@ import enum
 from typing import Any, SupportsFloat
 import numpy as np
 from gymnasium import spaces
+from firefighters_use_case.constants import STATE_MEDICAL
 from firefighters_use_case.env import HighRiseFireEnv
 
 
@@ -102,7 +103,7 @@ class FireFightersEnv(TabularVAMDP):
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s, a, s] = 1.0
                     reward_matrix_per_va[(1.0, 0.0)][s, a], reward_matrix_per_va[(
-                        0.0, 1.0)][s, a] = self.real_env.calculate_rewards(s_trans, a, s_trans)
+                        0.0, 1.0)][s, a] = [0.0,0.0] #if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
 
         self._goal_states = np.asarray(_goal_states)
 
@@ -112,7 +113,7 @@ class FireFightersEnv(TabularVAMDP):
 
             self.initial_state_dist = initial_state_distribution
 
-        elif initial_state_distribution == 'uniform':
+        elif initial_state_distribution == 'uniform' or initial_state_distribution == 'random':
             self.initial_state_dist = np.ones(self.n_states)/self.n_states
 
         else:
@@ -129,10 +130,16 @@ class FireFightersEnv(TabularVAMDP):
         self.cur_align_func = (1.0, 0.0)
 
     def _get_reward_matrix_per_va(self, align_func):
-        return self.reward_matrix_per_va_dict[(1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
-
+        assert isinstance(align_func, tuple)
+        assert isinstance(float(align_func[0]), float)
+        assert isinstance(float(align_func[1]), float)
+        
+        v = self.reward_matrix_per_va_dict[(1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
+        assert np.max(v) <= 1.0
+        assert np.min(v) >= -1.0
+        return v
     def get_state_actions_with_known_reward(self, align_func):
-        return self._states_with_known_reward
+        return None
 
     @property
     def state(self) -> np.dtype:

@@ -159,7 +159,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                 for af, af_in_env in zip(with_alignfunctions, alignments_in_env):
                     trajs.append(
                         self.obtain_trajectory(af,
-                                               seed=seed if si == 0 else None,
+                                               seed=seed+si,
                                                exploration=exploration,
                                                custom_discount=custom_discount,
                                                end_trajectories_when_ended=end_trajectories_when_ended,

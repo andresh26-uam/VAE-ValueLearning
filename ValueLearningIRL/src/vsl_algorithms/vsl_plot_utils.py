@@ -18,7 +18,7 @@ def get_color_gradient(c1, c2, mix):
     c1_rgb = np.array(c1)
     c2_rgb = np.array(c2)
     mix = torch.softmax(torch.tensor(np.array(mix)),dim=0).detach().numpy()
-    return (mix[0]*c1_rgb + (mix[1]*c2_rgb))
+    return (mix[0]*c1_rgb + ((1-mix[0])*c2_rgb))
 
 
 def get_linear_combination_of_colors(keys, color_from_keys, mix_weights):
@@ -399,13 +399,13 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: MaxEntropyIRLForVSL, ex
         _, _, assumed_expert_pi = mce_partition_fh(vsl_algo.env, discount=vsl_algo.discount,
                                                    reward=vsl_algo.env.reward_matrix_per_align_func(
                                                        al),
-                                                   approximator_kwargs={
-                                                       'value_iteration_tolerance': 0.00001, 'iterations': 1000},
+                                                   approximator_kwargs=vsl_algo.approximator_kwargs,
                                                    policy_approximator=vsl_algo.policy_approximator, deterministic=not vsl_algo.expert_is_stochastic)
 
         eocs = np.transpose(mce_occupancy_measures(env=vsl_algo.env,
                                                    reward=vsl_algo.env.reward_matrix_per_align_func(al),
                                                    discount=vsl_algo.discount,
+                                                   pi=assumed_expert_pi,
                                                    deterministic=not vsl_algo.learn_stochastic_policy,
                                                    approximator_kwargs=vsl_algo.approximator_kwargs,
                                                    policy_approximator=vsl_algo.policy_approximator,
@@ -533,7 +533,7 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
     plt.figure(figsize=(16, 8))
     
 
-    for al in jsd_means.keys():
+    for idx, al in enumerate(jsd_means.keys()):
 
         if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
             color = align_func_colors(al)
@@ -610,8 +610,11 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
         expert_values = []
         learned_values = []
         for alb in values_names.keys():
-            expert_data = [data_rep[alb] for data_rep in value_expectations_expert[target_vs_function]]
+            #expert_data = [(np.mean(data_rep[alb])-np.mean([d[alb] for d in value_expectations_expert[alb]]))/np.std([d[alb] for d in value_expectations_expert[alb]]) for data_rep in value_expectations_expert[target_vs_function]]
+            #learned_data = [(np.mean(data_rep[alb])-np.mean([d[alb] for d in value_expectations_expert[alb]]))/np.std([d[alb] for d in value_expectations_expert[alb]]) for data_rep in value_expectations_learned[target_vs_function]]
+            expert_data = [data_rep[alb] for data_rep in value_expectations_expert[target_vs_function]] 
             learned_data = [data_rep[alb] for data_rep in value_expectations_learned[target_vs_function]]
+            
             expert_values.append(f'{np.mean(expert_data):.3f} ± {np.std(expert_data):.3f}')
             learned_values.append(f'{np.mean(learned_data):.3f} ± {np.std(learned_data):.3f}')
         

@@ -101,6 +101,7 @@ def mce_partition_fh(
     *,
     reward: Optional[np.ndarray] = None,
     discount: float = 1.0,
+    horizon=None,
     approximator_kwargs={
         'value_iteration_tolerance': 0.00001, 'iterations': 100},
     policy_approximator: Union[PolicyApproximators, Callable[[
@@ -129,7 +130,8 @@ def mce_partition_fh(
         ValueError: if ``env.horizon`` is None (infinite horizon).
     """
     # shorthand
-    horizon = env.horizon
+    if horizon is None:
+        horizon = env.horizon
     if horizon is None:
         raise ValueError("Only finite-horizon environments are supported.")
     n_states = env.state_dim
@@ -177,6 +179,7 @@ def mce_partition_fh(
         max_iterations = horizon
         if 'iterations' in approximator_kwargs.keys():
             max_iterations = approximator_kwargs['iterations']
+        
         while err > value_iteration_tolerance and (iterations < max_iterations):
             values_prev = V.copy()
             values_prev[env.goal_states] = 0.0
@@ -357,6 +360,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
         state_actions_with_special_reward = self.env.get_state_actions_with_known_reward(
             used_alignment_func)
+        
 
         if state_actions_with_special_reward is not None:
             predicted_r[state_actions_with_special_reward] = th.as_tensor(
@@ -568,7 +572,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         basic_profiles = [tuple(v) for v in np.eye(self.reward_net.hid_sizes[-1])]
         
         metrics_per_ratio = dict()
-
+        
         expert_trajs = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                          seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
@@ -610,8 +614,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         
                         estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
                         real_return_i = rollout.discounted_sum(real_matrix_al[ti.obs[:-1], ti.acts], gamma=self.discount)
-                        
-                        assert np.sum(ti.rews) == np.sum(real_return_i)
+                        if self.discount == 1.0:
+                            assert np.sum(ti.rews) == np.sum(real_return_i)
                         returns_expert.append(real_return_i)
                         returns_estimated.append(estimated_return_i)
                     returns_expert = np.asarray(returns_expert)
@@ -680,5 +684,4 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
             metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': ce_per_al_func}
             
-         #TODO: poner todo per ratio!
         return metrics_per_ratio, value_expectations, value_expectations_expert

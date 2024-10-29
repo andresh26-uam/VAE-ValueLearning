@@ -1,4 +1,6 @@
 import enum
+from math import ceil, floor
+from random import shuffle
 from typing import Dict, List, NoReturn, Sequence
 from imitation.data.types import TrajectoryPair
 
@@ -33,7 +35,120 @@ def _trajectory_pair_includes_reward(fragment_pair: TrajectoryPair) -> bool:
     return isinstance(frag1, TrajectoryWithRew) and isinstance(frag2, TrajectoryWithRew)
 
 
-  
+
+class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
+    """Sample fragments of trajectories with the rule of pairs being connected
+    """
+
+    def __init__(
+        self,
+        rng: np.random.Generator,
+        warning_threshold: int = 10,
+        custom_logger = None,
+    ) -> None:
+        super().__init__(rng, warning_threshold, custom_logger)
+        self.nexus = None
+
+    def __call__(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+        num_pairs: int,
+    ) -> Sequence[TrajectoryWithRewPair]:
+        
+
+        fragments: List[TrajectoryWithRew] = []
+
+        prev_num_trajectories = len(trajectories)
+        # filter out all trajectories that are too short
+        trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
+        if len(trajectories) == 0:
+            raise ValueError(
+                "No trajectories are long enough for the desired fragment length "
+                f"of {fragment_length}.",
+            )
+        num_discarded = prev_num_trajectories - len(trajectories)
+        if num_discarded:
+            self.logger.log(
+                f"Discarded {num_discarded} out of {prev_num_trajectories} "
+                "trajectories because they are shorter than the desired length "
+                f"of {fragment_length}.",
+            )
+
+        weights = [len(traj) for traj in trajectories]
+
+        # number of transitions that will be contained in the fragments
+        num_transitions = 2 * num_pairs * fragment_length
+        if sum(weights) < num_transitions:
+            self.logger.warn(
+                "Fewer transitions available than needed for desired number "
+                "of fragment pairs. Some transitions will appear multiple times.",
+            )
+        elif (
+            self.warning_threshold
+            and sum(weights) < self.warning_threshold * num_transitions
+        ):
+            # If the number of available transitions is not much larger
+            # than the number of requires ones, we already give a warning.
+            # But only if self.warning_threshold is non-zero.
+            self.logger.warn(
+                f"Samples will contain {num_transitions} transitions in total "
+                f"and only {sum(weights)} are available. "
+                f"Because we sample with replacement, a significant number "
+                "of transitions are likely to appear multiple times.",
+            )
+
+        # we need two fragments for each comparison
+        
+        for _ in range( num_pairs//2+1):
+            # NumPy's annotation here is overly-conservative, but this works at runtime
+            traj = self.rng.choice(
+                trajectories,  # type: ignore[arg-type]
+                p=np.array(weights) / sum(weights),
+            )
+            n = len(traj)
+            start = self.rng.integers(0, n - fragment_length, endpoint=True)
+            end = start + fragment_length
+            terminal = (end == n) and traj.terminal
+            fragment = TrajectoryWithRew(
+                obs=traj.obs[start : end + 1],
+                acts=traj.acts[start:end],
+                infos=traj.infos[start:end] if traj.infos is not None else None,
+                rews=traj.rews[start:end],
+                terminal=terminal,
+            )
+            
+            fragments.append(fragment)
+        # fragments is currently a list of single fragments. We want to pair up
+        # fragments to get a list of (fragment1, fragment2) tuples. To do so,
+        # we create a single iterator of the list and zip it with itself:
+        if self.nexus is None:
+            self.nexus = []
+            for _ in range( num_pairs//2):
+            # NumPy's annotation here is overly-conservative, but this works at runtime
+                traj = self.rng.choice(
+                    trajectories,  # type: ignore[arg-type]
+                    p=np.array(weights) / sum(weights),
+                )
+                n = len(traj)
+                start = self.rng.integers(0, n - fragment_length, endpoint=True)
+                end = start + fragment_length
+                terminal = (end == n) and traj.terminal
+                fragment = TrajectoryWithRew(
+                    obs=traj.obs[start : end + 1],
+                    acts=traj.acts[start:end],
+                    infos=traj.infos[start:end] if traj.infos is not None else None,
+                    rews=traj.rews[start:end],
+                    terminal=terminal,
+                )
+            
+                self.nexus.append(fragment)
+
+        fragment_chain = list(zip(fragments, fragments[1:])) + list(zip(self.nexus, fragments[:-1]))
+        # a chain is formed, and joined back to a previous point.
+        #assert len(fragment_chain) == num_pairs, f'{len(fragment_chain)} vs {num_pairs}'
+        self.nexus[np.random.choice(num_pairs//2-1,size=1)[0]] = fragments[0]
+        return fragment_chain 
 class ActiveSelectionFragmenterVSL(preference_comparisons.Fragmenter):
     def __init__(
         self,
@@ -374,6 +489,30 @@ class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.Rew
             metrics=metrics,
         )
 
+class TrajectoryDatasetWithID(preference_comparisons.TrajectoryGenerator):
+    """A fixed dataset of trajectories."""
+
+    def __init__(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        rng: np.random.Generator,
+        custom_logger: Optional[preference_comparisons.imit_logger.HierarchicalLogger] = None,
+    ):
+        """Creates a dataset loaded from `path`.
+
+        Args:
+            trajectories: the dataset of rollouts.
+            rng: RNG used for shuffling dataset.
+            custom_logger: Where to log to; if None (default), creates a new logger.
+        """
+        super().__init__(custom_logger=custom_logger)
+        self._trajectories = trajectories
+        for idx, t in enumerate(self._trajectories):
+            for s in len(t):
+                t.infos[s]['_TID'] = idx
+        self.rng = rng
+    
+    
 class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
     def train_vsl_probabilistic(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, n_reward_reps_if_probabilistic_reward, reward_nets_per_target_align_func, target_align_func):
         raise NotImplementedError(
@@ -477,7 +616,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                  sample=self.sample, temperature=self.temperature)
 
         if self.active_fragmenter_on == SupportedFragmenters.RANDOM_FRAGMENTER:
-            self.fragmenter = preference_comparisons.RandomFragmenter(
+            self.fragmenter = ConnectedFragmenter(
                 warning_threshold=1,
                 rng=self.rng,
             )
@@ -508,23 +647,28 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
 
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, epoch_partition = 0.1):
         # return super().train_vgl(max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_funcs)
-        """reference_trajs_per_profile = self.extract_trajectories(
+        reference_trajs_per_profile = self.extract_trajectories(
             n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
-        """
+        
         reward_net_per_target = dict()
-        n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
+        """n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
         for rep in range(n_steps_per_change_of_target):
-            """TODO: need further testing, to retrain the reference policy after updates...:
+            TODO: need further testing, to retrain the reference policy after updates...:
             if rep > 0:
                 self.vgl_reference_policy = self.calculate_learned_policies(self.vgl_target_align_funcs)
-            """
-            reference_trajs_per_profile = self.extract_trajectories(
-            int(n_seeds_for_sampled_trajectories*epoch_partition), n_sampled_trajs_per_seed, True)
-        
-            for target_align_func in self.vgl_target_align_funcs:
+            
+            
+            for vi, target_align_func in enumerate(self.vgl_target_align_funcs):
+                
                 self._train_global(max_iter, target_align_func,
-                                reference_trajs_per_profile, partition=n_steps_per_change_of_target,starting_t=rep*n_steps_per_change_of_target)
+                                reference_trajs_per_profile, partition=ceil(1/epoch_partition), 
+                                starting_t=int(n_steps_per_change_of_target*(rep*2+vi)))
 
+                reward_net_per_target[target_align_func] = self.current_net.copy()
+            """
+        for vi, target_align_func in enumerate(self.vgl_target_align_funcs):
+            self._train_global(max_iter, target_align_func,
+                                reference_trajs_per_profile,)
             reward_net_per_target[target_align_func] = self.current_net.copy()
         return reward_net_per_target
 
@@ -610,7 +754,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         )
 
         metric = self.pref_comparisons.train(
-            max_iter, total_comparisons=self.total_comparisons//partition, callback=lambda t: self.train_callback(t+starting_t))
+            max_iter//partition, total_comparisons=self.total_comparisons//partition, callback=lambda t: self.train_callback(t+starting_t))
         self.last_accuracies_per_align_func[self.current_target].append(
             metric['reward_accuracy'])
 

@@ -182,6 +182,8 @@ if __name__ == "__main__":
             target_align_func_sampler=training_data.target_align_func_sampler,
             vgl_target_align_funcs=training_data.vgl_targets,
             vsi_target_align_funcs=training_data.vsi_targets,
+            approximator_kwargs=training_data.approximator_kwargs,
+            
             training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
             policy_approximator=training_data.policy_approximation_method,
             learn_stochastic_policy=training_data.learn_stochastic_policy,
@@ -203,6 +205,8 @@ if __name__ == "__main__":
                                                 vgl_target_align_funcs=training_data.vgl_targets,
                                                 vsi_target_align_funcs=training_data.vsi_targets,
                                                 rng=training_data.rng,
+                                                approximator_kwargs=training_data.approximator_kwargs,
+                                                policy_approximator=training_data.policy_approximation_method,
                                                 expert_is_stochastic=training_data.stochastic_expert,
                                                 learn_stochastic_policy=training_data.learn_stochastic_policy,
                                                 use_quantified_preference=parser_args.use_quantified_preference,
@@ -310,6 +314,7 @@ if __name__ == "__main__":
             extras += "with_qpref_"
 
     plot_learning_curves(algo=vsl_algo, historic_metric=plot_metric_per_round,
+                         
                          ylim=None if name_metric != 'Accuracy' else (0.0, 1.1),
                          name_metric=name_metric if algorithm == 'me' else 'Accuracy',
                          name_method=f'{parser_args.experiment_name}{algorithm}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{task}',
@@ -366,13 +371,13 @@ if __name__ == "__main__":
                                                                                                     random_policy=random_policy_tests,
                                                                                                     target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                                                                                                     n_seeds=parser_args.n_trajs_testing,  # parser_args.n_trajs_for_testing,
-                                                                                                    seed=training_data.seed+2321489,
+                                                                                                    seed=training_data.seed+2321489,#not to have the same trajectories as in training
                                                                                                     ratios_expert_random=parser_args.expert_to_random_ratios,
                                                                                                     n_samples_per_seed=1,
                                                                                                     testing_align_funcs=testing_profiles)
     plot_f1_and_jsd(f1_and_jsd_expert_random, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}',
                     align_func_colors=training_data.align_colors,
-                    values_names=value_names,
+                    values_names=value_names,usecmap = 'viridis',
                     target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                     show=parser_args.show, value_expectations_per_ratio=value_expectations_per_ratio,
                     value_expectations_per_ratio_expert=value_expectations_per_ratio_expert)
@@ -383,7 +388,7 @@ if __name__ == "__main__":
                                                                                                             random_policy=random_policy_tests,
                                                                                                             target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                                                                                                             n_seeds=parser_args.n_trajs_testing,
-                                                                                                            seed=training_data.seed+2321489,
+                                                                                                            seed=training_data.seed+2321489,#not to have the same trajectories as in training
                                                                                                             ratios_expert_random=parser_args.expert_to_random_ratios,
                                                                                                             n_samples_per_seed=1,
                                                                                                             testing_align_funcs=testing_profiles_grounding)
