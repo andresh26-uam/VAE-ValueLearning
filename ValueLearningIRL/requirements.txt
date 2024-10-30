@@ -125,7 +125,7 @@ pyarrow-hotfix==0.6
 pyasn1==0.5.1
 pyasn1-modules==0.3.0
 pycparser==2.21
-pygame==2.1.0
+pygame==2.6.0
 pyglet==2.0.10
 Pygments==2.17.2
 pymdptoolbox==4.0b3
