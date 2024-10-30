@@ -60,7 +60,7 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
         avg_vals = np.mean(vals, axis=0)
         std_vals = np.std(vals, axis=0)
 
-        color = align_func_colors(al)
+        #color = align_func_colors(al)
         plt.plot(avg_vals,
                  color=color,
                  label=f'{tuple([float("{0:.3f}".format(t)) for t in al])} Last: {float(avg_vals[-1]):0.2f}'

@@ -368,9 +368,9 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         base['vgl'].update(dict(
             max_iter=10000,
-            n_seeds_for_sampled_trajectories=2500, # 3000, 3500
+            n_seeds_for_sampled_trajectories=2600, # 3000, 3500
             n_sampled_trajs_per_seed=2, #10, 2
-            fragment_length=self.horizon, interactive_imitation_iterations=70, #total | 200, 150
+            fragment_length=self.horizon, interactive_imitation_iterations=100, #total | 200, 150
             total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
             initial_epoch_multiplier=20, transition_oversampling=1 #15,5 | 4,1
         ))
