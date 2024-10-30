@@ -4,7 +4,7 @@ from random import shuffle
 from typing import Dict, List, NoReturn, Sequence
 from imitation.data.types import TrajectoryPair
 
-from src.vsl_algorithms.base_tabular_vsl_algorithm import BaseTabularMDPVSLAlgorithm
+from src.vsl_algorithms.base_tabular_vsl_algorithm import BaseTabularMDPVSLAlgorithm, PolicyApproximators
 from src.vsl_algorithms.me_irl_for_vsl import mce_partition_fh
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, ValueSystemLearningPolicy
 from src.vsl_reward_functions import AbstractVSLRewardFunction, TrainingModes
@@ -123,31 +123,12 @@ class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
         # fragments to get a list of (fragment1, fragment2) tuples. To do so,
         # we create a single iterator of the list and zip it with itself:
         if self.nexus is None:
-            self.nexus = []
-            for _ in range( num_pairs//2):
-            # NumPy's annotation here is overly-conservative, but this works at runtime
-                traj = self.rng.choice(
-                    trajectories,  # type: ignore[arg-type]
-                    p=np.array(weights) / sum(weights),
-                )
-                n = len(traj)
-                start = self.rng.integers(0, n - fragment_length, endpoint=True)
-                end = start + fragment_length
-                terminal = (end == n) and traj.terminal
-                fragment = TrajectoryWithRew(
-                    obs=traj.obs[start : end + 1],
-                    acts=traj.acts[start:end],
-                    infos=traj.infos[start:end] if traj.infos is not None else None,
-                    rews=traj.rews[start:end],
-                    terminal=terminal,
-                )
-            
-                self.nexus.append(fragment)
+            self.nexus = fragments[0]
 
-        fragment_chain = list(zip(fragments, fragments[1:])) + list(zip(self.nexus, fragments[:-1]))
+        fragment_chain = list(zip(fragments, fragments[1:])) + list(zip([self.nexus]*len(fragments[:-1]), fragments[:-1]))
         # a chain is formed, and joined back to a previous point.
         #assert len(fragment_chain) == num_pairs, f'{len(fragment_chain)} vs {num_pairs}'
-        self.nexus[np.random.choice(num_pairs//2-1,size=1)[0]] = fragments[0]
+        self.nexus = fragments[-1]
         return fragment_chain 
 class ActiveSelectionFragmenterVSL(preference_comparisons.Fragmenter):
     def __init__(
@@ -542,6 +523,8 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                  query_schedule="hyperbolic",
                  learn_stochastic_policy=True,
                  expert_is_stochastic=True,
+                 approximator_kwargs={},
+                 policy_approximator=PolicyApproximators.MCE_ORIGINAL,
                  # 0 for deterministic preference sampling, 1 for totally random according to softmax probabilities
                  preference_sampling_temperature=0,
                  reward_trainer_kwargs={
@@ -549,7 +532,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
                 active_fragmenter_on=SupportedFragmenters.RANDOM_FRAGMENTER,
                  *, custom_logger=None):
-        super().__init__(env=env, reward_net=reward_net, vgl_optimizer_cls=vgl_optimizer_cls, vsi_optimizer_cls=vsi_optimizer_cls,
+        super().__init__(env=env, reward_net=reward_net, vgl_optimizer_cls=vgl_optimizer_cls, policy_approximator=policy_approximator, approximator_kwargs=approximator_kwargs, vsi_optimizer_cls=vsi_optimizer_cls,
                          vgl_optimizer_kwargs=vgl_optimizer_kwargs, vsi_optimizer_kwargs=vsi_optimizer_kwargs, discount=discount,
                          log_interval=log_interval, vgl_expert_policy=vgl_expert_policy, vsi_expert_policy=vsi_expert_policy,
                          target_align_func_sampler=target_align_func_sampler, vsi_target_align_funcs=vsi_target_align_funcs,
@@ -722,7 +705,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         if self.active_fragmenter_on != SupportedFragmenters.RANDOM_FRAGMENTER:
             self.fragmenter = ActiveSelectionFragmenterVSL(
                 preference_model=self.preference_model,
-                base_fragmenter=preference_comparisons.RandomFragmenter(
+                base_fragmenter=ConnectedFragmenter(
                 warning_threshold=1,
                 rng=self.rng,
             ),

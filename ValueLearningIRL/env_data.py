@@ -187,7 +187,7 @@ class EnvDataForIRL():
 
 
 class EnvDataForIRLFireFighters(EnvDataForIRL):
-    DEFAULT_HORIZON = 30
+    DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
     DEFAULT_N_SEEDS = 100
     DEFAULT_N_SEEDS_MINIBATCH = 10
@@ -335,19 +335,19 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         # self.vsi_reference_policy = 'random'
 
         self.reward_trainer_kwargs = {
-            'epochs': 2, # 1, 3
+            'epochs': 1, # 1, 3
             'lr': 0.0015, # 0.001 0.0005
-            'batch_size': 1024, # 4096
+            'batch_size': 256, # 4096
         }
 
     @property
     def pc_config(self):
         
         base = super().pc_config
-        base['vgl'].update(dict(query_schedule='constant',
+        base['vgl'].update(dict(query_schedule='hyperbolic',
                             stochastic_sampling_in_reference_policy=True))
         base['vsi'].update(dict(
-                query_schedule='constant', #need constant
+                query_schedule='hyperbolic', #need constant
             stochastic_sampling_in_reference_policy=True,))
         return base
 
@@ -357,11 +357,11 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         base['vgl'].update(dict(
             max_iter=10000,
-            n_seeds_for_sampled_trajectories=2000, # 3000, 3500
+            n_seeds_for_sampled_trajectories=2500, # 3000, 3500
             n_sampled_trajs_per_seed=2, #10, 2
-            fragment_length=self.horizon, interactive_imitation_iterations=100, #total | 200, 150
-            total_comparisons=10000, initial_comparison_frac=0.1,  #50000, 20000
-            initial_epoch_multiplier=10, transition_oversampling=1.5 #15,5 | 4,1
+            fragment_length=self.horizon, interactive_imitation_iterations=70, #total | 200, 150
+            total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
+            initial_epoch_multiplier=30, transition_oversampling=1 #15,5 | 4,1
         ))
         base['vsi'].update(dict(
             max_iter=20000,
@@ -410,7 +410,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         if not self.use_one_hot_state_action:
 
             self.use_bias = True
-            self.hid_sizes = [50, 50, 50, self.n_values,]
+            self.hid_sizes = [50, 100, 50, self.n_values,]
             self.basic_layer_classes = [
                 nn.Linear, nn.Linear, nn.Linear, nn.Linear, LinearAlignmentLayer]
             self.activations = [nn.LeakyReLU, nn.LeakyReLU,

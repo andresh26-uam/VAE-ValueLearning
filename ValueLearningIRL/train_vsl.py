@@ -230,6 +230,8 @@ if __name__ == "__main__":
                                                                vgl_target_align_funcs=training_data.vgl_targets,
                                                                vsi_target_align_funcs=training_data.vsi_targets,
                                                                rng=training_data.rng,
+                                                               policy_approximator=training_data.policy_approximation_method,
+                                                               approximator_kwargs=training_data.approximator_kwargs,
                                                                learn_stochastic_policy=training_data.learn_stochastic_policy,
                                                                use_quantified_preference=True,
                                                                expert_is_stochastic=training_data.stochastic_expert,
