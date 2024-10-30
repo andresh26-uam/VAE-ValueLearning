@@ -21,7 +21,7 @@ from torch import nn, optim
 from src.vsl_algorithms.preference_model_vs import CrossEntropyRewardLossForQualitativePreferences
 from src.vsl_algorithms.vsl_plot_utils import get_color_gradient, get_linear_combination_of_colors
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, profiled_society_sampler, random_sampler_among_trajs, sampler_from_policy
-from src.vsl_reward_functions import ConvexAlignmentLayer, LinearAlignmentLayer, LinearVSLRewardFunction, TrainingModes
+from src.vsl_reward_functions import ConvexAlignmentLayer, ConvexLinearModule, LinearAlignmentLayer, LinearVSLRewardFunction, TrainingModes
 from utils import sample_example_profiles
 from imitation.algorithms.preference_comparisons import CrossEntropyRewardLoss
 
@@ -159,13 +159,13 @@ class EnvDataForIRL():
     @property
     def me_config(self):
         return {'vgl': dict(
-            vc_diff_epsilon=1e-8,
-            gradient_norm_epsilon=1e-9,
+            vc_diff_epsilon=1e-5,
+            gradient_norm_epsilon=1e-8,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         ), 'vsi': dict(
-            vc_diff_epsilon=1e-8,
-            gradient_norm_epsilon=1e-9,
+            vc_diff_epsilon=1e-5,
+            gradient_norm_epsilon=1e-8,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         )}
@@ -436,7 +436,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
 
 class EnvDataForRoadWorld(EnvDataForIRL):
-    DEFAULT_HORIZON = 40
+    DEFAULT_HORIZON = 60
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
     DEFAULT_N_SEEDS = 100
     DEFAULT_N_SEEDS_MINIBATCH = 20
@@ -495,7 +495,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         profiles = sample_example_profiles(
             profile_variety=self.profile_variety, n_values=self.n_values)
-        
+        #profiles = [(1.0,0.0,0.0), (0.75,0.25,0.0), (0.5,0.5,0.0), (0.25, 0.75, 0.0), (0.0,1.0,0.0), (0.25,0.5,0.25), (0.0,0.75,0.25), (0.0,0.5,0.5), (0.25,0.5,0.25), (0.0, 0.25, 0.75), (0.0, 0.0, 1.0)]
         profile_to_assumed_matrix = {}
 
         for w in profiles:
@@ -566,11 +566,11 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=10000,
 
-            n_seeds_for_sampled_trajectories=1500,
+            n_seeds_for_sampled_trajectories=1000,
             n_sampled_trajs_per_seed=1,
-            fragment_length=self.horizon, interactive_imitation_iterations=100,
-            total_comparisons=4000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=1, transition_oversampling=2,
+            fragment_length=30, interactive_imitation_iterations=60,
+            total_comparisons=8000, initial_comparison_frac=0.1,
+            initial_epoch_multiplier=1, transition_oversampling=1,
         ))
         base['vsi'].update(dict(
             max_iter=10000,
@@ -593,7 +593,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=500))
         base['vsi'].update(dict(
-            max_iter=1000))
+            max_iter=100))
 
         return base
 
@@ -612,13 +612,13 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.environment_is_stochastic = False
         self.hid_sizes = [3,]
         self.use_bias = False
-        self.basic_layer_classes = [nn.Linear, ConvexAlignmentLayer]
+        self.basic_layer_classes = [ConvexLinearModule, ConvexAlignmentLayer]
         self.activations = [nn.Identity, nn.Identity]
         self.vgl_targets = BASIC_PROFILES
-        self.profile_variety = 4
+        self.profile_variety = 4 # If 4 it is 0.67, 0.33...
         self.n_values = 3
         self.negative_grounding_layer = True
-
+        
         self.vsi_optimizer_kwargs = {"lr": 0.2, "weight_decay": 0.0000}
         self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.0000}
 
@@ -635,5 +635,5 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.reward_trainer_kwargs = {
             'epochs': 1,
             'lr': 0.03,
-            'batch_size': 1024,
+            'batch_size': 128,
         }

@@ -462,18 +462,22 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: MaxEntropyIRLForVSL, ex
 
 
 def compute_stats(data_dict, metric_name='f1'):
-        means_per_al = {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
-        stds_per_al = {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+        means_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+        stds_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
         labels_per_al = {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
         ratios = []
-        for ratio in data_dict.keys():
+
+        f1_per_ratio = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+        
+        for ratio in sorted(data_dict.keys()):
             ratios.append(ratio)
             for al, values in data_dict[ratio][metric_name].items():
                 n = len(values)
-                means_per_al[al].append(np.mean(values))
-                stds_per_al[al].append(np.std(values))
+                means_per_al[al][ratio] = np.mean(values)
+                stds_per_al[al][ratio] = np.std(values)
                 labels_per_al[al].append(f'{tuple([float("{0:.3f}".format(t)) for t in al])}')  # Convert the tuple key to a string for labeling
         #vector of means, stds and labels and number of repetitions per ratio.
+        
         return ratios, means_per_al, stds_per_al, labels_per_al, n
 
 def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False,
@@ -521,7 +525,8 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             target_al_func_ro_mean_align_func[al] = learned_al
         else:
             label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
-        plt.errorbar(ratios,f1_means[al], yerr=f1_stds[al], label=label
+        assert ratios == sorted(ratios)
+        plt.errorbar(ratios, [f1_means[al][r] for r in ratios], yerr=[f1_stds[al][r] for r in ratios], label=label
                      , capsize=5, marker='o',color=color,ecolor=color)
 
     plt.title(f'Avg. F1 score over {n} runs')
@@ -546,7 +551,7 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
         if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
             color = align_func_colors(al)
         else:
-            color = viridis(idx / (len(f1_means) - 1))
+            color = viridis(idx / (len(jsd_means) - 1))
 
 
         if target_align_funcs_to_learned_align_funcs is not None:
@@ -566,7 +571,8 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
             label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
         else:
             label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
-        plt.errorbar(ratios,jsd_means[al], yerr=jsd_stds[al], label=label
+        assert ratios == sorted(ratios)
+        plt.errorbar(ratios,[jsd_means[al][r] for r in ratios], yerr=[jsd_stds[al][r] for r in ratios], label=label
                      , capsize=5, marker='o',color=color,ecolor=color)
 
     plt.title(f'Avg. Jensen Shannon div. over {n} runs')
@@ -602,10 +608,10 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
 
     for target_vs_function in labels:
         # Gather F1 and JSD stats for metrics table
-        f1_at_0 = f'{f1_means[target_vs_function][-1]:.3f} ± {f1_stds[target_vs_function][-1]:.2f}'
-        f1_at_1 = f'{f1_means[target_vs_function][0]:.3f} ± {f1_stds[target_vs_function][0]:.2f}'
-        jsd_at_0 = f'{jsd_means[target_vs_function][-1]:.2e} ± {jsd_stds[target_vs_function][-1]:.2e}'
-        jsd_at_1 = f'{jsd_means[target_vs_function][0]:.2e} ± {jsd_stds[target_vs_function][0]:.2e}'
+        f1_at_0 = f'{f1_means[target_vs_function][0.0]:.3f} ± {f1_stds[target_vs_function][0.0]:.2f}'
+        f1_at_1 = f'{f1_means[target_vs_function][1.0]:.3f} ± {f1_stds[target_vs_function][1.0]:.2f}'
+        jsd_at_0 = f'{jsd_means[target_vs_function][0.0]:.2e} ± {jsd_stds[target_vs_function][0.0]:.2e}'
+        jsd_at_1 = f'{jsd_means[target_vs_function][1.0]:.2e} ± {jsd_stds[target_vs_function][1.0]:.2e}'
 
         # Prepare metrics row with conditional "Learned VS" column
         metrics_row = [str(target_vs_function), f1_at_0, f1_at_1, jsd_at_0, jsd_at_1]
@@ -630,7 +636,7 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
         if target_align_funcs_to_learned_align_funcs:
             expected_alignments_row.insert(1, str(learned_vs))  # Insert "Learned VS" as the second column
         expected_alignments_rows.append(expected_alignments_row)
-        print(expected_alignments_rows)
+        
 
     # Write metrics table to CSV
     with open(csv_file_1, 'w', newline='') as f:

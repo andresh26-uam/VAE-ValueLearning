@@ -1,3 +1,4 @@
+from copy import deepcopy
 import enum
 from math import ceil, floor
 from random import shuffle
@@ -235,7 +236,32 @@ class ActiveSelectionFragmenterVSL(preference_comparisons.Fragmenter):
             else:
                 self.raise_uncertainty_on_not_supported()
         return var_estimate
+
+
+class BasicRewardTrainerVSL(preference_comparisons.BasicRewardTrainer):
+    """Train a basic reward model."""
+    def __init__(
+        self,
+        preference_model: preference_comparisons.PreferenceModel,
+        loss: preference_comparisons.RewardLoss,
+        rng: np.random.Generator,
+        batch_size: int = 32,
+        minibatch_size: Optional[int] = None,
+        epochs: int = 1,
+        lr: float = 1e-3,
+        custom_logger = None,
+        regularizer_factory = None,
+    ) -> None:
+        
+        super().__init__(preference_model, loss, rng, batch_size, minibatch_size, epochs, lr, custom_logger, regularizer_factory)
     
+        self.optim = th.optim.AdamW(self._preference_model.parameters(), lr=lr, weight_decay=0.0) #WEIGHT DECAY MUST BE 0 !!!!!!!
+        self.regularizer = (
+            regularizer_factory(optimizer=self.optim, logger=self.logger)
+            if regularizer_factory is not None
+            else None
+        )
+
 class PreferenceModelTabularVSL(preference_comparisons.PreferenceModel):
     """Class to convert two fragments' rewards into preference probability."""
     """
@@ -402,6 +428,7 @@ class SupportedFragmenters(enum.Enum):
         ACTIVE_FRAGMENTER_PROBABILITY = 'probability'
         ACTIVE_FRAGMENTER_LABEL = 'label'
         RANDOM_FRAGMENTER = 'random'
+        CONNECTED_FRAGMENTER = 'connected'
 
 class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.RewardLoss):
     """Compute the cross entropy reward loss."""
@@ -513,7 +540,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                  vsi_target_align_funcs=...,
                  vgl_target_align_funcs=...,
                  training_mode=TrainingModes.VALUE_GROUNDING_LEARNING,
-
+                 independent_vgl = False,
                  rng=np.random.default_rng(0),
                  discount_factor_preferences=None,
                  use_quantified_preference=False,
@@ -539,6 +566,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                          vgl_target_align_funcs=vgl_target_align_funcs, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy,stochastic_expert=expert_is_stochastic)
 
         self.rng = rng
+        self.independent_vgl = independent_vgl
         if discount_factor_preferences is None:
             self.discount_factor_preferences = discount
         else:
@@ -599,11 +627,10 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                  sample=self.sample, temperature=self.temperature)
 
         if self.active_fragmenter_on == SupportedFragmenters.RANDOM_FRAGMENTER:
-            self.fragmenter = ConnectedFragmenter(
+            self.fragmenter = preference_comparisons.RandomFragmenter(
                 warning_threshold=1,
-                rng=self.rng,
+                rng=self.rng
             )
-        else:
             pass # It will be initialized in _train_global.
         self.last_accuracies_per_align_func = {al: [] for al in (
             self.vsi_target_align_funcs if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.vgl_target_align_funcs)}
@@ -630,10 +657,11 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
 
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, epoch_partition = 0.1):
         # return super().train_vgl(max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_funcs)
-        reference_trajs_per_profile = self.extract_trajectories(
-            n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
-        
         reward_net_per_target = dict()
+        reference_trajs_per_profile = self.extract_trajectories(
+                n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
+            
+        
         """n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
         for rep in range(n_steps_per_change_of_target):
             TODO: need further testing, to retrain the reference policy after updates...:
@@ -649,12 +677,16 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
 
                 reward_net_per_target[target_align_func] = self.current_net.copy()
             """
-        for vi, target_align_func in enumerate(self.vgl_target_align_funcs):
+        for vi, target_align_func in enumerate(reversed(self.vgl_target_align_funcs)):
             self._train_global(max_iter, target_align_func,
                                 reference_trajs_per_profile,)
+            
+        for target_align_func in self.vgl_target_align_funcs:
             reward_net_per_target[target_align_func] = self.current_net.copy()
+            print(self.current_net.get_learned_grounding())
         return reward_net_per_target
-
+        
+                
     def extract_trajectories(self, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, resample_trajs=False):
         seed = int(self.rng.random()*1000)
         
@@ -703,18 +735,24 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
 
         
         if self.active_fragmenter_on != SupportedFragmenters.RANDOM_FRAGMENTER:
-            self.fragmenter = ActiveSelectionFragmenterVSL(
-                preference_model=self.preference_model,
-                base_fragmenter=ConnectedFragmenter(
-                warning_threshold=1,
-                rng=self.rng,
-            ),
+            if SupportedFragmenters.CONNECTED_FRAGMENTER == self.active_fragmenter_on:
+                self.fragmenter = ConnectedFragmenter(
+                    warning_threshold=1,
+                    rng=self.rng,
+                )
+            else:
+                self.fragmenter = ActiveSelectionFragmenterVSL(
+                    preference_model=self.preference_model,
+                    base_fragmenter=ConnectedFragmenter(
+                    warning_threshold=1,
+                    rng=self.rng,
+                ),
             fragment_sample_factor=0.5,
             uncertainty_on=self.active_fragmenter_on.value
 
             )
 
-        reward_trainer = preference_comparisons.BasicRewardTrainer(
+        reward_trainer = BasicRewardTrainerVSL(
             preference_model=self.preference_model,
             loss=self.loss_class(**self.loss_kwargs),
             rng=self.rng,

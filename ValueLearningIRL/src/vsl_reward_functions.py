@@ -33,7 +33,7 @@ def print_tensor_and_grad_fn(grad_fn, level=0):
 
 class ConvexLinearModule(th.nn.Linear):
 
-    def __init__(self, in_features, out_features, bias = True, device=None, dtype=None):
+    def __init__(self, in_features, out_features, bias = False, device=None, dtype=None):
         super().__init__(in_features, out_features, bias, device, dtype)
         state_dict = self.state_dict()
         state_dict['weight'] = th.rand(
@@ -258,11 +258,19 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             return ret
 
     def __copy_args__(self, new):
-
+        print("COPYING")
         for k, v in vars(self).items():
             try:
-                setattr(new, k, deepcopy(v))
-            except:
+                nv = deepcopy(v)
+                if isinstance(v, th.nn.Module):
+                    nv.load_state_dict(v.state_dict())
+                if isinstance(v, GroundingEnsemble):
+                    for i in range(v.networks):
+                        nv.networks[i] = deepcopy(v.networks[i])
+                        nv.networks[i].load_state_dict(v.networks[i].state_dict())
+                setattr(new, k, nv)
+            except Exception as e:
+                print(e)
                 pass   # non-pickelable stuff wasn't needed
 
         return new
@@ -780,6 +788,7 @@ class GroundingEnsemble(th.nn.Module):
         self.networks = th.nn.ModuleList([
             self._create_single_output_net() for _ in range(self.num_outputs)
         ])
+        self.c = 0
 
     def _create_single_output_net(self):
         """Creates a single-output version of the original network structure."""
@@ -804,7 +813,20 @@ class GroundingEnsemble(th.nn.Module):
             modules.append(self.activations[i - 1]())
         
         return th.nn.Sequential(*modules)
-
+    def requires_grad_(self, requires_grad = True):
+        r = super().requires_grad_(requires_grad)
+        for n in self.networks:
+            n.requires_grad_(requires_grad)
+        self.networks.requires_grad_(requires_grad)
+        return r
+    def __str__(self):
+        
+        ret = ""
+        for ic in range(self.hid_sizes[-1]):
+            ret += (f"{ic}:" + str(self.networks[ic].state_dict()))
+        
+        
+        return (ret + super().__str__())
     def forward(self, x):
         # Run input `x` through each network in self.networks and concatenate outputs
         outputs = [net(x) for net in self.networks]
@@ -818,7 +840,8 @@ class GroundingEnsemble(th.nn.Module):
                 loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile), bias=None), target)
 
                 # Backward pass to calculate gradients
-                loss.backward(retain_graph=True)
+                loss.backward(retain_graph=False)
+                
                 
                 # Check gradients for isolation: verify only target network parameters have gradients
                 for idx, network in enumerate(self.networks):
@@ -826,12 +849,13 @@ class GroundingEnsemble(th.nn.Module):
                     for param in network.parameters():
                         if param.grad is not None:
                             if idx == 0:
+                                assert param.grad is not None
+                                assert th.all(param.grad == 0)
                                 continue
                             else:
                                 none_grad = param.grad is None
                                 if not none_grad:
                                     
                                     assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
-
-                
+        
         return outputs

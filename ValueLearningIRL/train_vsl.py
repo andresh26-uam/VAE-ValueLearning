@@ -89,7 +89,7 @@ def parse_args():
     pc_group.add_argument('-losskw', '--loss_kwargs', type=json.loads,
                           default={}, help='Loss Kwargs as a Python dictionary')
     pc_group.add_argument('-acfrag', '--active_fragmenter_on', type=str,
-                          default=SupportedFragmenters.RANDOM_FRAGMENTER, choices=[e.value for e in SupportedFragmenters], help='Active fragmenter criterion')
+                          default=SupportedFragmenters.CONNECTED_FRAGMENTER, choices=[e.value for e in SupportedFragmenters], help='Active fragmenter criterion')
 
     debug_params = parser.add_argument_group('Debug Parameters')
     debug_params.add_argument('-db', '--check_rewards', action='store_true',
