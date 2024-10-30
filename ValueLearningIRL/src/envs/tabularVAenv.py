@@ -111,7 +111,11 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
 
     def get_state_actions_with_known_reward(self, align_func):
         return None
-
+    
+    def set_initial_state_distribution(self, dist):
+        self.unwrapped.initial_state_dist = dist
+        self.initial_state_dist  = dist
+        
     @property
     @abstractmethod
     def goal_states(self):

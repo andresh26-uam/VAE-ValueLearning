@@ -102,7 +102,8 @@ class EnvDataForIRL():
         self.n_reward_samples_per_iteration = self.__class__.DEFAULT_N_REWARD_SAMPLES_PER_ITERATION
         self.n_expert_samples_per_seed_minibatch = self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH
         self.n_seeds_minibatch = self.__class__.DEFAULT_N_SEEDS_MINIBATCH
-
+        
+        self.initial_state_distribution_for_expected_alignment_eval = None
         self.set_defaults()
         for kw, kwv in kwargs.items():
             setattr(self, kw, kwv)
@@ -288,6 +289,16 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         self.vsi_targets = profiles
 
+        self.initial_state_distribution_for_expected_alignment_eval = np.zeros((self.env.n_states,), dtype=np.float64)
+        self.initial_state_distribution_for_expected_alignment_eval[self.env.real_env.encrypt(
+                np.array([0, 3, 4, 0, 0, 3]))] = 1.0 # This testing state 
+        # Fire in floor level 0
+        # Severe fire(3), 
+        # occupancy very high (4)
+        # equipent readiness NONE
+        # Visibility Poor (0)
+        # Firefighter is in perfect condition (3)
+        
         if sampler_over_precalculated_trajs:
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=n_seeds_for_samplers, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
                                                                      with_alignfunctions=profiles, t_max=self.horizon)
@@ -336,8 +347,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         self.reward_trainer_kwargs = {
             'epochs': 1, # 1, 3
-            'lr': 0.0015, # 0.001 0.0005
-            'batch_size': 256, # 4096
+            'lr': 0.001, # 0.001 0.0005
+            'batch_size': 512, # 4096
         }
 
     @property
@@ -361,7 +372,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             n_sampled_trajs_per_seed=2, #10, 2
             fragment_length=self.horizon, interactive_imitation_iterations=70, #total | 200, 150
             total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
-            initial_epoch_multiplier=30, transition_oversampling=1 #15,5 | 4,1
+            initial_epoch_multiplier=20, transition_oversampling=1 #15,5 | 4,1
         ))
         base['vsi'].update(dict(
             max_iter=20000,
@@ -484,7 +495,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         profiles = sample_example_profiles(
             profile_variety=self.profile_variety, n_values=self.n_values)
-        profile_to_matrix = {}
+        
         profile_to_assumed_matrix = {}
 
         for w in profiles:
@@ -511,7 +522,9 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.vsi_reference_policy = expert_policy_train
 
         self.vsi_targets = profiles
-
+        #self.initial_state_distribution_for_expected_alignment_eval = np.zeros((self.env.real_environ.n_states,), dtype=np.float64)
+        #self.initial_state_distribution_for_expected_alignment_eval[49] = 1.0 
+        
         if sampler_over_precalculated_trajs:
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
                                                                      seed=self.seed, stochastic=self.stochastic_expert,

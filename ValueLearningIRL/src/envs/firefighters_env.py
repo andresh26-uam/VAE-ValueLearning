@@ -103,7 +103,7 @@ class FireFightersEnv(TabularVAMDP):
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s, a, s] = 1.0
                     reward_matrix_per_va[(1.0, 0.0)][s, a], reward_matrix_per_va[(
-                        0.0, 1.0)][s, a] = [0.0,0.0] #if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
+                        0.0, 1.0)][s, a] = [0.0,0.0]  if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
 
         self._goal_states = np.asarray(_goal_states)
 

@@ -2,7 +2,7 @@ import argparse
 import ast
 from copy import deepcopy
 import json
-
+import pprint
 import numpy as np
 import torch
 from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL, EnvDataForIRLFireFighters, EnvDataForRoadWorld, PrefLossClasses
@@ -114,7 +114,7 @@ def parse_args():
 
     return parser.parse_args()
 
-
+import random
 if __name__ == "__main__":
     # IMPORTANT: Default Args are specified depending on the environment in env_data.py
     parser_args = filter_none_args(parse_args())
@@ -128,6 +128,7 @@ if __name__ == "__main__":
 
     np.random.seed(parser_args.seed)
     torch.manual_seed(parser_args.seed)
+    random.seed(parser_args.seed)
 
     training_data: EnvDataForIRL
 
@@ -248,7 +249,7 @@ if __name__ == "__main__":
                                policy_approx_method=training_data.policy_approximation_method,
                                stochastic_expert=training_data.stochastic_expert, stochastic_learner=training_data.learn_stochastic_policy)
 
-    # VALUE GROUNDING LEARNING:
+    
     learned_rewards_per_round = []
     policies_per_round = []
     plot_metric_per_round = []
@@ -257,10 +258,10 @@ if __name__ == "__main__":
     target_align_funcs_to_learned_align_funcs_per_round = (
         None if vgl_or_vsi == 'vgl' else [])
 
-    import pprint
+    
     pp = pprint.PrettyPrinter(indent=4)
-    print(pp.pprint(vars(vsl_algo)))
-    print(pp.pprint(vars(vsl_algo.reward_net)))
+    pp.pprint(vars(vsl_algo))
+    pp.pprint(vars(vsl_algo.reward_net))
 
     n_experiment_reps = parser_args.n_experiments
     for rep in range(n_experiment_reps):
@@ -376,6 +377,7 @@ if __name__ == "__main__":
                                                                                                     seed=training_data.seed+2321489,#not to have the same trajectories as in training
                                                                                                     ratios_expert_random=parser_args.expert_to_random_ratios,
                                                                                                     n_samples_per_seed=1,
+                                                                                                    initial_state_distribution_for_expected_alignment_estimation=training_data.initial_state_distribution_for_expected_alignment_eval,
                                                                                                     testing_align_funcs=testing_profiles)
     plot_f1_and_jsd(f1_and_jsd_expert_random, namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}',
                     align_func_colors=training_data.align_colors,
@@ -393,6 +395,7 @@ if __name__ == "__main__":
                                                                                                             seed=training_data.seed+2321489,#not to have the same trajectories as in training
                                                                                                             ratios_expert_random=parser_args.expert_to_random_ratios,
                                                                                                             n_samples_per_seed=1,
+                                                                                                            initial_state_distribution_for_expected_alignment_estimation=training_data.initial_state_distribution_for_expected_alignment_eval,
                                                                                                             testing_align_funcs=testing_profiles_grounding)
         plot_f1_and_jsd(f1_and_jsd_expert_random_vgl, namefig=f'{parser_args.experiment_name}{algorithm}_GROUNDING_ERROR_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', 
                         show=parser_args.show,
