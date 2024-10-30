@@ -568,9 +568,9 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
             n_seeds_for_sampled_trajectories=1500,
             n_sampled_trajs_per_seed=1,
-            fragment_length=self.horizon, interactive_imitation_iterations=200,
+            fragment_length=self.horizon, interactive_imitation_iterations=100,
             total_comparisons=4000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=1, transition_oversampling=3,
+            initial_epoch_multiplier=1, transition_oversampling=2,
         ))
         base['vsi'].update(dict(
             max_iter=10000,
@@ -593,7 +593,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=500))
         base['vsi'].update(dict(
-            max_iter=500))
+            max_iter=1000))
 
         return base
 
@@ -619,7 +619,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.n_values = 3
         self.negative_grounding_layer = True
 
-        self.vsi_optimizer_kwargs = {"lr": 0.15, "weight_decay": 0.0000}
+        self.vsi_optimizer_kwargs = {"lr": 0.2, "weight_decay": 0.0000}
         self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.0000}
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL

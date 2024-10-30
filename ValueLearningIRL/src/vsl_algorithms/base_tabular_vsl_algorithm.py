@@ -568,7 +568,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                                         testing_align_funcs=[],
                                         initial_state_distribution_for_expected_alignment_estimation = None,
                                         basic_profiles=None):
-        targets = testing_align_funcs
+        
         basic_profiles = [tuple(v) for v in np.eye(self.reward_net.hid_sizes[-1])]
         
         metrics_per_ratio = dict()

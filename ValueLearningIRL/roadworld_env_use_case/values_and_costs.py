@@ -17,17 +17,20 @@ FULL_NAME_VALUES = OrderedDict({'sus': 'Sustainability', 'sec': 'Security', 'eff
 def eco_cost(feature_vector, path_feature_vector=None):
     # feature_vector = residential, primary, unclassified, tertiary, living street, secondary
     # path_feature_vector = number of road segments, total length, number of left turns, number of right turns, number of U turns, number of road segment per type (6 dimensions)
-    fuel_consumption_estimate = np.asarray([17, 12, 12, 10, 20, 10]) 
-    normalized_fuel = fuel_consumption_estimate/np.max(fuel_consumption_estimate)
+    fuel_consumption_estimate = np.asarray([30, 18, 4, 12, 30, 10]) 
+    #normalized_fuel = fuel_consumption_estimate/np.max(fuel_consumption_estimate)
+    normalized_fuel = fuel_consumption_estimate/2.0
     #print(np.dot(fuel_consumption_estimate, feature_vector[1:]))
     return feature_vector[0]*(np.dot(normalized_fuel, feature_vector[1:]))
 
 def sec_cost(feature_vector, path_feature_vector=None):
-    sec_cost_estimate = [0.1, 0.3, 0.4, 0.8, 0.9, 0.5] # INSEC(e)
+    #sec_cost_estimate = [0.1, 0.3, 0.4, 0.8, 0.9, 0.5] # INSEC(e)
+    sec_cost_estimate = [0.1, 1.0, 20.0, 13.0, 0.03, 4.0] # INSEC(e)
     return feature_vector[0]*np.dot(sec_cost_estimate, feature_vector[1:])
 
 def eff_cost(feature_vector, path_feature_vector=None):
-    speed_estimate = [0.1, 0.9, 0.4, 0.6, 0.1, 0.7] # VEL(e)
+    #speed_estimate = [0.1, 0.9, 0.4, 0.6, 0.1, 0.7] # VEL(e)
+    speed_estimate = np.asarray([0.02, 12.9, 1.4, 1.8, 0.2, 5.7])/2.0 # VEL(e)
     #normalized_speed = speed_estimate/np.max(speed_estimate)
     return feature_vector[0]/np.dot(speed_estimate, feature_vector[1:])
 

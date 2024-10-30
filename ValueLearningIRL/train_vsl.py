@@ -317,7 +317,7 @@ if __name__ == "__main__":
             extras += "with_qpref_"
 
     plot_learning_curves(algo=vsl_algo, historic_metric=plot_metric_per_round,
-                         
+                         usecmap = 'viridis',
                          ylim=None if name_metric != 'Accuracy' else (0.0, 1.1),
                          name_metric=name_metric if algorithm == 'me' else 'Accuracy',
                          name_method=f'{parser_args.experiment_name}{algorithm}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{task}',
@@ -400,7 +400,7 @@ if __name__ == "__main__":
         plot_f1_and_jsd(f1_and_jsd_expert_random_vgl, namefig=f'{parser_args.experiment_name}{algorithm}_GROUNDING_ERROR_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', 
                         show=parser_args.show,
                         target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                        align_func_colors=training_data.align_colors,
+                        align_func_colors=training_data.align_colors,usecmap = 'viridis',
                         values_names=value_names,
                         value_expectations_per_ratio=value_expectations_per_ratio,
                         value_expectations_per_ratio_expert=value_expectations_per_ratio_expert
@@ -422,7 +422,7 @@ if __name__ == "__main__":
                                     vsi_or_vgl=vgl_or_vsi,
                                     namefig=f'{parser_args.experiment_name}{algorithm}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
     print("Plotting learned and expert occupancy measures")
-    if algorithm == 'me':
+    if algorithm == 'me' and environment == 'firefighters':
         plot_learned_and_expert_occupancy_measures(vsl_algo=vsl_algo, expert_policy=training_data.vgl_expert_policy,
                                                    target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
                                                    learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl=vgl_or_vsi,

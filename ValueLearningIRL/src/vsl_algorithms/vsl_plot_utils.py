@@ -34,16 +34,24 @@ def pad(array, length):
     return new_arr
 
 
-def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='Linf', name_method='test_lc', align_func_colors=lambda al: 'black', ylim=(0.0,1.1), show=False):
+def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='Linf', name_method='test_lc', align_func_colors=lambda al: 'black', ylim=(0.0,1.1), show=False, usecmap='viridis'):
     plt.figure(figsize=(6, 6))
     plt.title(
         f"Learning curve for {name_metric}\nover {len(historic_metric)} repetitions.")
     plt.xlabel("Training Iteration")
     plt.ylabel(f"{name_metric}")
+    n_possible_al = len(historic_metric[0].keys())
+    viridis = cm.get_cmap(usecmap, n_possible_al)  # Get 'viridis' colormap with number of AL strategies
+    
 
-    for al in historic_metric[0].keys():
+    for idx, al in enumerate(historic_metric[0].keys()):
         if al not in historic_metric[0].keys():
             continue
+        if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
+            color = align_func_colors(al)
+        else:
+            color = viridis(idx / (n_possible_al - 1))
+
         max_length = np.max([len(historic_metric[rep][al])
                             for rep in range(len(historic_metric))])
 
