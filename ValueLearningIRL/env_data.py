@@ -37,7 +37,7 @@ class PrefLossClasses(enum.Enum):
 class EnvDataForIRL():
     DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
-    DEFAULT_N_SEEDS = 100
+    DEFAULT_N_SEEDS = 200
     DEFAULT_N_SEEDS_MINIBATCH = 30
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 10
@@ -66,7 +66,7 @@ class EnvDataForIRL():
 
         self.target_align_func_sampler = lambda al_func: al_func
         self.reward_trainer_kwargs = {
-            'epochs': 1,
+            'epochs': 5,
             'lr': 0.08,
             'batch_size': 512,
             'minibatch_size': 32,
@@ -97,7 +97,7 @@ class EnvDataForIRL():
         self.testing_profiles = None
 
         # Override defaults with specific method for other environments
-        self.n_seeds_total = 100
+        self.n_seeds_total = 200
         self.n_expert_samples_per_seed = 1 if self.stochastic_expert is False else self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED
         self.n_reward_samples_per_iteration = self.__class__.DEFAULT_N_REWARD_SAMPLES_PER_ITERATION
         self.n_expert_samples_per_seed_minibatch = self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH
@@ -180,7 +180,9 @@ class EnvDataForIRL():
     def pc_train_config(self):
         return {'vgl': dict(
             resample_trajectories_if_not_already_sampled=False, new_rng=None,
+            random_trajs_proportion=0.5,
         ), 'vsi': dict(resample_trajectories_if_not_already_sampled=False, new_rng=None,
+                       random_trajs_proportion=0.5
                        )}
 
     @abstractmethod
@@ -190,7 +192,7 @@ class EnvDataForIRL():
 class EnvDataForIRLFireFighters(EnvDataForIRL):
     DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
-    DEFAULT_N_SEEDS = 100
+    DEFAULT_N_SEEDS = 200
     DEFAULT_N_SEEDS_MINIBATCH = 10
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 10
@@ -346,7 +348,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         # self.vsi_reference_policy = 'random'
 
         self.reward_trainer_kwargs = {
-            'epochs': 1, # 1, 3
+            'epochs': 5, # 1, 3
             'lr': 0.001, # 0.001 0.0005
             'batch_size': 512, # 4096
         }
@@ -365,22 +367,23 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     @property
     def pc_train_config(self):
         base = super().pc_train_config
-
         base['vgl'].update(dict(
             max_iter=10000,
-            n_seeds_for_sampled_trajectories=2600, # 3000, 3500
+            random_trajs_proportion=0.8,
+            n_seeds_for_sampled_trajectories=4500, # 2600, 3000, 3500
             n_sampled_trajs_per_seed=2, #10, 2
-            fragment_length=self.horizon, interactive_imitation_iterations=100, #total | 200, 150
+            fragment_length=self.horizon, interactive_imitation_iterations=200, #total | 200, 150
             total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
-            initial_epoch_multiplier=20, transition_oversampling=1 #15,5 | 4,1
+            initial_epoch_multiplier=40, transition_oversampling=1 #15,5 | 4,1
         ))
         base['vsi'].update(dict(
             max_iter=20000,
+            random_trajs_proportion=0.8,
             n_seeds_for_sampled_trajectories=1000,
             n_sampled_trajs_per_seed=3,
-            fragment_length=5, interactive_imitation_iterations=100,
+            fragment_length=5, interactive_imitation_iterations=200,
             total_comparisons=3000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=1, transition_oversampling=3,
+            initial_epoch_multiplier=20, transition_oversampling=3,
         )
         )
         return base
@@ -389,7 +392,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_config(self):
         base = super().me_config
         base['vsi'].update(dict(
-            vc_diff_epsilon=1e-4 if self.discount_factor < 1.0 else 1e-3,
+            vc_diff_epsilon=1e-5,
             gradient_norm_epsilon=1e-7,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
@@ -400,7 +403,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(max_iter=200,))
-        base['vsi'].update(dict(max_iter=600))
+        base['vsi'].update(dict(max_iter=200))#600
         return base
 
     def get_assumed_grounding(self):
@@ -436,7 +439,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
 
 class EnvDataForRoadWorld(EnvDataForIRL):
-    DEFAULT_HORIZON = 60
+    DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
     DEFAULT_N_SEEDS = 100
     DEFAULT_N_SEEDS_MINIBATCH = 20
@@ -565,23 +568,25 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         base['vgl'].update(dict(
             max_iter=10000,
-
             n_seeds_for_sampled_trajectories=1000,
             n_sampled_trajs_per_seed=1,
-            fragment_length=30, interactive_imitation_iterations=60,
+            fragment_length=30, interactive_imitation_iterations=200,
             total_comparisons=8000, initial_comparison_frac=0.1,
             initial_epoch_multiplier=1, transition_oversampling=1,
+            random_trajs_proportion=0.8
         ))
         base['vsi'].update(dict(
             max_iter=10000,
             n_seeds_for_sampled_trajectories=1500,
             n_sampled_trajs_per_seed=1,
-            fragment_length=10, interactive_imitation_iterations=150,
+            fragment_length=10, interactive_imitation_iterations=200,
             total_comparisons=1000, initial_comparison_frac=0.1,
             initial_epoch_multiplier=1, transition_oversampling=3,
+            random_trajs_proportion=0.8
         )
         )
         return base
+
 
     @property
     def me_config(self):
@@ -591,9 +596,9 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(
-            max_iter=500))
+            max_iter=200))
         base['vsi'].update(dict(
-            max_iter=100))
+            max_iter=200))
 
         return base
 

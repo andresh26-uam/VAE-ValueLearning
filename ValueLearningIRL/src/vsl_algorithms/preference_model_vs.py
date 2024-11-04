@@ -607,11 +607,17 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         return self.pref_comparisons.logger
 
     def train(self, max_iter=5000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10,
-              resample_trajectories_if_not_already_sampled=True, new_rng=None, fragment_length='horizon', interactive_imitation_iterations=100, total_comparisons=500, initial_epoch_multiplier=10, transition_oversampling=5, initial_comparison_frac=0.2):
+              resample_trajectories_if_not_already_sampled=True, 
+              new_rng=None, fragment_length='horizon', 
+              interactive_imitation_iterations=100, 
+              total_comparisons=500, initial_epoch_multiplier=10, 
+              transition_oversampling=5, initial_comparison_frac=0.2,
+              random_trajs_proportion=0.0):
 
         self.resample_trajectories_if_not_already_sampled = resample_trajectories_if_not_already_sampled
         self.initial_comparison_frac = initial_comparison_frac
-
+        self.random_trajs_proportion = random_trajs_proportion
+        
         if new_rng is not None:
             self.rng = new_rng
         if fragment_length == 'horizon':
@@ -659,7 +665,8 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         # return super().train_vgl(max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_funcs)
         reward_net_per_target = dict()
         reference_trajs_per_profile = self.extract_trajectories(
-                n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
+                n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled,
+                random_trajs_proportion=self.random_trajs_proportion)
             
         
         """n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
@@ -687,9 +694,10 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         return reward_net_per_target
         
                 
-    def extract_trajectories(self, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, resample_trajs=False):
+    def extract_trajectories(self, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, resample_trajs=False, random_trajs_proportion=0.0):
         seed = int(self.rng.random()*1000)
-        
+
+
         if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             if self.vgl_reference_trajs_with_rew_per_profile is None or resample_trajs:
                 self.vgl_reference_trajs_with_rew_per_profile = {
@@ -697,6 +705,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                       stochastic=self.stochastic_sampling_in_reference_policy,
                                                                       repeat_per_seed=n_sampled_trajs_per_seed, with_alignfunctions=[
                                                                           pr,],
+                                                                      exploration=random_trajs_proportion,
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
                                                                       alignments_in_env=[pr,],custom_discount=self.discount_factor_preferences)
@@ -709,6 +718,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                       stochastic=self.stochastic_sampling_in_reference_policy,
                                                                       repeat_per_seed=n_sampled_trajs_per_seed, with_alignfunctions=[
                                                                           pr,],
+                                                                      exploration=random_trajs_proportion,
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
                                                                       custom_discount=self.discount_factor_preferences,
@@ -781,7 +791,9 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
 
     def train_vsl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_func):
         reference_trajs_per_profile = self.extract_trajectories(
-            n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled)
+            n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, 
+            self.resample_trajectories_if_not_already_sampled,
+            random_trajs_proportion=self.random_trajs_proportion)
 
         self._train_global(max_iter, target_align_func,
                            reference_trajs_per_profile)
