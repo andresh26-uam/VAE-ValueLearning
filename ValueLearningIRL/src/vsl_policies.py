@@ -373,10 +373,9 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         valid_probabilities = probs[valid_actions]
 
         # Step 3: Normalize the filtered probabilities so they sum to 1
-        print(valid_actions, state_obs)
-        print(probs)
+        
         probs = valid_probabilities / valid_probabilities.sum()
-        print(probs)
+        
         assert np.allclose([np.sum(probs),], [1.0,])
 
         if stochastic or do_explore:
