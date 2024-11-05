@@ -29,16 +29,16 @@ In all scripts, the `-sh` option is solely for showing the results when finished
 
 - **Value Grounding Learning**:
 It uses a custom version of the preference comparisons algorithm with quantified preferences [Christiano et al., 2017].
-    * Roadworld: `python train_vsl.py -t 'vgl' -e roadworld -a 'pc' -qp -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
-    * Firefighters: `python train_vsl.py -t 'vgl' -e firefighters -a 'pc' -qp -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
+    * Roadworld: `python train_vsl.py -t 'vgl' -e roadworld -a 'pc' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
+    * Firefighters: `python train_vsl.py -t 'vgl' -e firefighters -a 'pc' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
 - **Value System Identification** from real grounding:
 We employ Maximum Entropy IRL [Wulfmeier et al., 2015].
-    * Roadworld: `python train_vsl.py -t 'vsi' -e roadworld -a 'me' -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
-    * Firefighters: `python train_vsl.py -t 'vsi' -e firefighters -a 'me' -qp -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
+    * Roadworld: `python train_vsl.py -t 'vsi' -e roadworld -a 'me' -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
+    * Firefighters: `python train_vsl.py -t 'vsi' -e firefighters -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
 - **Value System Learning** (value grounding learning, then value system identification from the learned grounding):
     *Note that the preference comparisons algorithm (`-a 'pc'`) will automatically be selected for value grounding learning, with the options supplied (that will be shared for the system identification part). `-a 'me'` refers to the MaxEnt algorithm, used for the value system identification part.*
-    * Roadworld: `python train_vsl.py -t 'all' -e roadworld -a 'me' -qp -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
-    * Firefighters: `python train_vsl.py -t 'all' -e firefighters -a 'me' -qp -n=30 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
+    * Roadworld: `python train_vsl.py -t 'all' -e roadworld -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
+    * Firefighters: `python train_vsl.py -t 'all' -e firefighters -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
 
 ### Published work
 ---

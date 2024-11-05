@@ -461,26 +461,48 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: MaxEntropyIRLForVSL, ex
     plt.close()
 
 
-def compute_stats(data_dict, metric_name='f1'):
-        means_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
-        stds_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
-        labels_per_al = {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+def compute_stats(data_dict, metric_name='acc'):
         ratios = []
 
-        f1_per_ratio = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+        if isinstance(data_dict[list(data_dict.keys())[0]][metric_name][list(data_dict[list(data_dict.keys())[0]][metric_name].keys())[0]][0], dict):
+            epsilons = data_dict[list(data_dict.keys())[0]][metric_name][list(data_dict[list(data_dict.keys())[0]][metric_name].keys())[0]][0].keys()
         
-        for ratio in sorted(data_dict.keys()):
-            ratios.append(ratio)
-            for al, values in data_dict[ratio][metric_name].items():
-                n = len(values)
-                means_per_al[al][ratio] = np.mean(values)
-                stds_per_al[al][ratio] = np.std(values)
-                labels_per_al[al].append(f'{tuple([float("{0:.3f}".format(t)) for t in al])}')  # Convert the tuple key to a string for labeling
-        #vector of means, stds and labels and number of repetitions per ratio.
+            means_per_al = {eps: {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()} for eps in epsilons}
+            stds_per_al = {eps: {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()} for eps in epsilons}
+            labels_per_al = {eps: {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()} for eps in epsilons} 
+            
+            for ratio in sorted(data_dict.keys()):
+                ratios.append(ratio)
+                for eps in epsilons:
+                    for al, values in data_dict[ratio][metric_name].items():
+                        n = len(values)
+                        values_for_eps = [v[eps] for v in values]
+                        
+                        means_per_al[eps][al][ratio] = np.mean(values_for_eps)
+                        stds_per_al[eps][al][ratio] = np.std(values_for_eps)
+                        labels_per_al[eps][al].append(f'{tuple([float("{0:.3f}".format(t)) for t in al])}')  # Convert the tuple key to a string for labeling
+            #vector of means, stds and labels and number of repetitions per ratio.
+            
+            return ratios, means_per_al, stds_per_al, labels_per_al, n
         
-        return ratios, means_per_al, stds_per_al, labels_per_al, n
+        else:
+            means_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+            stds_per_al = {al: {} for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+            labels_per_al = {al: [] for al in data_dict[list(data_dict.keys())[0]][metric_name].keys()}
+            ratios = []
+            
+            for ratio in sorted(data_dict.keys()):
+                ratios.append(ratio)
+                for al, values in data_dict[ratio][metric_name].items():
+                    n = len(values)
+                    means_per_al[al][ratio] = np.mean(values)
+                    stds_per_al[al][ratio] = np.std(values)
+                    labels_per_al[al].append(f'{tuple([float("{0:.3f}".format(t)) for t in al])}')  # Convert the tuple key to a string for labeling
+            #vector of means, stds and labels and number of repetitions per ratio.
+            
+            return ratios, means_per_al, stds_per_al, labels_per_al, n
 
-def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False,
+def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=False,
                                         align_func_colors=None,
                                         usecmap = 'viridis',
                                         value_expectations_per_ratio=None,
@@ -490,108 +512,118 @@ def plot_f1_and_jsd(f1_and_jsd_per_ratio, namefig='test_plot_f1_jsd', show=False
                                     ):
     
     # Compute stats for 'f1' and 'ce'
-    ratios, f1_means, f1_stds, f1_labels, n = compute_stats(f1_and_jsd_per_ratio, 'f1')
-    ratios, jsd_means, jsd_stds, ce_labels, n = compute_stats(f1_and_jsd_per_ratio, 'jsd')
+    #ratios, f1_means, f1_stds, f1_labels, n = compute_stats(metrics_per_ratio, 'f1')
+    #ratios, jsd_means, jsd_stds, ce_labels, n = compute_stats(metrics_per_ratio, 'jsd')
+    ratios, acc_means_per_epsilon, acc_stds_per_epsilon, acc_labels_per_epsilon, n = compute_stats(metrics_per_ratio, 'acc')
+    ratios, n_repescados_means_per_epsilon, n_repescados_means_per_epsilon, jsd_labels_per_epsilon, n = compute_stats(metrics_per_ratio, 'repescados')
     
-    # Plot 'f1'
-    plt.figure(figsize=(16, 8))
-    
-    viridis = cm.get_cmap(usecmap, len(f1_means))  # Get 'viridis' colormap with number of AL strategies
-    target_al_func_ro_mean_align_func = None
-
-    for idx, al in enumerate(f1_means.keys()):
-        if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
-            color = align_func_colors(al)
-        else:
-            color = viridis(idx / (len(f1_means) - 1))
-
-        if target_align_funcs_to_learned_align_funcs is not None:
-            if target_al_func_ro_mean_align_func is None:
-                target_al_func_ro_mean_align_func = {}
-            all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
-                target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
-
-            if isinstance(target_align_funcs_to_learned_align_funcs, list):
-                learned_al = np.mean(all_learned_al, axis=0)
-                std_learned_al = np.std(all_learned_al, axis=0)
-            else:
-                learned_al = all_learned_al
-                std_learned_al = [0 for _ in learned_al]
-            
-            orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
-            std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
-            learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
-            label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
-            target_al_func_ro_mean_align_func[al] = learned_al
-        else:
-            label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
-        assert ratios == sorted(ratios)
-        plt.errorbar(ratios, [f1_means[al][r] for r in ratios], yerr=[f1_stds[al][r] for r in ratios], label=label
-                     , capsize=5, marker='o',color=color,ecolor=color)
-
-    plt.title(f'Avg. F1 score over {n} runs')
-    plt.ylabel('F1 score (weighted)')
-    plt.xlabel('Ratios')
-    plt.ylim((0.0,1.1))
-    
-    
-    plt.legend(title="Alignment function", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.tight_layout()
-    
-    plt.savefig('results/'+ 'f1_score_' + namefig + f'_{n}_runs.pdf')
-    # Show the plot
-    if show:
-        plt.show()
-
-    plt.figure(figsize=(16, 8))
-    
-
-    for idx, al in enumerate(jsd_means.keys()):
-
-        if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
-            color = align_func_colors(al)
-        else:
-            color = viridis(idx / (len(jsd_means) - 1))
-
-
-        if target_align_funcs_to_learned_align_funcs is not None:
-            all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
-                target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
-
-            if isinstance(target_align_funcs_to_learned_align_funcs, list):
-                learned_al = np.mean(all_learned_al, axis=0)
-                std_learned_al = np.std(all_learned_al, axis=0)
-            else:
-                learned_al = all_learned_al
-                std_learned_al = [0 for _ in learned_al]
-
-            orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
-            std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
-            learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
-            label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
-        else:
-            label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
-        assert ratios == sorted(ratios)
-        plt.errorbar(ratios,[jsd_means[al][r] for r in ratios], yerr=[jsd_stds[al][r] for r in ratios], label=label
-                     , capsize=5, marker='o',color=color,ecolor=color)
-
-    plt.title(f'Avg. Jensen Shannon div. over {n} runs')
-    plt.ylabel('JSD')
-    plt.xlabel('Ratios')
-    plt.legend(title="Alignment function", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.tight_layout()
-
-    plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
-    # Show the plot
-    if show:
-        plt.show()
+    # Plot 'acc'
+    namefig_base = namefig
+    for eps in acc_means_per_epsilon.keys():
+        namefig = namefig_base +f'_EPS{eps}_'
+        plt.figure(figsize=(16, 8))
         
-    plt.close()
+        viridis = cm.get_cmap(usecmap, len(acc_means_per_epsilon[eps]))  # Get 'viridis' colormap with number of AL strategies
+        target_al_func_ro_mean_align_func = None
 
-    save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, f1_labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=target_al_func_ro_mean_align_func)
+        for idx, al in enumerate(acc_means_per_epsilon[eps].keys()):
+            if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
+                color = align_func_colors(al)
+            else:
+                color = viridis(idx / (len(acc_means_per_epsilon[eps]) - 1))
+
+            if target_align_funcs_to_learned_align_funcs is not None:
+                if target_al_func_ro_mean_align_func is None:
+                    target_al_func_ro_mean_align_func = {}
+                all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
+                    target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
+
+                if isinstance(target_align_funcs_to_learned_align_funcs, list):
+                    learned_al = np.mean(all_learned_al, axis=0)
+                    std_learned_al = np.std(all_learned_al, axis=0)
+                else:
+                    learned_al = all_learned_al
+                    std_learned_al = [0 for _ in learned_al]
+                
+                orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
+                std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
+                learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
+                label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
+                target_al_func_ro_mean_align_func[al] = learned_al
+            else:
+                label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
+            assert ratios == sorted(ratios)
+            plt.errorbar(ratios, [acc_means_per_epsilon[eps][al][r] for r in ratios], yerr=[acc_stds_per_epsilon[eps][al][r] for r in ratios], label=label
+                        , capsize=5, marker='o',color=color,ecolor=color)
+
+        plt.title(f'Avg. preference comparisons accuracy over {n} runs (tol: {eps})')
+        #plt.ylabel('F1 score (weighted)')
+        plt.ylabel('Accuracy')
+        plt.xlabel('Proportion of pairs of trajectories chosen by the expert versus randomly')
+        plt.ylim((0.0,1.1))
+        
+        
+        plt.legend(title="VS aggregation function", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        
+        #plt.savefig('results/'+ 'f1_score_' + namefig + f'_{n}_runs.pdf')
+        plt.savefig('results/'+ 'acc_score_' + namefig + f'_{n}_runs.pdf')
+        # Show the plot
+        if show:
+            plt.show()
+
+        plt.figure(figsize=(16, 8))
+        
+
+        for idx, al in enumerate(n_repescados_means_per_epsilon[eps].keys()):
+
+            if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
+                color = align_func_colors(al)
+            else:
+                color = viridis(idx / (len(n_repescados_means_per_epsilon[eps]) - 1))
 
 
-def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=None):
+            if target_align_funcs_to_learned_align_funcs is not None:
+                all_learned_al = [ta_to_la[al] for ta_to_la in target_align_funcs_to_learned_align_funcs] if isinstance(
+                    target_align_funcs_to_learned_align_funcs, list) else target_align_funcs_to_learned_align_funcs[al]
+
+                if isinstance(target_align_funcs_to_learned_align_funcs, list):
+                    learned_al = np.mean(all_learned_al, axis=0)
+                    std_learned_al = np.std(all_learned_al, axis=0)
+                else:
+                    learned_al = all_learned_al
+                    std_learned_al = [0 for _ in learned_al]
+
+                orig_al = tuple([float("{0:.3f}".format(v)) for v in al])
+                std_learned_al = tuple([float("{0:.3f}".format(v)) for v in std_learned_al])
+                learned_al = tuple([float("{0:.3f}".format(v)) for v in learned_al])
+                label = f'Original: {orig_al}\nLearned: {learned_al}\nSTD: {std_learned_al}'
+            else:
+                label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
+            assert ratios == sorted(ratios)
+            plt.errorbar(ratios,[n_repescados_means_per_epsilon[eps][al][r] for r in ratios], yerr=[n_repescados_means_per_epsilon[eps][al][r] for r in ratios], label=label
+                        , capsize=5, marker='o',color=color,ecolor=color)
+
+        #plt.title(f'Avg. Jensen Shannon div. over {n} runs')
+        #plt.ylabel('JSD')
+        plt.title(f'Avg. number of reinstated pairs: negative pairs treated as positives due to the tolerance {eps} over {n} runs')
+        plt.xlabel('Proportion of pairs of trajectories chosen by the expert versus randomly')
+        plt.legend(title="VS aggregation function", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+
+        #plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
+
+        plt.savefig('results/' + 'reinstated_score_' + namefig + f'_{n}_runs.pdf')
+        # Show the plot
+        if show:
+            plt.show()
+            
+        plt.close()
+
+        save_stats_to_csv_and_latex(acc_means_per_epsilon[eps], acc_stds_per_epsilon[eps], n_repescados_means_per_epsilon[eps], n_repescados_means_per_epsilon[eps], acc_labels_per_epsilon[eps], namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=target_al_func_ro_mean_align_func)
+
+
+def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metric2_stds, labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=None):
     # File names
     csv_file_1 = f'results/tables/{namefig}_{n}_runs_metrics_table.csv'
     csv_file_2 = f'results/tables/{namefig}_{n}_runs_expected_alignments_table.csv'
@@ -608,13 +640,13 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
 
     for target_vs_function in labels:
         # Gather F1 and JSD stats for metrics table
-        f1_at_0 = f'{f1_means[target_vs_function][0.0]:.3f} ± {f1_stds[target_vs_function][0.0]:.2f}'
-        f1_at_1 = f'{f1_means[target_vs_function][1.0]:.3f} ± {f1_stds[target_vs_function][1.0]:.2f}'
-        jsd_at_0 = f'{jsd_means[target_vs_function][0.0]:.2e} ± {jsd_stds[target_vs_function][0.0]:.2e}'
-        jsd_at_1 = f'{jsd_means[target_vs_function][1.0]:.2e} ± {jsd_stds[target_vs_function][1.0]:.2e}'
+        m1_at_0 = f'{metric1_means[target_vs_function][0.0]:.3f} ± {metric1_stds[target_vs_function][0.0]:.2f}'
+        m1_at_1 = f'{metric1_means[target_vs_function][1.0]:.3f} ± {metric1_stds[target_vs_function][1.0]:.2f}'
+        m2_at_0 = f'{metric2_means[target_vs_function][0.0]:.2e} ± {metric2_stds[target_vs_function][0.0]:.2e}'
+        m2_at_1 = f'{metric2_means[target_vs_function][1.0]:.2e} ± {metric2_stds[target_vs_function][1.0]:.2e}'
 
         # Prepare metrics row with conditional "Learned VS" column
-        metrics_row = [str(target_vs_function), f1_at_0, f1_at_1, jsd_at_0, jsd_at_1]
+        metrics_row = [str(target_vs_function), m1_at_0, m1_at_1, m2_at_0, m2_at_1]
         if target_align_funcs_to_learned_align_funcs:
             learned_vs = target_align_funcs_to_learned_align_funcs[target_vs_function]
             metrics_row.insert(1, learned_vs)  # Insert "Learned VS" as the second column
@@ -645,6 +677,8 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
         if target_align_funcs_to_learned_align_funcs:
             header.append('Learned VS')
         header.extend(['F1 (random)', 'F1 (expert)', 'JSD (random)', 'JSD (expert)'])
+        header.extend(['Acc (random)', 'Acc (expert)', '#Reins (random)', '#Reins (expert)'])
+        
         writer.writerow(header)
         writer.writerows(metrics_rows)
 
@@ -673,7 +707,8 @@ def save_stats_to_csv_and_latex(f1_means, f1_stds, jsd_means, jsd_stds, labels, 
         header_latex = 'VS Function'
         if target_align_funcs_to_learned_align_funcs:
             header_latex += ' & Learned VS'
-        header_latex += ' & F1 (random) & F1 (expert) & JSD (random) & JSD (expert)'
+        #header_latex += ' & F1 (random) & F1 (expert) & JSD (random) & JSD (expert)'
+        header_latex += ' & Acc (random) & Acc (expert) & #Reins (random) & #Reins (expert)'
         f.write(header_latex + ' \\\\\n')
         f.write('\\hline\n')
         for row in metrics_rows:

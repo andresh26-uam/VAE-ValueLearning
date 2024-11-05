@@ -18,7 +18,7 @@ from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
 from src.vsl_algorithms.me_irl_for_vsl import mce_partition_fh
 from torch import nn, optim
 
-from src.vsl_algorithms.preference_model_vs import CrossEntropyRewardLossForQualitativePreferences
+from src.vsl_algorithms.preference_model_vs import CrossEntropyRewardLossForQualitativePreferences, SupportedFragmenters
 from src.vsl_algorithms.vsl_plot_utils import get_color_gradient, get_linear_combination_of_colors
 from src.vsl_policies import VAlignedDictSpaceActionPolicy, profiled_society_sampler, random_sampler_among_trajs, sampler_from_policy
 from src.vsl_reward_functions import ConvexAlignmentLayer, ConvexLinearModule, LinearAlignmentLayer, LinearVSLRewardFunction, TrainingModes
@@ -97,13 +97,15 @@ class EnvDataForIRL():
         self.testing_profiles = None
 
         # Override defaults with specific method for other environments
-        self.n_seeds_total = 200
+        self.n_seeds_total = self.__class__.DEFAULT_N_SEEDS
         self.n_expert_samples_per_seed = 1 if self.stochastic_expert is False else self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED
         self.n_reward_samples_per_iteration = self.__class__.DEFAULT_N_REWARD_SAMPLES_PER_ITERATION
         self.n_expert_samples_per_seed_minibatch = self.__class__.DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH
         self.n_seeds_minibatch = self.__class__.DEFAULT_N_SEEDS_MINIBATCH
         
         self.initial_state_distribution_for_expected_alignment_eval = None
+        self.active_fragmenter_on = SupportedFragmenters.CONNECTED_FRAGMENTER
+        
         self.set_defaults()
         for kw, kwv in kwargs.items():
             setattr(self, kw, kwv)
@@ -403,7 +405,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(max_iter=200,))
-        base['vsi'].update(dict(max_iter=200))#600
+        base['vsi'].update(dict(max_iter=200))#200 TODO
         return base
 
     def get_assumed_grounding(self):
@@ -598,7 +600,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=200))
         base['vsi'].update(dict(
-            max_iter=200))
+            max_iter=200)) # TODO 200 again... maybe 100 is enough seeing the results..
 
         return base
 

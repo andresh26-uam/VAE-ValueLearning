@@ -48,7 +48,9 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         s, r, d, t, i = super().step(action)
         d = self.state in self.goal_states
         return s, r, d, t, i
-
+    def valid_actions(self, state, align_func=None):
+        return self.real_environ.get_action_list(state)
+    
     def get_state_actions_with_known_reward(self, align_func):
         return self.real_environ.state_actions_with_known_reward
 

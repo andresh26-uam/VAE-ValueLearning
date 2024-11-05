@@ -3,6 +3,7 @@ import enum
 import itertools
 from math import ceil, floor
 from typing import Callable, Dict, List, Optional, Tuple
+from matplotlib import pyplot as plt
 import scipy.linalg
 import scipy.special
 from sklearn.metrics import f1_score, log_loss
@@ -56,7 +57,7 @@ def JSD(P, Q):
         avg_jsd += ((0.5 * (entropy(dist_p, M) + entropy(dist_q,M)))/n)
     return avg_jsd
 
-def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False):
+def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False, valid_action_checker=None):
     """
     Modify the policy matrix pi such that for each state s, the policy is concentrated 
     on the action with the maximum probability, or equally among the actions with maximum probability
@@ -70,28 +71,33 @@ def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=Fal
     - A modified policy matrix with the distributions concentrated on the 
       action with the maximum probability.
     """
-    if distribute_probability_on_max_prob_actions:
-        max_values = np.max(pi, axis=1, keepdims=True)
+    n_states, n_actions = pi.shape
+    pi_new = np.zeros_like(pi)
 
-        # Create a boolean matrix where True indicates a maximum value
-        is_max = (pi == max_values)
+    for state in range(n_states):
+        # Get the valid actions for this state, or all actions if no valid_action_checker is provided
+        if valid_action_checker is not None:
+            valid_actions = valid_action_checker(state)
+        else:
+            valid_actions = np.arange(n_actions)
 
-        # Count the number of maximum values per row
-        num_max_values = np.sum(is_max, axis=1, keepdims=True)
+        # Extract the probabilities for valid actions only
+        valid_probs = pi[state, valid_actions]
 
-        # Create the final matrix where each maximum value is divided by the number of max values
-        pi_new = is_max / num_max_values
-    else:
-        # Find the action with the maximum probability for each state
-        max_action_indices = np.argmax(pi, axis=-1)  # Shape: (n_states,)
+        if distribute_probability_on_max_prob_actions:
+            # Find the maximum probability among valid actions
+            max_value = np.max(valid_probs)
 
-        # Create a new matrix of zeros
-        pi_new = np.zeros_like(pi)
+            # Determine which valid actions have the maximum probability
+            max_valid_actions = valid_actions[valid_probs == max_value]
 
-        # Use advanced indexing to set the maximum action probability to 1
-        n_states, n_actions = pi.shape
-        pi_new[np.arange(n_states), max_action_indices] = 1
-
+            # Distribute the probability equally among the max valid actions
+            pi_new[state, max_valid_actions] = 1 / len(max_valid_actions)
+        else:
+            # Concentrate on a single max probability valid action
+            max_valid_action = valid_actions[np.argmax(valid_probs)]
+            pi_new[state, max_valid_action] = 1
+    
     return pi_new
 
 
@@ -167,6 +173,7 @@ def mce_partition_fh(
             V[t, :] = scipy.special.logsumexp(Q[t, :, :], axis=1)
 
         pi = np.exp(Q - V[:, :, None])[0]
+        
     elif policy_approximator == PolicyApproximators.SOFT_VALUE_ITERATION:
         # Initialization
         # indexed as V[t,s]
@@ -197,15 +204,17 @@ def mce_partition_fh(
     if deterministic:
 
         if len(pi.shape) == 2:
-            pi = concentrate_on_max_policy(pi)
-            for i in range(pi.shape[0]):
-                assert np.allclose(np.sum(pi[i]), 1)
+            pi = concentrate_on_max_policy(pi, valid_action_checker = lambda s: env.valid_actions(s, None))
+            if __debug__:
+                for i in range(pi.shape[0]):
+                    assert np.allclose(np.sum(pi[i]), 1)
         else:
             for time_t in range(pi.shape[0]):
-                pi[time_t] = concentrate_on_max_policy(pi[time_t])
-                for i in range(pi[time_t].shape[0]):
-                    assert np.allclose(np.sum(pi[time_t, i]), 1)
-
+                pi[time_t] = concentrate_on_max_policy(pi[time_t], valid_action_checker = lambda s: env.valid_actions(s, None))
+                if __debug__:
+                    for i in range(pi[time_t].shape[0]):
+                        assert np.allclose(np.sum(pi[time_t, i]), 1)
+    
     return V, Q, pi
 class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory], Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
@@ -562,7 +571,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                                         random_policy = VAlignedDictSpaceActionPolicy,
                                         ratios_expert_random = [1, 0.9, 0.7, 0.5, 0.4, 0.3, 0.2, 0.0],
                                         n_seeds = 100,
-                                        n_samples_per_seed = 5,
+                                        n_samples_per_seed = 1,
                                         seed=26,
                                         epsilon_for_undecided_preference = 0.05,
                                         testing_align_funcs=[],
@@ -608,16 +617,16 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         for ratio in ratios_expert_random:
             
             
-            
             qualitative_loss_per_al_func = {al: [] for al in testing_align_funcs}
             jsd_per_al_func = {al: [] for al in testing_align_funcs}
+            n_repescados_per_al_func = {al: [] for al in testing_align_funcs}
             
             for rep, reward_rep in enumerate(learned_rewards_per_round):
                 
                 for al in testing_align_funcs:
                     real_matrix_al = real_matrix[al]
-                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[rep][al]))[0:floor(n_seeds*ratio)]).tolist()), 
-                         *((np.random.permutation(np.asarray(random_trajs[rep][al]))[0:ceil(n_seeds*(1.0-ratio))]).tolist())]
+                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[rep][al]))[0:floor(len(expert_trajs[rep][al])*ratio)]).tolist()), 
+                         *((np.random.permutation(np.asarray(random_trajs[rep][al]))[0:ceil(len(random_trajs[rep][al])*(1.0-ratio))]).tolist())]
                     
                     returns_expert = []
                     returns_estimated = []
@@ -663,14 +672,90 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
                     probs_real = np.array(probs_real) 
                     probs_estimated = np.array(probs_estimated) 
+            
                 
-                    is_better_estimated = np.asarray(probs_estimated) > (0.5 + epsilon_for_undecided_preference)
-                    is_better_real = np.asarray(probs_real) > (0.5 + epsilon_for_undecided_preference)
-                    is_worse_estimated = np.asarray(probs_estimated)< (0.5 - epsilon_for_undecided_preference)
-                    is_worse_real = np.asarray(probs_real) < (0.5 - epsilon_for_undecided_preference)
+                    todos = np.where(probs_real >= 0.0)[0]
+                    epsilons = [0.0,0.001,0.01,0.05,0.1]
+                    accuracy_per_epsilon = {eps: None for eps in epsilons}
+                    n_repescados_per_epsilon = {eps: 0 for eps in epsilons}
+                    for epsilon in epsilons:
+                        exito_por_mayor = np.intersect1d(np.where(probs_estimated > 0.5)[0], np.where(probs_real > 0.5)[0])
+                        exito_por_menor = np.intersect1d(np.where(probs_estimated < 0.5)[0], np.where(probs_real < 0.5)[0])
+                        exito_por_igual = np.intersect1d(np.where(probs_estimated == 0.5)[0], 
+                                                            np.where(probs_real == 0.5)[0])
+                        
+                        exito_por_aprox_igual = np.intersect1d(np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0], 
+                                                            np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        
+                        acertados = np.union1d(exito_por_mayor, exito_por_menor)
+                        acertados = np.union1d(acertados, exito_por_igual)
+                        
+                        fallados = np.setdiff1d(todos, acertados) 
 
-                    is_equal_estimated = np.abs(np.asarray(probs_estimated)-0.5) <= epsilon_for_undecided_preference
-                    is_equal_real = np.abs(np.asarray(probs_real) - 0.5) <= epsilon_for_undecided_preference
+                        a = np.intersect1d(acertados, np.where(np.abs(probs_real - 0.5) > epsilon)[0])
+                        b = np.intersect1d(fallados, np.where(np.abs(probs_real - 0.5) > epsilon)[0])
+
+                        c1 = np.intersect1d(acertados, np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        c11 = np.intersect1d(c1, np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0])
+                        c12 = np.intersect1d(c1, np.where(np.abs(probs_estimated - 0.5) > epsilon)[0])
+
+                        temp = np.intersect1d(fallados, np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        c2_repescados = np.intersect1d(temp, np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0])
+                        c3 = np.intersect1d(temp, np.where(np.abs(probs_estimated - 0.5) > epsilon)[0])
+                        aall = [a,b,c11,c12,c2_repescados,c3]
+                        
+
+                        total = a
+                        intersec = todos
+                        print("a, b, c11, c12, c2,c3")
+                        for id, set_ in enumerate(aall):
+                            total = np.union1d(total,set_)
+                            intersec = np.intersect1d(intersec,set_)
+                            print("LEN ", id, ": ", len(set_))
+                        len_total_disj = np.sum([len(set_) for set_ in aall])
+                        
+                        exitos = np.union1d(acertados, exito_por_aprox_igual)
+                        print("TOTAL", len(total), "TOTAL_DISJ", len_total_disj)
+                        assert len(total) == len_total_disj
+                        print("INTERSEC", len(intersec))
+                        assert len(intersec) == 0
+                        accuracy = len(exitos)/len(todos)
+                        accuracy_per_epsilon[epsilon] = accuracy
+                        n_repescados_per_epsilon[epsilon] = len(c2_repescados)
+                        
+
+                        """
+                        assert len(exitos) <= len(i_indices)
+
+                        n_por_mayor = len(exito_por_mayor)
+                        n_por_menor = len(exito_por_menor)
+                        n_por_aprox_igual = len(exito_por_aprox_igual)
+                        print(n_por_mayor)
+                        print(n_por_menor)
+                        print(n_por_aprox_igual)
+                        if epsilon != 0.0:
+                            st = epsilon
+                            x  = np.arange(0.0,1.0+st,step=st)
+                            
+                            plt.xticks(x,rotation=90)
+                            plt.hist(probs_real, bins=x-st/2.0, range=[0.0,1.0])
+                            plt.savefig(f'results/testing/real_pdiffs{epsilon}_ffall.png')
+                            #plt.show()
+                            plt.close()
+                            plt.xticks(x,rotation=90)
+                            plt.hist(probs_estimated, bins=x-st/2.0, range=[0.0,1.0])
+                            plt.savefig(f'results/testing/estimated_pdiffs{epsilon}_ffall.png')
+                            #plt.show()
+                            plt.close()
+                    
+                        exit(0)"""
+                    is_better_estimated = probs_estimated > (0.5 + epsilon_for_undecided_preference)
+                    is_better_real = probs_real > (0.5 + epsilon_for_undecided_preference)
+                    is_worse_estimated = probs_estimated< (0.5 - epsilon_for_undecided_preference)
+                    is_worse_real = probs_real < (0.5 - epsilon_for_undecided_preference)
+
+                    is_equal_estimated = np.abs(probs_estimated-0.5) <= epsilon_for_undecided_preference
+                    is_equal_real = np.abs(probs_real - 0.5) <= epsilon_for_undecided_preference
                     
                     real_labels = np.column_stack((is_better_real, is_equal_real, is_worse_real))
                     estimated_labels = np.column_stack((is_better_estimated, is_equal_estimated, is_worse_estimated))
@@ -679,14 +764,19 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     #print(real_labels,estimated_labels)
                     #qualitative_loss = qualitative_loss_score(real_labels, estimated_labels, multi_class="ovr")
                     # ACC average (dumb). qualitative_loss = np.mean([np.mean(np.array(real_labels[ri]==estimated_labels[ri], dtype=np.float32)) for ri in range(len(real_labels)) ])
-                    # F1 score.
-                    qualitative_loss = f1_score(real_labels, estimated_labels, average='weighted',zero_division=np.nan)
-                    # F1 score.
-
-                    qualitative_loss_per_al_func[al].append(qualitative_loss)
+                    # F1 score. (Not exactly okey)
+                    #qualitative_loss = f1_score(real_labels, estimated_labels, average='weighted',zero_division=np.nan)
+                    # Accuracy with new method adding tolerance for equal cases.
                     
+
+                    qualitative_loss_per_al_func[al].append(accuracy_per_epsilon)
+
+                    n_repescados_per_al_func[al].append(n_repescados_per_epsilon)
                     #ce_per_al_func[al].append(th.nn.functional.binary_cross_entropy(th.tensor(probs_real), th.tensor(probs_estimated)).detach().numpy())
-                    jsd_per_al_func[al].append(JSD(probs_real, probs_estimated))
+                    # JSD (Not used)
+                    # jsd_per_al_func[al].append(JSD(probs_real, probs_estimated))
+                    # Instead, use the number of artificially misclassified cases inside the interval +-epsilon
+                    
                     if float(ratio) == 1.0:
                         value_expectations[al].append({
                             alb: np.mean(returns_real_from_learned_policy[alb]) for alb in basic_profiles
@@ -696,6 +786,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                             alb: np.mean(returns_real_from_expert_policy[alb]) for alb in basic_profiles
                             })
 
-            metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': jsd_per_al_func}
+            #metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': jsd_per_al_func}
+            metrics_per_ratio[ratio]={'acc': qualitative_loss_per_al_func, 'repescados': n_repescados_per_al_func}
             
         return metrics_per_ratio, value_expectations, value_expectations_expert

@@ -354,27 +354,37 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
     def act(self, state_obs: int, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         policy = self.policy_per_va(alignment_function)
         if len(policy.shape) == 2:
-            probs = self.policy_per_va(alignment_function)[state_obs, :]
+            probs = policy[state_obs, :]
         elif len(policy.shape) == 3:
             assert policy_state is not None
-            probs = self.policy_per_va(alignment_function)[
+            probs = policy[
                 policy_state, state_obs, :]
         else:
             assert len(policy.shape) == 1
             probs = np.array(
-                [self.policy_per_va(alignment_function)[state_obs],])
-
+                [policy[state_obs],])
+        do_explore = False
         if np.random.rand() < exploration:
-            action = self.action_space.sample()
+            do_explore = True
             probs = np.ones_like(probs)/probs.shape[0]
-        else:
-            if stochastic:
-                action = np.random.choice(np.arange(len(probs)), p=probs)
-            else:
 
-                max_prob = np.max(probs)
-                max_q = np.where(probs == max_prob)[0]
-                action = np.random.choice(max_q)
+        valid_actions = self.env.valid_actions(state_obs, alignment_function)
+        # Step 2: Filter probabilities to keep only valid actions
+        valid_probabilities = probs[valid_actions]
+
+        # Step 3: Normalize the filtered probabilities so they sum to 1
+        print(valid_actions, state_obs)
+        print(probs)
+        probs = valid_probabilities / valid_probabilities.sum()
+        print(probs)
+        assert np.allclose([np.sum(probs),], [1.0,])
+
+        if stochastic or do_explore:
+            action = np.random.choice(np.arange(len(probs)), p=probs)
+        else:
+            max_prob = np.max(probs)
+            max_q = np.where(probs == max_prob)[0]
+            action = np.random.choice(max_q)
         policy_state += 1
         return action, policy_state
 

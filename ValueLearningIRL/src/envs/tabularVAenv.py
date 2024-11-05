@@ -104,7 +104,9 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
     @property
     def unwrapped(self):
         return self._real_env
-
+    
+    def valid_actions(self, state, align_func=None):
+        return np.arange(self.reward_matrix.shape[1])
     def step_reward_per_va(self, align_func, action):
 
         return self.reward_matrix_per_align_func(align_func)[self.state, action]
