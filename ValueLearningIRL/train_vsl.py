@@ -145,17 +145,18 @@ if __name__ == "__main__":
     if parser_args.environment == 'firefighters':
         value_names = EnvDataForIRLFireFighters.VALUES_NAMES
         
+        parser_args.approx_expert = True
         training_data = EnvDataForIRLFireFighters(
             env_name=FIRE_FIGHTERS_ENV_NAME,
             **dict(parser_args._get_kwargs()))
-        training_data.approx_expert = True
         #assert training_data.approx_expert is True
     elif parser_args.environment == 'roadworld':
         value_names = EnvDataForRoadWorld.VALUES_NAMES
+        parser_args.approx_expert = True # TODO Need more testing:
+        
         training_data = EnvDataForRoadWorld(
             env_name=ROAD_WORLD_ENV_NAME,
             **dict(parser_args._get_kwargs()))
-        training_data.approx_expert = True # TODO Need more testing:
         if not training_data.approx_expert: # TODO Still need more testing... For now it is approximating the best route
             #policy_approximator(env, reward, discount, **approximator_kwargs)
             training_data.policy_approximation_method = lambda env, reward, discount, **kwargs: (None, None, training_data.compute_precise_policy(env, w=None, reward=reward))

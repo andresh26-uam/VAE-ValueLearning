@@ -182,7 +182,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                 with_reward=True, alignment_func_in_env=(1.0,0.0,0.0))
                         
                             trajs_sus_sus.append(traj_w)
-                            print(traj.obs, traj_w.obs, seed, n_seeds, si)
+                            #print(traj.obs, traj_w.obs, seed, n_seeds, si)
                             assert np.all(traj_w.obs == traj.obs)
 
                             traj_w2 = self.obtain_trajectory(af,
@@ -233,7 +233,7 @@ class ValueSystemLearningPolicy(BasePolicy):
             for t,t2 in zip(trajs_eff_eff, trajs_sus_eff):
                 #print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
                 #print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
-                print(t.obs, t2.obs)
+                #print(t.obs, t2.obs)
                 assert np.sum(t.rews) >= np.sum(t2.rews)
                 print("CHECK EFF!!!")
                 assert t.obs[0] == t2.obs[0] and t.obs[-1] == t2.obs[-1]
