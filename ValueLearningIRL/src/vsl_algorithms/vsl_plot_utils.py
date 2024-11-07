@@ -272,8 +272,13 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
                 color='red', linestyle='--', alpha=0.7, label='x=y')
 
         # Set labels and title for each subplot
-        ax.set_title(
-            f'Original: {tuple([float("{0:.3f}".format(v)) for v in al])}\nLearned: {tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
+        if vsi_or_vgl != 'vgl':
+            ax.set_title(
+                f'Original: {tuple([float("{0:.3f}".format(v)) for v in al])}\nLearned: {tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
+        else:
+            ax.set_title(
+                f'VS aggregation: {tuple([float("{0:.3f}".format(v)) for v in al])}')
+        
         ax.legend()
 
     # Remove unused axes if the number of targets is odd
@@ -515,7 +520,8 @@ def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=F
     #ratios, f1_means, f1_stds, f1_labels, n = compute_stats(metrics_per_ratio, 'f1')
     #ratios, jsd_means, jsd_stds, ce_labels, n = compute_stats(metrics_per_ratio, 'jsd')
     ratios, acc_means_per_epsilon, acc_stds_per_epsilon, acc_labels_per_epsilon, n = compute_stats(metrics_per_ratio, 'acc')
-    ratios, n_repescados_means_per_epsilon, n_repescados_means_per_epsilon, jsd_labels_per_epsilon, n = compute_stats(metrics_per_ratio, 'repescados')
+    _, n_repescados_means_per_epsilon, n_repescados_stds_per_epsilon, _, n = compute_stats(metrics_per_ratio, 'repescados')
+    _, jsd_means_per_epsilon, jsd_stds_per_epsilon, jsd_labels_per_epsilon, n = compute_stats(metrics_per_ratio, 'jsd')
     
     # Plot 'acc'
     namefig_base = namefig
@@ -575,12 +581,12 @@ def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=F
         plt.figure(figsize=(16, 8))
         
 
-        for idx, al in enumerate(n_repescados_means_per_epsilon[eps].keys()):
+        for idx, al in enumerate(jsd_means_per_epsilon[eps].keys()):
 
             if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
                 color = align_func_colors(al)
             else:
-                color = viridis(idx / (len(n_repescados_means_per_epsilon[eps]) - 1))
+                color = viridis(idx / (len(jsd_means_per_epsilon[eps]) - 1))
 
 
             if target_align_funcs_to_learned_align_funcs is not None:
@@ -601,29 +607,29 @@ def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=F
             else:
                 label = f'Target al: {tuple([float("{0:.3f}".format(v)) for v in al])}'
             assert ratios == sorted(ratios)
-            plt.errorbar(ratios,[n_repescados_means_per_epsilon[eps][al][r] for r in ratios], yerr=[n_repescados_means_per_epsilon[eps][al][r] for r in ratios], label=label
+            plt.errorbar(ratios,[jsd_means_per_epsilon[eps][al][r] for r in ratios], yerr=[jsd_stds_per_epsilon[eps][al][r] for r in ratios], label=label
                         , capsize=5, marker='o',color=color,ecolor=color)
 
-        #plt.title(f'Avg. Jensen Shannon div. over {n} runs')
-        #plt.ylabel('JSD')
-        plt.title(f'Avg. number of reinstated pairs: negative pairs treated as positives due to the tolerance {eps} over {n} runs')
+        plt.title(f'Avg. Jensen Shannon div. over {n} runs')
+        plt.ylabel('JSD')
+        #plt.title(f'Avg. number of reinstated pairs: negative pairs treated as positives due to the tolerance {eps} over {n} runs')
         plt.xlabel('Proportion of pairs of trajectories chosen by the expert versus randomly')
         plt.legend(title="VS aggregation function", bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
 
         #plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
 
-        plt.savefig('results/' + 'reinstated_score_' + namefig + f'_{n}_runs.pdf')
+        plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
         # Show the plot
         if show:
             plt.show()
             
         plt.close()
 
-        save_stats_to_csv_and_latex(acc_means_per_epsilon[eps], acc_stds_per_epsilon[eps], n_repescados_means_per_epsilon[eps], n_repescados_means_per_epsilon[eps], acc_labels_per_epsilon[eps], namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=target_al_func_ro_mean_align_func)
+        save_stats_to_csv_and_latex(acc_means_per_epsilon[eps], acc_stds_per_epsilon[eps], jsd_means_per_epsilon[eps], jsd_stds_per_epsilon[eps], n_repescados_means_per_epsilon[eps], n_repescados_stds_per_epsilon[eps],  acc_labels_per_epsilon[eps], namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=target_al_func_ro_mean_align_func)
 
 
-def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metric2_stds, labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=None):
+def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metric2_stds, metric3_means, metric3_stds, labels, namefig, n, value_expectations_per_ratio, value_expectations_per_ratio_expert, values_names, target_align_funcs_to_learned_align_funcs=None):
     # File names
     csv_file_1 = f'results/tables/{namefig}_{n}_runs_metrics_table.csv'
     csv_file_2 = f'results/tables/{namefig}_{n}_runs_expected_alignments_table.csv'
@@ -645,8 +651,11 @@ def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metr
         m2_at_0 = f'{metric2_means[target_vs_function][0.0]:.2e} ± {metric2_stds[target_vs_function][0.0]:.2e}'
         m2_at_1 = f'{metric2_means[target_vs_function][1.0]:.2e} ± {metric2_stds[target_vs_function][1.0]:.2e}'
 
+        m3_at_0 = f'{metric3_means[target_vs_function][0.0]:.2e} ± {metric3_stds[target_vs_function][0.0]:.2e}'
+        m3_at_1 = f'{metric3_means[target_vs_function][1.0]:.2e} ± {metric3_stds[target_vs_function][1.0]:.2e}'
+
         # Prepare metrics row with conditional "Learned VS" column
-        metrics_row = [str(target_vs_function), m1_at_0, m1_at_1, m2_at_0, m2_at_1]
+        metrics_row = [str(target_vs_function), m1_at_0, m1_at_1, m2_at_0, m2_at_1,m3_at_0, m3_at_1]
         if target_align_funcs_to_learned_align_funcs:
             learned_vs = target_align_funcs_to_learned_align_funcs[target_vs_function]
             metrics_row.insert(1, learned_vs)  # Insert "Learned VS" as the second column
@@ -676,8 +685,8 @@ def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metr
         header = ['VS Function']
         if target_align_funcs_to_learned_align_funcs:
             header.append('Learned VS')
-        header.extend(['F1 (random)', 'F1 (expert)', 'JSD (random)', 'JSD (expert)'])
-        header.extend(['Acc (random)', 'Acc (expert)', '#Reins (random)', '#Reins (expert)'])
+        #header.extend(['F1 (random)', 'F1 (expert)', 'JSD (random)', 'JSD (expert)'])
+        header.extend(['Acc (random)', 'Acc (expert)', 'JSD (random)', 'JSD (expert)', '#Reins (random)', '#Reins (expert)'])
         
         writer.writerow(header)
         writer.writerows(metrics_rows)
@@ -708,7 +717,7 @@ def save_stats_to_csv_and_latex(metric1_means, metric1_stds, metric2_means, metr
         if target_align_funcs_to_learned_align_funcs:
             header_latex += ' & Learned VS'
         #header_latex += ' & F1 (random) & F1 (expert) & JSD (random) & JSD (expert)'
-        header_latex += ' & Acc (random) & Acc (expert) & #Reins (random) & #Reins (expert)'
+        header_latex += ' & Acc (random) & Acc (expert) & JSD (random) & JSD (expert) & #Reins (random) & #Reins (expert)'
         f.write(header_latex + ' \\\\\n')
         f.write('\\hline\n')
         for row in metrics_rows:

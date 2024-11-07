@@ -46,10 +46,11 @@ class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
         rng: np.random.Generator,
         warning_threshold: int = 10,
         custom_logger = None,
+        discard_short_trajectories = False,
     ) -> None:
         super().__init__(rng, warning_threshold, custom_logger)
         self.nexus = None
-
+        self.discard_short_trajectories = discard_short_trajectories
     def __call__(
         self,
         trajectories: Sequence[TrajectoryWithRew],
@@ -62,19 +63,20 @@ class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
 
         prev_num_trajectories = len(trajectories)
         # filter out all trajectories that are too short
-        trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
-        if len(trajectories) == 0:
-            raise ValueError(
-                "No trajectories are long enough for the desired fragment length "
-                f"of {fragment_length}.",
-            )
-        num_discarded = prev_num_trajectories - len(trajectories)
-        if num_discarded:
-            self.logger.log(
-                f"Discarded {num_discarded} out of {prev_num_trajectories} "
-                "trajectories because they are shorter than the desired length "
-                f"of {fragment_length}.",
-            )
+        if self.discard_short_trajectories:
+            trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
+            if len(trajectories) == 0:
+                raise ValueError(
+                    "No trajectories are long enough for the desired fragment length "
+                    f"of {fragment_length}.",
+                )
+            num_discarded = prev_num_trajectories - len(trajectories)
+            if num_discarded:
+                self.logger.log(
+                    f"Discarded {num_discarded} out of {prev_num_trajectories} "
+                    "trajectories because they are shorter than the desired length "
+                    f"of {fragment_length}.",
+                )
 
         weights = [len(traj) for traj in trajectories]
 
@@ -108,8 +110,9 @@ class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
                 p=np.array(weights) / sum(weights),
             )
             n = len(traj)
-            start = self.rng.integers(0, n - fragment_length, endpoint=True)
-            end = start + fragment_length
+            f_length = min(fragment_length, n)
+            start = self.rng.integers(0, n - f_length, endpoint=True)
+            end = start + f_length
             terminal = (end == n) and traj.terminal
             fragment = TrajectoryWithRew(
                 obs=traj.obs[start : end + 1],
@@ -421,6 +424,50 @@ class PreferenceModelTabularVSL(preference_comparisons.PreferenceModel):
             assert len(state) == len(action)
             assert rews.shape == (len(state),)
         return rews
+    
+    def probability(self, rews1: th.Tensor, rews2: th.Tensor) -> th.Tensor:
+        """Changed from imitation the ability to compare fragments of different lengths
+        """
+        # check rews has correct shape based on the model
+        expected_dims = 2 if self.ensemble_model is not None else 1
+        
+        assert rews1.ndim == rews2.ndim == expected_dims
+        # First, we compute the difference of the returns of
+        # the two fragments. We have a special case for a discount
+        # factor of 1 to avoid unnecessary computation (especially
+        # since this is the default setting).
+        if self.discount_factor == 1:
+            if len(rews1) == len(rews2):
+                returns_diff = (rews2 - rews1).sum(axis=0)
+            else:
+                returns_diff = rews2.sum(axis=0) - rews1.sum(axis=0)
+            
+        else:
+            device = rews1.device
+            assert device == rews2.device
+            l1, l2 = len(rews1), len(rews2)
+            discounts = self.discount_factor ** th.arange(max(l1,l2), device=device)
+            if self.ensemble_model is not None:
+                    discounts = discounts.reshape(-1, 1)
+                
+            if len(rews1) == len(rews2):
+                returns_diff = (discounts * (rews2 - rews1)).sum(axis=0)
+            else:
+                returns_diff = (discounts[0:l2] * rews2).sum(axis=0) - (discounts[0:l1] * rews1).sum(axis=0)
+        # Clip to avoid overflows (which in particular may occur
+        # in the backwards pass even if they do not in the forward pass).
+        returns_diff = th.clip(returns_diff, -self.threshold, self.threshold)
+        # We take the softmax of the returns. model_probability
+        # is the first dimension of that softmax, representing the
+        # probability that fragment 1 is preferred.
+        model_probability = 1 / (1 + returns_diff.exp())
+        probability = self.noise_prob * 0.5 + (1 - self.noise_prob) * model_probability
+        if self.ensemble_model is not None:
+            assert probability.shape == (self.model.num_members,)
+        else:
+            assert probability.shape == ()
+        
+        return probability
 
 
 class SupportedFragmenters(enum.Enum):
@@ -779,7 +826,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
             fragment_length=self.fragment_length,
             transition_oversampling=self.transition_oversampling,
             initial_comparison_frac=self.initial_comparison_frac,
-            allow_variable_horizon=False,
+            allow_variable_horizon=True,
             initial_epoch_multiplier=self.initial_epoch_multiplier,
             query_schedule=self.query_schedule,
         )

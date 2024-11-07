@@ -322,7 +322,7 @@ def get_color_gradient(c1, c2, mix):
     
     return ((1-mix)*c1_rgb + (mix*c2_rgb))
 
-def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None):
+def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None, plot_by_value=False):
     
     #posiciones = {node: node for node in self.graph.nodes()}
     
@@ -362,14 +362,24 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
     edge_color_eco = [float(eco_val/max_eco) for eco_val in eco_vals]
     edge_color_eff = [float(eff_val/max_eff) for eff_val in eff_vals]
     edge_color_sec = [float(sec_val/max_sec) for sec_val in sec_vals]
+    
     edge_size = [2]*len(edgelist)
+    if plot_by_value:
+        
+        nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eco, edge_cmap = plt.cm.Greens_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.3}')
+        nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_sec, edge_cmap = plt.cm.Blues_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.15}')
+        nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eff, edge_cmap = plt.cm.Reds_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0}')
+
+    else:
+
+        edge_color = 'gray'
+        nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color, edge_cmap = plt.cm.Reds_r, edge_vmin = 0.3, edge_vmax = 1)
+
 
     
     
     min_eco = 0
-    nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eco, edge_cmap = plt.cm.Greens_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.3}')
-    nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_sec, edge_cmap = plt.cm.Blues_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0.15}')
-    nx.draw_networkx(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=edge_color_eff, edge_cmap = plt.cm.Reds_r, edge_vmin = 0.3, edge_vmax = 1, connectionstyle=f'arc3, rad = {0}')
+    
     #nx.draw_networkx_edges(graph, pos=posiciones, nodelist=nodelist,edgelist=edgelist, ax=ax, with_labels=False, font_weight='bold', node_size=node_size, node_color=node_color,  width=edge_size, edge_color=[float(eco_val/max_eco) for eco_val in eco_vals], edge_cmap = plt.cm.Reds)
     if show_edge_weights:
         edge_labels = {edge: f"Sus: {eco_val:.2f}\nSec: {sec_val:.2f}\nEff: {eff_val:.2f}" for edge, eco_val, sec_val, eff_val in zip(graph.edges(), eco_vals, sec_vals, eff_vals)}
@@ -772,7 +782,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             self.path_feature_standarized = torch.from_numpy((path_feature_standarized - m) / v)
         
         
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0,714],], origins=None, destinations=None, profile=(1.0,0.0,0.0),feature_selection=FeatureSelection.DEFAULT, use_optimal_reward_per_profile=False, feature_preprocesssing=FeaturePreprocess.NORMALIZATION,visualize_example=False):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0,714],], origins=None, destinations=None, profile=(1.0,0.0,0.0),feature_selection=FeatureSelection.DEFAULT, use_optimal_reward_per_profile=False, feature_preprocesssing=FeaturePreprocess.NORMALIZATION,visualize_example=True):
         super().__init__(network_path, edge_path, pre_reset, origins, destinations, 8)
         
         
@@ -1108,15 +1118,19 @@ class RoadWorldGymPOMDP(RoadWorldGym):
             else:
                 self.reward_matrix[self.last_profile][s] = -1.0
             """
-            if s not in self.valid_edges or s == self.cur_des:
+            if (s not in self.valid_edges):
                 self.state_actions_with_known_reward[s] = True
-            
-            for a in range(self.n_actions):
-                if a in self.get_action_list(s):
-                    self.transition_matrix[s, a, self.get_state_des_transition((s, self.cur_des), a)[0]] = 1.0
-                else:
-                    self.state_actions_with_known_reward[s,a] = True
-                    self.transition_matrix[s, a, s] = 1.0
+                self.transition_matrix[s, :, s] = 1.0
+            elif s == self.cur_des:
+                self.transition_matrix[s, :, s] = 1.0
+                pass
+            else:
+                for a in range(self.n_actions):
+                    if a in self.get_action_list(s):
+                        self.transition_matrix[s, a, self.get_state_des_transition((s, self.cur_des), a)[0]] = 1.0
+                    else:
+                        self.state_actions_with_known_reward[s,a] = True
+                        self.transition_matrix[s, a, s] = 1.0
                 
         #initial_states = np.array([int(od.split('_')[0]) for od in self.od_list])
         #self.transition_matrix = sp.as_coo(self.transition_matrix)
@@ -1161,16 +1175,27 @@ class RoadWorldGymPOMDP(RoadWorldGym):
 
         
         if state not in self.valid_edges:
-            rew = -100000
-        elif state == self.cur_des:
+            rew = -10000000
+        elif state == self.cur_des or nstate == self.cur_des:
             rew = 0.0
         elif nstate not in self.valid_edges:
-            rew =  -100000
+            rew =  -10000000
         elif action not in self.get_action_list(state):
-            rew = -100000
+            rew = -10000000
         else:
+            
             rew =  -self.cost_model(profile=profile, normalization =self.feature_preprocessing)((nstate, self.cur_des))
-
+            """if np.abs(rew) < 0.7 and nstate != self.cur_des:
+                
+                rew = -0.7"""
+            if 0.0 != self.reward_matrix[profile][state,action]:
+                old_res = self.reward_matrix[profile][state,action]
+                assert rew == old_res
+        """if nstate == self.cur_des:
+                if rew == 0.0:
+                    assert state == self.cur_des
+                    print(state, rew)"""
+                    
         self.reward_matrix[profile][state,action] = rew
             
         return self.reward_matrix[profile][state,action]

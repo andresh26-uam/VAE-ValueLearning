@@ -487,7 +487,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
 
     def _print_statistics(self, t, visitations, expert_visitations, loss, reward, target_align_func, learned_al_function,  grad_norm, abs_diff_in_visitation_counts, learned_grounding=None):
         avg_linf_delta = np.mean(abs_diff_in_visitation_counts)
-        norm_reward = np.linalg.norm(reward)
+        #norm_reward = np.linalg.norm(reward)
         max_error_state = np.where(
             abs_diff_in_visitation_counts == np.max(abs_diff_in_visitation_counts))
         max_error_state = (max_error_state[0][0], max_error_state[1][0]) if len(
@@ -508,7 +508,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
         self.logger.record("grad_norm", grad_norm)
         self.logger.record("loss", loss)
         self.logger.record("avg_linf_delta", avg_linf_delta)
-        self.logger.record("norm reward", norm_reward)
 
         if not (self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION):
             self.logger.record("state_worse", max_error_state)
@@ -597,10 +596,10 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             the accumulated ones according to the discount and the approximated policy
         """
         if pi is None:
-            V, Q, pi = mce_partition_fh(self.exposed_state_env, reward=reward_matrix, discount=self.discount, policy_approximator=self.policy_approximator,
+            V, Q, pi = mce_partition_fh(self.exposed_state_env, reward=reward_matrix, discount=self.discount, 
+                                        policy_approximator=self.policy_approximator,
                                         approximator_kwargs=self.approximator_kwargs,
                                         deterministic=deterministic)
-
         D, Dcums = mce_occupancy_measures(env=self.exposed_state_env, pi=pi,
                                           discount=self.discount,
                                           policy_approximator=self.policy_approximator,

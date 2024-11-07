@@ -77,7 +77,7 @@ def parse_args():
     pc_group.add_argument('-dfp', '--discount_factor_preferences', type=float,
                           default=None, help='Discount factor for preference comparisons')
     pc_group.add_argument('-qp', '--use_quantified_preference', action='store_true',
-                          default=False, help='Use quantified preference flag')
+                          default=True, help='Use quantified preference flag')
     pc_group.add_argument('-temp', '--preference_sampling_temperature',
                           type=float, default=0, help='Preference sampling temperature')
     pc_group.add_argument('-qs', '--query_schedule', type=str, default="hyperbolic", choices=[
@@ -103,7 +103,11 @@ def parse_args():
 
     env_group = parser.add_argument_group('environment-specific Parameters')
     env_group.add_argument('-rwdt', '--dest', type=int,
-                           default=413, help='Destination for roadworld')
+                           default=64, help='Destination for roadworld') # 413 has problems... (need exact approximation)
+    env_group.add_argument('-rt', '--retrain', action='store_true',
+                           default=False, help='Retrain experts (roadworld)')
+    env_group.add_argument('-appr', '--approx_expert', action='store_true',
+                           default=False, help='Approximate expert (roadworld)')
     env_group.add_argument('-ffpm', '--use_pmovi_expert', action='store_true',
                            default=False, help='Use PMOVI expert for firefighters')
     testing_args = parser.add_argument_group('Testing options')
@@ -140,17 +144,24 @@ if __name__ == "__main__":
         parser_args.use_one_hot_state_action = True
     if parser_args.environment == 'firefighters':
         value_names = EnvDataForIRLFireFighters.VALUES_NAMES
-
+        
         training_data = EnvDataForIRLFireFighters(
             env_name=FIRE_FIGHTERS_ENV_NAME,
             **dict(parser_args._get_kwargs()))
+        training_data.approx_expert = True
+        #assert training_data.approx_expert is True
     elif parser_args.environment == 'roadworld':
         value_names = EnvDataForRoadWorld.VALUES_NAMES
-
         training_data = EnvDataForRoadWorld(
             env_name=ROAD_WORLD_ENV_NAME,
             **dict(parser_args._get_kwargs()))
-
+        training_data.approx_expert = False # TODO Need more testing:
+        if not training_data.approx_expert: # TODO Still need more testing... For now it is approximating the best route
+            #policy_approximator(env, reward, discount, **approximator_kwargs)
+            training_data.policy_approximation_method = lambda env, reward, discount, **kwargs: (None, None, training_data.compute_precise_policy(env, w=None, reward=reward))
+    
+        
+    
     if task == 'vgl':
         vgl_or_vsi = 'vgl'
         task = 'vgl'
@@ -166,7 +177,7 @@ if __name__ == "__main__":
 
     algorithm = parser_args.algorithm
     environment = parser_args.environment
-
+    
     # In any case, Algorithm 1 is the evaluated algorithm for tasks 'vsi' and 'vgl')
     # Algorithm 0 is only used in the full VSL (Value System Learning) pipeline 
     # (algorithm[0] is the one used for VGL in that case, which defaults to 'pc')
@@ -225,7 +236,6 @@ if __name__ == "__main__":
                                                 active_fragmenter_on=training_data.active_fragmenter_on,
                                                 **training_data.pc_config[vgl_or_vsi])
     if task == 'all':
-        # TODO: for now the only option to learn grounding is Preference comparison quantitative
         if algorithm[0] == 'pc':
             vgl_before_vsi_vsl_algo = PreferenceBasedTabularMDPVSL(env=training_data.env,
                                                                reward_net=vsl_algo.reward_net,
@@ -242,9 +252,9 @@ if __name__ == "__main__":
                                                                policy_approximator=training_data.policy_approximation_method,
                                                                approximator_kwargs=training_data.approximator_kwargs,
                                                                learn_stochastic_policy=training_data.learn_stochastic_policy,
-                                                               use_quantified_preference=True,
+                                                               use_quantified_preference=parser_args.use_quantified_preference,
                                                                expert_is_stochastic=training_data.stochastic_expert,
-                                                               preference_sampling_temperature=1,
+                                                               preference_sampling_temperature=parser_args.preference_sampling_temperature,
                                                                reward_trainer_kwargs=training_data.reward_trainer_kwargs,
                                                                loss_class=training_data.loss_class,
                                                                loss_kwargs=training_data.loss_kwargs,
@@ -358,7 +368,7 @@ if __name__ == "__main__":
                          align_func_colors=training_data.align_colors)
 
     testing_profiles_grounding = None
-    if task == 'vgl':
+    if task == 'vgl' or task == 'all':
         testing_profiles = vsl_algo.vsi_target_align_funcs
         testing_profiles_grounding = training_data.vgl_targets
     else:
@@ -370,14 +380,16 @@ if __name__ == "__main__":
                                                                          expert=False, random=True,
                                                                          n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
                                                                          use_probabilistic_reward=parser_args.use_probabilistic_reward,
-                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None
+                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None,
+                                                                         precise_deterministic=not training_data.approx_expert
                                                                          )[0]
     expert_policy_tests = vsl_algo.get_policy_from_reward_per_align_func(testing_profiles,
                                                                          reward_net_per_al=None,
                                                                          expert=True, random=False,
                                                                          n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
                                                                          use_probabilistic_reward=parser_args.use_probabilistic_reward,
-                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None
+                                                                         use_custom_grounding=training_data.get_assumed_grounding() if task == 'vsi' else None,
+                                                                         precise_deterministic=not training_data.approx_expert
                                                                          )[0]
     learned_reward_per_test_al_round = []
 
@@ -394,7 +406,8 @@ if __name__ == "__main__":
                                                                                                                     reward_nets_per_round[r][list(reward_nets_per_round[r].keys())[0]
                                                                                                                                              ]) for al in testing_profiles},
                                                                                                 expert=False, random=False, n_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                                use_probabilistic_reward=parser_args.use_probabilistic_reward
+                                                                                                use_probabilistic_reward=parser_args.use_probabilistic_reward,
+                                                                                                precise_deterministic=not training_data.approx_expert
                                                                                                 )
         
         learned_reward_per_test_al_round.append(learned_reward_per_test_al_r)
@@ -439,6 +452,11 @@ if __name__ == "__main__":
                         value_expectations_per_ratio=value_expectations_per_ratio,
                         value_expectations_per_ratio_expert=value_expectations_per_ratio_expert
                         )
+        if task == 'all': #also plot the learned groundings
+            plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl='vgl',
+                                         target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+                                         namefig=f'{parser_args.experiment_name}{algorithm[0]}_VSL_ERROR_PURES_{extras}_expected_over_{n_experiment_reps}_{environment}_{task}', show=parser_args.show)
+    
     print("Plotting learned and expert reward pairs")
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, learned_rewards_per_al_func=learned_rewards_per_round, vsi_or_vgl=vgl_or_vsi,
                                          target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,

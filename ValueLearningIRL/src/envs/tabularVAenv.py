@@ -131,7 +131,10 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
         ns, r, d, t, i = self.unwrapped.step(action)
         # d = d or self.env.state in self.goal_states
         return ns, r, d, t, i
-
+    
+    @property
+    def invalid_states(self):
+        return None
     @override
     def obs_from_state(self, state: np.int64) -> np.ndarray[Any, np.dtype]:
         return self.unwrapped.observation_matrix[state]

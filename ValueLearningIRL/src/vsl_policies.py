@@ -148,23 +148,96 @@ class ValueSystemLearningPolicy(BasePolicy):
                             options: Union[None, List, Dict] = None, stochastic=True,
                             custom_discount=None, repeat_per_seed=1, with_alignfunctions=[None,], t_max=None,
                             exploration=0, with_reward=False, alignments_in_env=[None,],
-                            use_observations=False, end_trajectories_when_ended=False) -> List[Trajectory]:
+                            use_observations=False, end_trajectories_when_ended=True) -> List[Trajectory]:
         trajs = []
         if len(alignments_in_env) != len(with_alignfunctions):
             alignments_in_env = with_alignfunctions
-
+        trajs_sus_sus = []
+        trajs_eff_sus = []
+        trajs_sus_eff = []
+        trajs_eff_eff = []
         for si in range(n_seeds):
 
             for r in range(repeat_per_seed):
                 for af, af_in_env in zip(with_alignfunctions, alignments_in_env):
-                    trajs.append(
-                        self.obtain_trajectory(af,
-                                               seed=seed+si,
+                    traj = self.obtain_trajectory(af,
+                                               seed=seed*n_seeds+si,
                                                exploration=exploration,
                                                custom_discount=custom_discount,
                                                end_trajectories_when_ended=end_trajectories_when_ended,
-                                               options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False, with_reward=with_reward, alignment_func_in_env=af_in_env)
+                                               options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False, 
+                                               with_reward=with_reward, alignment_func_in_env=af_in_env)
+                    trajs.append(
+                        traj
                     )
+                    if not stochastic:
+                        if af == (1.0,0.0,0.0):
+                            traj_w = self.obtain_trajectory(af,
+                                                seed=seed*n_seeds+si,
+                                                exploration=exploration,
+                                                custom_discount=custom_discount,
+                                                end_trajectories_when_ended=end_trajectories_when_ended,
+                                                options=options[si] if isinstance(options, list) else options, t_max=t_max, 
+                                                stochastic=stochastic, only_states=False, 
+                                                with_reward=True, alignment_func_in_env=(1.0,0.0,0.0))
+                        
+                            trajs_sus_sus.append(traj_w)
+                            print(traj.obs, traj_w.obs, seed, n_seeds, si)
+                            assert np.all(traj_w.obs == traj.obs)
+
+                            traj_w2 = self.obtain_trajectory(af,
+                                                seed=seed*n_seeds+si,
+                                                exploration=exploration,
+                                                custom_discount=custom_discount,
+                                                end_trajectories_when_ended=end_trajectories_when_ended,
+                                                options=options[si] if isinstance(options, list) else options, t_max=t_max, 
+                                                stochastic=stochastic, only_states=False, 
+                                                with_reward=True, alignment_func_in_env=(0.0,0.0,1.0))
+                        
+                            trajs_sus_eff.append(traj_w2)
+                            print(traj.obs, traj_w2.obs, seed, n_seeds, si)
+                            assert np.all(traj_w2.obs == traj.obs)
+                        elif af == (0.0,0.0,1.0):
+                            traj_w = self.obtain_trajectory(af,
+                                                seed=seed*n_seeds+si,
+                                                exploration=exploration,
+                                                custom_discount=custom_discount,
+                                                end_trajectories_when_ended=end_trajectories_when_ended,
+                                                options=options[si] if isinstance(options, list) else options, t_max=t_max, 
+                                                stochastic=stochastic, only_states=False, 
+                                                with_reward=True, alignment_func_in_env=(1.0,0.0,0.0))
+                            trajs_eff_sus.append(traj_w)
+                            print(traj.obs, traj_w.obs, seed, n_seeds, si)
+                            assert np.all(traj_w.obs == traj.obs)
+
+                            traj_w2 = self.obtain_trajectory(af,
+                                                seed=seed*n_seeds+si,
+                                                exploration=exploration,
+                                                custom_discount=custom_discount,
+                                                end_trajectories_when_ended=end_trajectories_when_ended,
+                                                options=options[si] if isinstance(options, list) else options, t_max=t_max, 
+                                                stochastic=stochastic, only_states=False, 
+                                                with_reward=True, alignment_func_in_env=(0.0,0.0,1.0))
+                        
+                            trajs_eff_eff.append(traj_w2)
+                            print(traj.obs, traj_w2.obs, seed, n_seeds, si)
+                            assert np.all(traj_w2.obs == traj.obs)
+        if not stochastic:
+            for t,t2 in zip(trajs_sus_sus, trajs_eff_sus):
+                #print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
+                #print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
+                assert np.sum(t.rews) >= np.sum(t2.rews)
+                print("CHECK!!!")
+                assert t.obs[0] == t2.obs[0] and t.obs[-1] == t2.obs[-1]
+
+            for t,t2 in zip(trajs_eff_eff, trajs_sus_eff):
+                #print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
+                #print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
+                print(t.obs, t2.obs)
+                assert np.sum(t.rews) >= np.sum(t2.rews)
+                print("CHECK EFF!!!")
+                assert t.obs[0] == t2.obs[0] and t.obs[-1] == t2.obs[-1]
+
         return trajs
 
     def _save_checkpoint(self, save_last=True):
@@ -369,12 +442,22 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
             probs = np.ones_like(probs)/probs.shape[0]
 
         valid_actions = self.env.valid_actions(state_obs, alignment_function)
-        # Step 2: Filter probabilities to keep only valid actions
-        valid_probabilities = probs[valid_actions]
 
-        # Step 3: Normalize the filtered probabilities so they sum to 1
-        
-        probs = valid_probabilities / valid_probabilities.sum()
+        # Step 2: Create a zeroed-out array of the same shape as probs
+        filtered_probs = np.zeros_like(probs)
+
+        # Step 3: Set the probabilities of valid actions
+        filtered_probs[valid_actions] = probs[valid_actions]
+
+        # Step 4: Normalize the valid probabilities so they sum to 1
+        if filtered_probs.sum() > 0:
+            filtered_probs /= filtered_probs.sum()
+        else:
+            # Handle edge case where no actions are valid
+            filtered_probs[:] = 1.0 / len(filtered_probs)  # or some default uniform distribution
+
+        # Now `filtered_probs` has the same shape as `probs`
+        probs = filtered_probs
         
         assert np.allclose([np.sum(probs),], [1.0,])
 

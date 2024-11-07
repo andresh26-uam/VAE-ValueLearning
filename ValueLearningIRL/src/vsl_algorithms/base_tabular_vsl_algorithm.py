@@ -1,5 +1,6 @@
 from copy import deepcopy
 import enum
+import heapq
 import itertools
 from math import ceil, floor
 from typing import Callable, Dict, List, Optional, Tuple
@@ -40,6 +41,7 @@ from imitation.data import types, rollout
 class PolicyApproximators(enum.Enum):
     MCE_ORIGINAL = 'mce_original'
     SOFT_VALUE_ITERATION = 'value_iteration'
+    NEW_SOFT_VALUE_ITERATION = 'new_value_iteration'
     
 def dict_metrics(**kwargs):
     return dict(kwargs)
@@ -196,7 +198,51 @@ def mce_partition_fh(
             err = np.max(np.abs(V-values_prev))
             iterations += 1
         pi = scipy.special.softmax(Q - V[:, None], axis=1)
+    elif policy_approximator == PolicyApproximators.NEW_SOFT_VALUE_ITERATION:
+        value_iteration_tolerance = np.min(np.abs(broad_R[broad_R!=0.0]))
 
+        # Initialization
+        # indexed as V[t,s]
+        V = np.full((n_states), -1)
+        V[env.goal_states] = 0.0
+        Q = broad_R
+        illegal_reward = np.max(np.abs(broad_R))*-1000*horizon
+
+        inv_states = env.invalid_states
+        if inv_states is not None:
+            V[inv_states] = illegal_reward
+            #Q[inv_states,:] = V[inv_states]
+        # indexed as Q[t,s,a]
+        
+        valid_state_actions = np.full_like(broad_R, fill_value=False, dtype=np.bool_)
+        for s in range(len(V)):
+            valid_state_actions[s, env.valid_actions(s,None)] = True
+        
+        broad_R[valid_state_actions==False] = illegal_reward
+        err = np.inf
+        iterations = 0
+        #value_iteration_tolerance = approximator_kwargs['value_iteration_tolerance']
+        max_iterations = horizon
+        if 'iterations' in approximator_kwargs.keys():
+            max_iterations = approximator_kwargs['iterations']
+        
+        while err >= value_iteration_tolerance:
+            values_prev = V.copy()
+            next_values_s_a = T @ values_prev
+            Q = broad_R + discount * next_values_s_a
+            
+            #Q[valid_state_actions==False] = illegal_reward
+            V = np.max(Q, axis=1)
+            if inv_states is not None:
+                V[env.goal_states] = 0.0
+                V[inv_states] = values_prev[inv_states]
+            err = np.max(np.abs(V-values_prev))
+            print(err,iterations, np.mean(np.abs(V-values_prev)))
+            #print(iterations, V[515], values_prev[515], env.goal_states, env._invalid_states)
+            #print(value_iteration_tolerance, err)
+            #print(np.where(np.abs(V-values_prev) == err)[0])
+            iterations += 1
+        pi = scipy.special.softmax(Q - V[:, None], axis=1)
     else:
         V, Q, pi = policy_approximator(
             env, reward, discount, **approximator_kwargs)
@@ -512,7 +558,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         return rewards
     def get_policy_from_reward_per_align_func(self, align_funcs, reward_net_per_al: Dict[tuple, AbstractVSLRewardFunction], expert=False, random=False, use_custom_grounding=None, 
                                               target_to_learned =None, use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10,
-                                              state_encoder = None, expose_state=True):
+                                              state_encoder = None, expose_state=True, precise_deterministic=False):
         reward_matrix_per_al = dict()
         profile_to_assumed_matrix = {}
         if random:
@@ -552,7 +598,11 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     else:
                         raise NotImplementedError("Probabilistic reward is yet to be tested")
                  
-                _,_, assumed_expert_pi = mce_partition_fh(self.env, discount=self.discount,
+                if precise_deterministic and expert:
+                    assumed_expert_pi = np.load(f'roadworld_env_use_case/expert_policy_{w}.npy')
+                    
+                else:
+                    _,_, assumed_expert_pi = mce_partition_fh(self.env, discount=self.discount,
                                                     reward=reward,
                                                     approximator_kwargs=self.approximator_kwargs,
                                                     policy_approximator=self.policy_approximator,
@@ -606,7 +656,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         
         
         random_trajs = {rep: {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
-                                                                seed=(seed+34355)*rep,stochastic=self.stochastic_expert,
+                                                                seed=(seed+34355)*rep,stochastic=True,
                                                                 end_trajectories_when_ended=True,
                                                                 with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
                 for rep in range(len(testing_policy_per_round))}
@@ -632,9 +682,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     returns_estimated = []
                     returns_real_from_learned_policy = {alb: [] for alb in basic_profiles}
                     returns_real_from_expert_policy = {alb: [] for alb in basic_profiles}
+                   
                     for ti in all_trajs:
-                        
-                        
                         estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
                         real_return_i = rollout.discounted_sum(real_matrix_al[ti.obs[:-1], ti.acts], gamma=self.discount)
                         if self.discount == 1.0:
@@ -660,7 +709,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                                 returns_real_from_expert_policy[al_basic].append(real_return_basic_expert)
                         
                     
-                    N = len(all_trajs)
+                    N = len(all_trajs) # Equals the -tn parameter. (default 100)
+                    
                     i_j = np.random.choice(N, size=(N*10, 2), replace=True)
                     i_indices, j_indices = i_j[:, 0], i_j[:, 1]
 
@@ -675,7 +725,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
             
                 
                     todos = np.where(probs_real >= 0.0)[0]
-                    epsilons = [0.0,0.001,0.01,0.05,0.1]
+                    epsilons = [0.0,0.01,0.05]
                     accuracy_per_epsilon = {eps: None for eps in epsilons}
                     n_repescados_per_epsilon = {eps: 0 for eps in epsilons}
                     for epsilon in epsilons:
@@ -719,6 +769,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         assert len(total) == len_total_disj
                         print("INTERSEC", len(intersec))
                         assert len(intersec) == 0
+                        assert len(exitos) == len(np.union1d(acertados, c2_repescados))
                         accuracy = len(exitos)/len(todos)
                         accuracy_per_epsilon[epsilon] = accuracy
                         n_repescados_per_epsilon[epsilon] = len(c2_repescados)
@@ -774,7 +825,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     n_repescados_per_al_func[al].append(n_repescados_per_epsilon)
                     #ce_per_al_func[al].append(th.nn.functional.binary_cross_entropy(th.tensor(probs_real), th.tensor(probs_estimated)).detach().numpy())
                     # JSD (Not used)
-                    # jsd_per_al_func[al].append(JSD(probs_real, probs_estimated))
+                    jsd = JSD(probs_real, probs_estimated)
+                    jsd_per_al_func[al].append({eps: jsd for eps in epsilons})
                     # Instead, use the number of artificially misclassified cases inside the interval +-epsilon
                     
                     if float(ratio) == 1.0:
@@ -787,6 +839,6 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                             })
 
             #metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': jsd_per_al_func}
-            metrics_per_ratio[ratio]={'acc': qualitative_loss_per_al_func, 'repescados': n_repescados_per_al_func}
+            metrics_per_ratio[ratio]={'acc': qualitative_loss_per_al_func, 'repescados': n_repescados_per_al_func, 'jsd': jsd_per_al_func}
             
         return metrics_per_ratio, value_expectations, value_expectations_expert

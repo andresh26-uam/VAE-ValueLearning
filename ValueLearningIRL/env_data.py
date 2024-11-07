@@ -14,7 +14,7 @@ from roadworld_env_use_case.values_and_costs import PROFILE_COLORS_VEC
 from roadworld_env_use_case.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldGymPOMDP
 from roadworld_env_use_case.utils.load_data import ini_od_dist
 from roadworld_env_use_case.values_and_costs import BASIC_PROFILES, BASIC_PROFILE_NAMES
-from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
+from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators, concentrate_on_max_policy
 from src.vsl_algorithms.me_irl_for_vsl import mce_partition_fh
 from torch import nn, optim
 
@@ -28,6 +28,20 @@ from imitation.algorithms.preference_comparisons import CrossEntropyRewardLoss
 USE_PMOVI_EXPERT = False
 FIRE_FIGHTERS_ENV_NAME = 'FireFighters-v0'
 ROAD_WORLD_ENV_NAME = 'FixedDestRoadWorld-v0'
+
+def custom_cost_from_reward(environment:RoadWorldGymPOMDP, reward, state_des, profile):
+        #print(environment.pre_acts_and_pre_states[0])
+        rews = [reward[s,a] for a,s in zip(*environment.pre_acts_and_pre_states[state_des[0]]) if s != environment.cur_des]
+        state_acts = [(s,a) for a,s in zip(*environment.pre_acts_and_pre_states[state_des[0]]) if s != environment.cur_des]
+        #print(rews, state_des)
+        #print(state_acts)
+        #print([environment.get_state_des_transition((s, 413), a) for s,a in state_acts])
+        
+        if len(rews) == 0.0:
+            rews = [reward[state_des[0],0]]
+        np.testing.assert_almost_equal(rews, rews[0])
+        return rews[0]
+    
 
 class PrefLossClasses(enum.Enum):
     CROSS_ENTROPY = 'cross_entropy'
@@ -162,12 +176,12 @@ class EnvDataForIRL():
     def me_config(self):
         return {'vgl': dict(
             vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-8,
+            gradient_norm_epsilon=1e-9,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         ), 'vsi': dict(
             vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-8,
+            gradient_norm_epsilon=1e-9,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         )}
@@ -189,6 +203,10 @@ class EnvDataForIRL():
 
     @abstractmethod
     def align_colors(self, align_func): pass
+
+
+    def compute_precise_policy(self, env_real: FixedDestRoadWorldGymPOMDP, w, reward):
+        pass
 
 
 class EnvDataForIRLFireFighters(EnvDataForIRL):
@@ -350,7 +368,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         # self.vsi_reference_policy = 'random'
 
         self.reward_trainer_kwargs = {
-            'epochs': 5, # 1, 3
+            'epochs': 5, # 1, 3 TODO: PREV: 5
             'lr': 0.001, # 0.001 0.0005
             'batch_size': 512, # 4096
         }
@@ -372,22 +390,21 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         base['vgl'].update(dict(
             max_iter=10000,
             random_trajs_proportion=0.8,
-            n_seeds_for_sampled_trajectories=4500, # 2600, 3000, 3500
+            n_seeds_for_sampled_trajectories=4500, # 2600, 3000, 3500 TODO : PREV: 4500
             n_sampled_trajs_per_seed=2, #10, 2
             fragment_length=self.horizon, interactive_imitation_iterations=200, #total | 200, 150
             total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
-            initial_epoch_multiplier=40, transition_oversampling=1 #15,5 | 4,1
+            initial_epoch_multiplier=40, transition_oversampling=1 #15,5 | 4,1 TODO: PREV 40.
         ))
         base['vsi'].update(dict(
-            max_iter=20000,
+            max_iter=10000,
             random_trajs_proportion=0.8,
-            n_seeds_for_sampled_trajectories=1000,
-            n_sampled_trajs_per_seed=3,
-            fragment_length=5, interactive_imitation_iterations=200,
-            total_comparisons=3000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=20, transition_oversampling=3,
-        )
-        )
+            n_seeds_for_sampled_trajectories=4500, # 2600, 3000, 3500 TODO : PREV: 4500
+            n_sampled_trajs_per_seed=2, #10, 2
+            fragment_length=self.horizon, interactive_imitation_iterations=200, #total | 200, 150
+            total_comparisons=10000, initial_comparison_frac=0.25,  #50000, 20000
+            initial_epoch_multiplier=40, transition_oversampling=1 #15,5 | 4,1 TODO: PREV 40.
+        ))
         return base
 
     @property
@@ -395,7 +412,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         base = super().me_config
         base['vsi'].update(dict(
             vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-7,
+            gradient_norm_epsilon=1e-9,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=True
         ))
@@ -448,7 +465,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 30
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 5
-    DEFAULT_DEST = 413
+    DEFAULT_DEST = 140 # 413
 
     VALUES_NAMES = BASIC_PROFILE_NAMES
 
@@ -458,7 +475,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         assert self.discount_factor == 1.0
 
         self.n_seeds_total = n_seeds_for_samplers
-
+        self.dest = dest
         cv = 0  # cross validation process [0, 1, 2, 3, 4] # TODO (?)
         size = 100  # size of training data [100, 1000, 10000]
 
@@ -488,7 +505,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         env_creator = partial(RoadWorldGymPOMDP, network_path=network_p, edge_path=edge_p, node_path=node_p, path_feature_path=path_feature_p,
                               pre_reset=(od_list, od_dist),
-                              profile=(1.0, 0.0, 0.0), visualize_example=False, horizon=self.horizon,
+                              profile=(1.0, 0.0, 0.0), visualize_example=True, horizon=self.horizon,
                               feature_selection=FeatureSelection.ONLY_COSTS,
                               feature_preprocessing=FeaturePreprocess.NORMALIZATION,
                               use_optimal_reward_per_profile=False)
@@ -498,22 +515,51 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             env=env_single, with_destination=dest)
         env_real.reset(seed=self.seed)
 
+
+        
+
         profiles = sample_example_profiles(
             profile_variety=self.profile_variety, n_values=self.n_values)
         #profiles = [(1.0,0.0,0.0), (0.75,0.25,0.0), (0.5,0.5,0.0), (0.25, 0.75, 0.0), (0.0,1.0,0.0), (0.25,0.5,0.25), (0.0,0.75,0.25), (0.0,0.5,0.5), (0.25,0.5,0.25), (0.0, 0.25, 0.75), (0.0, 0.0, 1.0)]
         profile_to_assumed_matrix = {}
 
+        if not self.approx_expert :
+            self._state_to_action = dict()
         for w in profiles:
             reward = env_real.reward_matrix_per_align_func(w)
-
-            _, _, assumed_expert_pi = mce_partition_fh(env_real, discount=self.discount_factor,
+            #print(env_real.valid_actions(318))
+            #print(env_real.valid_actions(321))
+            #print(w, reward[318],reward[321])
+            print(self.approx_expert)
+            if not self.approx_expert:
+                if self.retrain:
+                    assumed_expert_pi = self.compute_precise_policy(env_real, w, reward)
+                    #assumed_expert_pi2 = self.compute_precise_policy(env_real, w, None)
+                    #np.testing.assert_almost_equal(assumed_expert_pi,assumed_expert_pi2)
+                    np.save(f'roadworld_env_use_case/expert_policy_{w}.npy', assumed_expert_pi)
+                else:
+                    try:
+                        assumed_expert_pi = np.load(f'roadworld_env_use_case/expert_policy_{w}.npy')
+                    except:
+                        assumed_expert_pi = self.compute_precise_policy(env_real, w, reward)
+                        np.save(f'roadworld_env_use_case/expert_policy_{w}.npy', assumed_expert_pi)
+                
+                
+                # TODO: MCE does not work... The approximation is bad, state visitation count cannot do good.
+                # Need another method....
+                
+                
+            else:
+                _, _, assumed_expert_pi = mce_partition_fh(env_real, discount=self.discount_factor,
                                                        reward=reward,
                                                        horizon = env_real.horizon,
                                                        approximator_kwargs=self.approximator_kwargs,
-                                                       policy_approximator=self.policy_approximation_method,
+                                                       policy_approximator=PolicyApproximators.MCE_ORIGINAL,
                                                        deterministic=not self.stochastic_expert)
             profile_to_assumed_matrix[w] = assumed_expert_pi
 
+
+        
         expert_policy_train = VAlignedDictSpaceActionPolicy(
             policy_per_va_dict=profile_to_assumed_matrix, env=env_real, state_encoder=None)
         
@@ -521,20 +567,33 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.env = env_real
         self.vgl_expert_policy = expert_policy_train
         self.vsi_expert_policy = expert_policy_train
-        # TODO: construir politicas aleatorias dentro de la legalidad de estados.
-
         self.vgl_reference_policy = expert_policy_train
         self.vsi_reference_policy = expert_policy_train
 
         self.vsi_targets = profiles
         #self.initial_state_distribution_for_expected_alignment_eval = np.zeros((self.env.real_environ.n_states,), dtype=np.float64)
         #self.initial_state_distribution_for_expected_alignment_eval[49] = 1.0 
+        expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
+                                                                     seed=self.seed, stochastic=self.stochastic_expert,
+                                                                     repeat_per_seed=self.n_expert_samples_per_seed, 
+                                                                     with_alignfunctions=profiles,
+                                                                     alignments_in_env=profiles,
+                                                                     t_max=self.horizon)
+        
+        for tr in expert_trajs_train:
+            #print(tr, len(tr))
+            
+            assert tr.obs[-1] == self.dest
         
         if sampler_over_precalculated_trajs:
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
                                                                      seed=self.seed, stochastic=self.stochastic_expert,
-                                                                     repeat_per_seed=self.n_expert_samples_per_seed, with_alignfunctions=profiles,
+                                                                     repeat_per_seed=self.n_expert_samples_per_seed, 
+                                                                     with_alignfunctions=profiles,
+                                                                     alignments_in_env=profiles,
                                                                      t_max=self.horizon)
+            for tr in expert_trajs_train:
+                assert tr.obs[-1] == self.dest
             self.vgl_expert_train_sampler = partial(
                 random_sampler_among_trajs, expert_trajs_train)
             self.vsi_expert_train_sampler = partial(
@@ -550,6 +609,67 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     def get_assumed_grounding(self):
         return nn.Identity().requires_grad_(False)
 
+    
+    def compute_precise_policy(self, env_real: FixedDestRoadWorldGymPOMDP, w=None, reward=None):
+        custom_cost=None
+        environment = env_real.real_environ
+        if reward is not None:
+            custom_cost = lambda stdes, profile: custom_cost_from_reward(environment, -reward, stdes,profile)
+        policy = np.zeros((env_real.state_dim, env_real.action_dim),dtype=np.float32)
+        for s in np.arange(env_real.state_dim):
+            if s in env_real.invalid_states:
+                continue
+            edge_state = (s,env_real.goal_states[0])
+            
+            av_actions = np.asarray(env_real.real_environ.get_available_actions_from_state(edge_state))
+            
+            actions = None
+            profile = None
+            if w is not None:
+                actions = self._state_to_action.get((s, w), None)
+                profile = w
+            if actions is None:
+                if edge_state[0] == edge_state[1]:
+                    actions =  environment.get_available_actions_from_state((edge_state[1], edge_state[1]))
+                    if profile is not None:
+                        self._state_to_action[((edge_state[1], edge_state[1]),profile)] = actions
+                    
+                else:
+                    actions = []
+                    path = environment.shortest_path_edges(profile=profile, to_state=edge_state[1], 
+                                                           from_state=edge_state[0], with_length=False, 
+                                                           all_alternatives=False, 
+                                                        custom_cost=custom_cost, flattened=False)
+                    for iedge in range(1,len(path)):
+                        prev_edge = path[iedge-1]
+                        edge = path[iedge]
+                        prev_state = (prev_edge, edge_state[1])
+                        av_actions_prev = np.asarray(environment.get_available_actions_from_state(prev_state))
+                        av_states = [environment.get_state_des_transition(prev_state, av_c) for av_c in av_actions_prev]
+                        estate = (edge, edge_state[1])
+                        istate_or_act = av_states.index(estate)
+                        optimal_action = av_actions_prev[istate_or_act]
+
+                        if iedge == 1:
+                            actions.append(optimal_action)
+                        if profile is not None:
+                            self._state_to_action[(prev_state, profile)] = [optimal_action,]
+            if actions is not None or len(actions) > 0:
+                probs = np.zeros_like(np.asarray(av_actions), dtype=np.float64)
+                for a in actions:
+                    probs[np.where(av_actions==a)[0][0]] = 1.0/float(len(actions))
+            else: 
+                actions = [np.random.choice(av_actions),]
+                probs = np.zeros_like(av_actions)
+                probs[0] = 1.0
+            policy[s,av_actions] = probs
+
+        policy = concentrate_on_max_policy(policy, valid_action_checker = lambda s: env_real.valid_actions(s, None))
+        if __debug__:
+            for i in range(policy.shape[0]):
+                assert np.allclose(np.sum(policy[i]), 1)
+        return policy
+    
     @property
     def pc_config(self):
         base = super().pc_config
@@ -570,23 +690,22 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         base['vgl'].update(dict(
             max_iter=10000,
-            n_seeds_for_sampled_trajectories=1000,
+            n_seeds_for_sampled_trajectories=2500, # 1000 was too few with full variable length trajectories
             n_sampled_trajs_per_seed=1,
-            fragment_length=30, interactive_imitation_iterations=200,
-            total_comparisons=8000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=1, transition_oversampling=1,
+            fragment_length=self.horizon, interactive_imitation_iterations=200, # TODO: The fragments are discarded when they are shorter than this length! Before the cropping, it was 30.
+            total_comparisons=7500, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
+            initial_epoch_multiplier=100, transition_oversampling=1,
             random_trajs_proportion=0.8
         ))
         base['vsi'].update(dict(
             max_iter=10000,
-            n_seeds_for_sampled_trajectories=1500,
+            n_seeds_for_sampled_trajectories=2500, # 1000 was too few with full variable length trajectories
             n_sampled_trajs_per_seed=1,
-            fragment_length=10, interactive_imitation_iterations=200,
-            total_comparisons=1000, initial_comparison_frac=0.1,
-            initial_epoch_multiplier=1, transition_oversampling=3,
+            fragment_length=self.horizon, interactive_imitation_iterations=200, # TODO: The fragments are discarded when they are shorter than this length! Before the cropping, it was 30.
+            total_comparisons=7500, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
+            initial_epoch_multiplier=100, transition_oversampling=1,
             random_trajs_proportion=0.8
-        )
-        )
+        ))
         return base
 
 
@@ -631,7 +750,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
         self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs = {
-            'value_iteration_tolerance': 0.0000001, 'iterations': 1000}
+            'value_iteration_tolerance': 0.0000001, 'iterations': 100000}
         # self.vgl_reference_policy = 'random' # SEE __INIT__!
         # self.vsi_reference_policy = 'random' # SEE __INIT__!
 
@@ -641,6 +760,6 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.testing_profiles.remove((0.0, 0.0, 0.0))
         self.reward_trainer_kwargs = {
             'epochs': 1,
-            'lr': 0.03,
-            'batch_size': 128,
+            'lr': 0.03, # 0.03?
+            'batch_size': 64, # 128
         }

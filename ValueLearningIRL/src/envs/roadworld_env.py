@@ -23,10 +23,11 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                         s, a, self.real_environ.cur_des, profile=profile)
 
             self.reward_matrix_dict[profile] = reward_matrix
+            return self.reward_matrix_dict[profile]
         else:
             return np.sum([profile[i]*self._get_reward_matrix_for_profile(bp) for i, bp in enumerate(BASIC_PROFILES)], axis=0)
 
-        return self.reward_matrix_dict[profile]
+        
 
     def __init__(self, env: RoadWorldGymPOMDP, with_destination=None, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, **kwargs):
         self.reward_matrix_dict = dict()
@@ -35,6 +36,8 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         self.real_environ = env
         self._invalid_states = [s for s in range(
             env.n_states) if s not in env.valid_edges]
+        
+        
 
         super().__init__(env.transition_matrix,
                          env.observation_matrix,
@@ -43,7 +46,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                          env.initial_state_dist, env.horizon, done_when_horizon_is_met, trunc_when_horizon_is_met, **kwargs)
         self.cur_align_func = env.last_profile
         self._goal_states = [env.cur_des,]
-
+        
     def step(self, action):
         s, r, d, t, i = super().step(action)
         d = self.state in self.goal_states
