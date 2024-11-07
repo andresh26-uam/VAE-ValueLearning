@@ -155,7 +155,7 @@ if __name__ == "__main__":
         training_data = EnvDataForRoadWorld(
             env_name=ROAD_WORLD_ENV_NAME,
             **dict(parser_args._get_kwargs()))
-        training_data.approx_expert = False # TODO Need more testing:
+        training_data.approx_expert = True # TODO Need more testing:
         if not training_data.approx_expert: # TODO Still need more testing... For now it is approximating the best route
             #policy_approximator(env, reward, discount, **approximator_kwargs)
             training_data.policy_approximation_method = lambda env, reward, discount, **kwargs: (None, None, training_data.compute_precise_policy(env, w=None, reward=reward))

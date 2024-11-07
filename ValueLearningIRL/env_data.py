@@ -530,7 +530,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             #print(env_real.valid_actions(318))
             #print(env_real.valid_actions(321))
             #print(w, reward[318],reward[321])
-            print(self.approx_expert)
+            assert self.approx_expert is True # TODO NEed more testing
             if not self.approx_expert:
                 if self.retrain:
                     assumed_expert_pi = self.compute_precise_policy(env_real, w, reward)
