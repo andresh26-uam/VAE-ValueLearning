@@ -137,7 +137,7 @@ def mce_occupancy_measures(
         else:
             Dcum = np.multiply(pi, Dcum[:, np.newaxis])
             assert Dcum.shape == (n_states, n_actions)
-        if __debug__:
+        """if __debug__:
             D = np.zeros((horizon + 1, n_states))
 
             D[0, :] = initial_state_distribution
@@ -151,7 +151,7 @@ def mce_occupancy_measures(
                         E = D[t] * (pi == a)  # Multiarmed bandit variant...?
                     D[t + 1, :] += E @ T[:, a, :]
 
-            Dstates = rollout.discounted_sum(D, discount)
+            Dstates = rollout.discounted_sum(D, discount)"""
             # print(np.max(Dstates - np.sum(Dcum, axis=-1)))
             # assert np.allclose(np.sum(Dcum, axis=-1), Dstates)
         assert isinstance(Dcum, np.ndarray)
