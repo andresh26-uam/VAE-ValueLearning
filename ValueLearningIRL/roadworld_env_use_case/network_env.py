@@ -1118,19 +1118,15 @@ class RoadWorldGymPOMDP(RoadWorldGym):
             else:
                 self.reward_matrix[self.last_profile][s] = -1.0
             """
-            if (s not in self.valid_edges):
+            if s not in self.valid_edges or s == self.cur_des:
                 self.state_actions_with_known_reward[s] = True
-                self.transition_matrix[s, :, s] = 1.0
-            elif s == self.cur_des:
-                self.transition_matrix[s, :, s] = 1.0
-                pass
-            else:
-                for a in range(self.n_actions):
-                    if a in self.get_action_list(s):
-                        self.transition_matrix[s, a, self.get_state_des_transition((s, self.cur_des), a)[0]] = 1.0
-                    else:
-                        self.state_actions_with_known_reward[s,a] = True
-                        self.transition_matrix[s, a, s] = 1.0
+            
+            for a in range(self.n_actions):
+                if a in self.get_action_list(s):
+                    self.transition_matrix[s, a, self.get_state_des_transition((s, self.cur_des), a)[0]] = 1.0
+                else:
+                    self.state_actions_with_known_reward[s,a] = True
+                    self.transition_matrix[s, a, s] = 1.0
                 
         #initial_states = np.array([int(od.split('_')[0]) for od in self.od_list])
         #self.transition_matrix = sp.as_coo(self.transition_matrix)
@@ -1175,27 +1171,19 @@ class RoadWorldGymPOMDP(RoadWorldGym):
 
         
         if state not in self.valid_edges:
-            rew = -10000000
+            rew = -1000000
         elif state == self.cur_des:
             rew = 0.0
         elif nstate not in self.valid_edges:
-            rew =  -10000000
+            rew =  -1000000
         elif action not in self.get_action_list(state):
-            rew = -10000000
+            rew = -1000000
         else:
-            
             rew =  -self.cost_model(profile=profile, normalization =self.feature_preprocessing)((nstate, self.cur_des))
-            """if np.abs(rew) < 0.7 and nstate != self.cur_des:
-                
-                rew = -0.7"""
+            
             if 0.0 != self.reward_matrix[profile][state,action]:
                 old_res = self.reward_matrix[profile][state,action]
                 assert rew == old_res
-        """if nstate == self.cur_des:
-                if rew == 0.0:
-                    assert state == self.cur_des
-                    print(state, rew)"""
-                    
         self.reward_matrix[profile][state,action] = rew
             
         return self.reward_matrix[profile][state,action]
