@@ -6,7 +6,7 @@ In previous work, we introduce a technique-agnostic framework for the problem of
 
  The problem is approached here through a MDP formulation and the value alignment and value preferences are learned through Inverse Reinforcement Learning. Specifically, we use versions of "Deep Maximum Entropy Inverse Reinforcement Learning" (Wulfmeier, 2015) and assume routes are chosen by maximizing an initially unknown value alignment MDP reward function.
 
- Additionally, we are exploring the use of preference-based (inverse) reinforcement learning algorithms [Christiano et al., 2017] that can learn from agent preferences regarding values.
+ Additionally, we are exploring the use of preference-based (inverse) reinforcement learning algorithms [Christiano et al., 2017] (PbRL) that can learn from agent preferences regarding values.
 
 ## Use cases
 
@@ -25,20 +25,19 @@ Install the requirements with:
 ``pip install -r requirements.txt``
 
 ## Reproduce results:
-In all scripts, the `-sh` option is solely for showing the results when finished. The results will be under the `results/` folder in any case. The `-df` flag indicates the discount factor used to calculate value alignment of trajectories and for (inverse) reinforcement learning. The `-dfp` flag indicates the discount factor used to calculate value alignment of trajectories to compare them when using the preference comparisons algorithm.
+In all scripts, the `-sh` option is solely for showing the results when finished. The results will be under the `results/` folder in any case. The `-df` flag indicates the discount factor used to calculate value alignment of trajectories and for (inverse) reinforcement learning. The `-dfp` flag indicates the discount factor used to calculate value alignment of trajectories to compare them when using the preference comparisons algorithm. The `-a` flag indicates the IRL algorithm (or PbRL algorithm) to use for the tasks (`pc` stands for the PbRL algorithm or "preference comparisons", `me`for the Maximum Entropy IRL algorithm).
 
-- **Value Grounding Learning**:
-It uses a custom version of the preference comparisons algorithm with quantified preferences [Christiano et al., 2017].
+- **Value Grounding Learning**: learns a reward vector that tries to implements the ground truth grounding (and the ground truth reward vector).
+It uses a custom version of the preference comparisons algorithm with quantified preferences [Christiano et al., 2017]. Use `-t 'vgl'` to perform this task:
     * Roadworld: `python train_vsl.py -t 'vgl' -e roadworld -a 'pc' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
     * Firefighters: `python train_vsl.py -t 'vgl' -e firefighters -a 'pc' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vgl' -sh`
-- **Value System Identification** from real grounding:
-We employ Maximum Entropy IRL [Wulfmeier et al., 2015].
+- **Value System Identification**: learns a value system from the real environment grounding (given by a ground-truth value-related reward vector):
+We employ Maximum Entropy IRL [Wulfmeier et al., 2015] by default. Use `-t 'vsi'` to perform this task:
     * Roadworld: `python train_vsl.py -t 'vsi' -e roadworld -a 'me' -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
     * Firefighters: `python train_vsl.py -t 'vsi' -e firefighters -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsi' -sh`
-- **Value System Learning** (value grounding learning, then value system identification from the learned grounding):
-    *Note that the preference comparisons algorithm (`-a 'pc'`) will automatically be selected for value grounding learning, with the options supplied (that will be shared for the system identification part). `-a 'me'` refers to the MaxEnt algorithm, used for the value system identification part.*
-    * Roadworld: `python train_vsl.py -t 'all' -e roadworld -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
-    * Firefighters: `python train_vsl.py -t 'all' -e firefighters -a 'me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
+- **Value System Learning**: value grounding learning, then value system identification from the learned reward vector. Use `-t 'all'` to perform this pipeline altogether:
+    * Roadworld: `python train_vsl.py -t 'all' -e roadworld -a 'pc-me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
+    * Firefighters: `python train_vsl.py -t 'all' -e firefighters -a 'pc-me' -qp -n=10 -df=1.0 -dfp=1.0 -ename='reproduce_paper_vsl' -sh`
 
 ### Published work
 ---
