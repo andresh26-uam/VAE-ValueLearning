@@ -1176,7 +1176,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
         
         if state not in self.valid_edges:
             rew = -10000000
-        elif state == self.cur_des or nstate == self.cur_des:
+        elif state == self.cur_des:
             rew = 0.0
         elif nstate not in self.valid_edges:
             rew =  -10000000

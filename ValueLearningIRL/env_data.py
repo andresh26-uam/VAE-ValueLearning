@@ -465,7 +465,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 30
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 5
-    DEFAULT_DEST = 140 # 413
+    DEFAULT_DEST = 64 # 413
 
     VALUES_NAMES = BASIC_PROFILE_NAMES
 
@@ -675,10 +675,10 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         base = super().pc_config
 
         base['vgl'].update(
-            query_schedule='constant',
+            query_schedule='hyperbolic',
             stochastic_sampling_in_reference_policy=False,)
         base['vsi'].update(
-            query_schedule='constant',
+            query_schedule='hyperbolic',
             stochastic_sampling_in_reference_policy=False
         )
         return base
@@ -693,7 +693,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             n_seeds_for_sampled_trajectories=2500, # 1000 was too few with full variable length trajectories
             n_sampled_trajs_per_seed=1,
             fragment_length=self.horizon, interactive_imitation_iterations=200, # TODO: The fragments are discarded when they are shorter than this length! Before the cropping, it was 30.
-            total_comparisons=7500, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
+            total_comparisons=7000, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
             initial_epoch_multiplier=100, transition_oversampling=1,
             random_trajs_proportion=0.8
         ))
@@ -702,7 +702,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             n_seeds_for_sampled_trajectories=2500, # 1000 was too few with full variable length trajectories
             n_sampled_trajs_per_seed=1,
             fragment_length=self.horizon, interactive_imitation_iterations=200, # TODO: The fragments are discarded when they are shorter than this length! Before the cropping, it was 30.
-            total_comparisons=7500, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
+            total_comparisons=7000, initial_comparison_frac=0.15, # 0.1 TODO? 0.08 for ended trajs
             initial_epoch_multiplier=100, transition_oversampling=1,
             random_trajs_proportion=0.8
         ))

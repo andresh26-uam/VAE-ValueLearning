@@ -170,7 +170,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                     trajs.append(
                         traj
                     )
-                    if not stochastic:
+                    if not stochastic and exploration == 0.0:
                         if af == (1.0,0.0,0.0):
                             traj_w = self.obtain_trajectory(af,
                                                 seed=seed*n_seeds+si,
@@ -182,7 +182,6 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                 with_reward=True, alignment_func_in_env=(1.0,0.0,0.0))
                         
                             trajs_sus_sus.append(traj_w)
-                            #print(traj.obs, traj_w.obs, seed, n_seeds, si)
                             assert np.all(traj_w.obs == traj.obs)
 
                             traj_w2 = self.obtain_trajectory(af,
@@ -222,7 +221,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                             trajs_eff_eff.append(traj_w2)
                             #print(traj.obs, traj_w2.obs, seed, n_seeds, si)
                             assert np.all(traj_w2.obs == traj.obs)
-        if not stochastic and len(af) == 3: # testing in roadworld...
+        if not stochastic and len(af) == 3 and exploration == 0.0: # testing in roadworld...
             for t,t2 in zip(trajs_sus_sus, trajs_eff_sus):
                 #print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
                 #print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
