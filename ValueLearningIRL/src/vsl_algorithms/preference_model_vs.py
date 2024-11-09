@@ -134,6 +134,91 @@ class ConnectedFragmenter(preference_comparisons.RandomFragmenter):
         #assert len(fragment_chain) == num_pairs, f'{len(fragment_chain)} vs {num_pairs}'
         self.nexus = fragments[-1]
         return fragment_chain 
+class RandomFragmenterVariableHorizon(preference_comparisons.RandomFragmenter):
+    def __init__(
+        self,
+        rng: np.random.Generator,
+        warning_threshold: int = 10,
+        custom_logger = None,
+        discard_short_trajectories = False,
+    ) -> None:
+        super().__init__(rng, warning_threshold, custom_logger)
+        self.discard_short_trajectories = discard_short_trajectories
+
+    def __call__(
+        self,
+        trajectories: Sequence[TrajectoryWithRew],
+        fragment_length: int,
+        num_pairs: int,
+    ) -> Sequence[TrajectoryWithRewPair]:
+        fragments: List[TrajectoryWithRew] = []
+
+        prev_num_trajectories = len(trajectories)
+        # filter out all trajectories that are too short
+        if self.discard_short_trajectories:
+            trajectories = [traj for traj in trajectories if len(traj) >= fragment_length]
+            if len(trajectories) == 0:
+                raise ValueError(
+                    "No trajectories are long enough for the desired fragment length "
+                    f"of {fragment_length}.",
+                )
+            num_discarded = prev_num_trajectories - len(trajectories)
+            if num_discarded:
+                self.logger.log(
+                    f"Discarded {num_discarded} out of {prev_num_trajectories} "
+                    "trajectories because they are shorter than the desired length "
+                    f"of {fragment_length}.",
+                )
+
+        weights = [len(traj) for traj in trajectories]
+
+        # number of transitions that will be contained in the fragments
+        num_transitions = 2 * num_pairs * fragment_length
+        if sum(weights) < num_transitions:
+            self.logger.warn(
+                "Fewer transitions available than needed for desired number "
+                "of fragment pairs. Some transitions will appear multiple times.",
+            )
+        elif (
+            self.warning_threshold
+            and sum(weights) < self.warning_threshold * num_transitions
+        ):
+            # If the number of available transitions is not much larger
+            # than the number of requires ones, we already give a warning.
+            # But only if self.warning_threshold is non-zero.
+            self.logger.warn(
+                f"Samples will contain {num_transitions} transitions in total "
+                f"and only {sum(weights)} are available. "
+                f"Because we sample with replacement, a significant number "
+                "of transitions are likely to appear multiple times.",
+            )
+
+
+        # we need two fragments for each comparison
+        for _ in range(2 * num_pairs):
+            traj = self.rng.choice(
+                trajectories,  # type: ignore[arg-type]
+                p=np.array(weights) / sum(weights),
+            )
+            n = len(traj)
+            f_length = min(fragment_length, n)
+            start = self.rng.integers(0, n - f_length, endpoint=True)
+            end = start + f_length
+            terminal = (end == n) and traj.terminal
+            fragment = TrajectoryWithRew(
+                obs=traj.obs[start : end + 1],
+                acts=traj.acts[start:end],
+                infos=traj.infos[start:end] if traj.infos is not None else None,
+                rews=traj.rews[start:end],
+                terminal=terminal,
+            )
+            
+            fragments.append(fragment)
+        # fragments is currently a list of single fragments. We want to pair up
+        # fragments to get a list of (fragment1, fragment2) tuples. To do so,
+        # we create a single iterator of the list and zip it with itself:
+        iterator = iter(fragments)
+        return list(zip(iterator, iterator))
 class ActiveSelectionFragmenterVSL(preference_comparisons.Fragmenter):
     def __init__(
         self,
@@ -680,7 +765,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                                                                  sample=self.sample, temperature=self.temperature)
 
         if self.active_fragmenter_on == SupportedFragmenters.RANDOM_FRAGMENTER:
-            self.fragmenter = preference_comparisons.RandomFragmenter(
+            self.fragmenter = RandomFragmenterVariableHorizon(
                 warning_threshold=1,
                 rng=self.rng
             )

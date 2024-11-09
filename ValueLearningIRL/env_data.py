@@ -761,5 +761,5 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         self.reward_trainer_kwargs = {
             'epochs': 1,
             'lr': 0.03, # 0.03?
-            'batch_size': 64, # 128
+            'batch_size': 32, # 128
         }
