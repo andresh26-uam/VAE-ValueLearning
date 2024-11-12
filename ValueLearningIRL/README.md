@@ -46,7 +46,7 @@ We employ Maximum Entropy IRL [Wulfmeier et al., 2015] by default. Use `-t 'vsi'
     **Learning Alignment with Human Values: A Case on Route Choice Modeling via Inverse Reinforcement Learning**
     It is also the same source code for the to-be-published paper:
 
-    Holgado-Sánchez, A., Bajo, J., Billhardt, H., Os- sowski, S., and Arias, J. (2024a). **Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**. Submitted to Value Engineering in AI (VALE 2024) track of the International Workshop on AI Value Engineering and AI Compliance Mechanisms (VECOMP 2024), affiliated with the 27th European Conference on Artificial Intelligence (ECAI 2024).
+    Holgado-Sánchez, A., Bajo, J., Billhardt, H., Ossowski, S., and Arias, J. (2024a). **Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**. Submitted to Value Engineering in AI (VALE 2024) track of the International Workshop on AI Value Engineering and AI Compliance Mechanisms (VECOMP 2024), affiliated with the 27th European Conference on Artificial Intelligence (ECAI 2024).
     https://hal.science/hal-0462779
 
 ### References
