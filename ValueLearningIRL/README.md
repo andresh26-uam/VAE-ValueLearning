@@ -1,6 +1,6 @@
-# Value Learning through Inverse Reinforcement Learning (dev branch)
+# Learning Value Systems in Sequential Decision-Making from Preferences and Inverse Reinforcement Learning
 
-In this repository we approach the value learning problem, as learning computational specifications from human values. 
+In this repository we approach the value learning problem, as learning computational specifications from human values. This branch has the code for a submission to JAAMAS (Journal of Autonomous Agents and Multiagent Systems).
 
 In previous work, we introduce a technique-agnostic framework for the problem of **Value System Learning**, consisting of learning a computational specification of the alignment with a given set of values in a certain context (a task we name **Value Grounding Learning**) and the value preferences (value systems) of possibly heterogeneous agents (what we name **Value System Identification**). We will learn such ethical abstractions from demonstrations of the behavior of different kinds of agents.
 
@@ -46,7 +46,7 @@ We employ Maximum Entropy IRL [Wulfmeier et al., 2015] by default. Use `-t 'vsi'
     **Learning Alignment with Human Values: A Case on Route Choice Modeling via Inverse Reinforcement Learning**
     It is also the same source code for the to-be-published paper:
 
-    Holgado-Sánchez, A., Bajo, J., Billhardt, H., Os- sowski, S., and Arias, J. (2024a). **Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**. Submitted to Value Engineering in AI (VALE 2024) track of the International Workshop on AI Value Engineering and AI Compliance Mechanisms (VECOMP 2024), affiliated with the 27th European Conference on Artificial Intelligence (ECAI 2024).
+    Holgado-Sánchez, A., Bajo, J., Billhardt, H., Ossowski, S., and Arias, J. (2024a). **Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**. Submitted to Value Engineering in AI (VALE 2024) track of the International Workshop on AI Value Engineering and AI Compliance Mechanisms (VECOMP 2024), affiliated with the 27th European Conference on Artificial Intelligence (ECAI 2024).
     https://hal.science/hal-0462779
 
 ### References
