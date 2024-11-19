@@ -127,7 +127,7 @@ class FireFightersEnv(TabularVAMDP):
         super(FireFightersEnv, self).__init__(transition_matrix=transition_matrix, observation_matrix=observation_matrix,
                                               reward_matrix_per_va=self._get_reward_matrix_per_va,
                                               default_reward_matrix=reward_matrix_per_va[(0.0, 1.0)], horizon=horizon, initial_state_dist=self.initial_state_dist)
-        self.cur_align_func = (1.0, 0.0)
+        self.set_align_func((1.0, 0.0))
 
     def _get_reward_matrix_per_va(self, align_func):
         assert isinstance(align_func, tuple)

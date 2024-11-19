@@ -42,7 +42,7 @@ class ValueAlignedEnvironment(gym.Wrapper):
         self.horizon = horizon
         self.done_when_horizon_is_met = done_when_horizon_is_met
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
-        self.cur_align_func = None
+        self._cur_align_func = None
         # self.action_space = self.env.action_space
         # self.observation_space = self.observation_space
 
@@ -52,28 +52,38 @@ class ValueAlignedEnvironment(gym.Wrapper):
         # self.spec = self.env.spec
 
     def align_func_yielder(self, a, ns=None, prev_align_func=None, info=None):
-        return self.cur_align_func
+        return self._cur_align_func
 
     @abstractmethod
-    def step_reward_per_va(self, align_func, action) -> SupportsFloat:
+    def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info=None) -> SupportsFloat:
         ...
 
+    def set_align_func(self, align_func):
+        self._cur_align_func = align_func
+    def get_align_func(self):
+        return self._cur_align_func
+    
     def reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
+        
         s, info = self._reset(seed=seed, options=options)
+        info['align_func'] = self.get_align_func()
+        self._prev_observation, self._prev_info = s, info
         self.time = 0
-        info['align_func'] = self.cur_align_func
         return s, info
 
     def step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
         ns, original_rew, done, trunc, info = self._step(action)
-        self.cur_align_func = self.align_func_yielder(
-            action, ns=ns, prev_align_func=self.cur_align_func, info=info)
-        info['align_func'] = self.cur_align_func
-        r = self.step_reward_per_va(self.cur_align_func, action)
+        self.set_align_func(self.align_func_yielder(
+            action, ns=ns, prev_align_func=self.get_align_func(), info=self._prev_info))
+        info['align_func'] = self.get_align_func()
+        
+        r = self.get_reward_per_align_func(self.get_align_func(), self._prev_observation, action, ns, info)
         self.time += 1
         if self.horizon is not None and self.time >= self.horizon:
             trunc = self.trunc_when_horizon_is_met or trunc
             done = self.done_when_horizon_is_met or done
+        self._prev_observation = ns
+        self._prev_info = info
         return ns, r, done, trunc, info
 
     def _reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
@@ -107,9 +117,10 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
     
     def valid_actions(self, state, align_func=None):
         return np.arange(self.reward_matrix.shape[1])
-    def step_reward_per_va(self, align_func, action):
-
-        return self.reward_matrix_per_align_func(align_func)[self.state, action]
+    def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info= None):
+        # TODO: possible cofussion here between obs and state... prev: self.state (which is wrong)
+        
+        return self.reward_matrix_per_align_func(align_func)[info['state'], action]
 
     def get_state_actions_with_known_reward(self, align_func):
         return None
@@ -124,12 +135,16 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
         ...
 
     def _reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
-        return self.unwrapped.reset(seed=seed, options=options)
+        s,i = self.unwrapped.reset(seed=seed, options=options)
+        i['state'] = self.state
+        return s,i
 
     def _step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
-
+        prev_state = self.state
         ns, r, d, t, i = self.unwrapped.step(action)
         # d = d or self.env.state in self.goal_states
+        i['state'] = prev_state
+        i['next_state'] = self.state
         return ns, r, d, t, i
     
     @property

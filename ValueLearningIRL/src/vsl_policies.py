@@ -67,20 +67,36 @@ class ValueSystemLearningPolicy(BasePolicy):
 
     def reset(self, seed=None, state=None):
         return None
-
-    def obtain_trajectory(self, alignment_function=None, seed=32, options: Union[None, Dict] = None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None, recover_previous_alignment_func_in_env=True) -> Union[List, Trajectory]:
-        state_obs, info = self.env.reset(
-            seed=seed, options=options) if options is not None else self.env.reset(seed=seed)
-
+    
+    def obtain_observation(self, next_state_obs):
+        return next_state_obs
+    
+    def obtain_trajectory(self, alignment_function=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None,
+                          custom_discount=None, recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False) -> Trajectory:
+        
+        self.env.set_align_func(alignment_function)
         if with_reward:
             if alignment_func_in_env is None:
                 alignment_func_in_env = alignment_function
             if recover_previous_alignment_func_in_env:
-                prev_al_env = self.env.cur_align_func
-            self.env.cur_align_func = alignment_func_in_env
+                prev_al_env = self.env.get_align_func()
+            self.env.set_align_func(alignment_func_in_env)
+        print(alignment_function,alignment_func_in_env)
+        
+        state_obs, info = self.env.reset(
+            seed=seed, options=options) if options is not None else self.env.reset(seed=seed)
+        
+        
+        obs_in_state = self.obtain_observation(state_obs)
+        print("OS0", obs_in_state)
 
         policy_state = self.reset(seed=seed)
         init_state = self.state_encoder(state_obs, info)
+        
+        info['align_func'] = alignment_function
+        info['init_state'] = init_state
+        info['ended'] = False
+
         terminated = False
         truncated = False
 
@@ -93,57 +109,72 @@ class ValueSystemLearningPolicy(BasePolicy):
 
         if only_states:
             path = []
-            path.append(state_obs)
+            path.append(obs_in_state)
             t = 0
             while not (terminated or truncated) and (t_max is None or (t < t_max)):
 
                 action, policy_state = self.act(state_obs, policy_state=policy_state, exploration=exploration,
                                                 stochastic=stochastic, alignment_function=alignment_function)
                 # print(self.environ.cur_state, action, index)
-                state_obs, rew, terminated, truncated, info = self.env.step(
+                state_obs, rew, terminated, truncated, info_next = self.env.step(
                     action)
-
-                path.append(state_obs)
+                obs_in_state = self.obtain_observation(state_obs)
+                path.append(obs_in_state)
 
                 t += 1
             return path
         else:
-            obs = [state_obs,]
+            print("OS WHATs", obs_in_state)
+            obs = [obs_in_state,]
             rews = []
             acts = []
             infos = []
             # edge_path.append(self.environ.cur_state)
             t = 0
-            while not (terminated or truncated) and (t_max is None or (t < t_max)):
+            while not ((terminated or truncated) and end_trajectories_when_ended) and (t_max is None or (t < t_max)):
                 action, policy_state = self.act(state_obs, policy_state=policy_state, exploration=exploration,
                                                 stochastic=stochastic, alignment_function=alignment_function)
-                state_obs, rew, terminated, truncated, info = self.env.step(
-                    action)
+                print("OS", obs_in_state)
 
-                obs.append(state_obs)
+                next_state_obs, rew, terminated, truncated, info_next = self.env.step(
+                    action)
+                print("IN", info_next)
+                next_obs_in_state = self.obtain_observation(next_state_obs)
+                obs.append(next_obs_in_state)
                 # state_des = self.environ.get_edge_to_edge_state(obs)
 
                 acts.append(action)
-                info['align_func'] = alignment_function
-                info['init_state'] = init_state
-                info['ended'] = terminated or truncated
-                infos.append(info)
+                info_next['align_func'] = alignment_function
+                info_next['init_state'] = init_state
+                info_next['ended'] = terminated or truncated
+                infos.append(info_next)
                 if with_reward:
+                    reward_should_be = self.env.get_reward_per_align_func(self.env.get_align_func(), obs_in_state, action,next_obs=next_obs_in_state, info=info_next)
+                    
+                    assert reward_should_be == rew
+                    print(info)
+                    print(info['state'], obs_in_state, info_next['state'], next_state_obs)
+                    print(self.env.obs_from_state(info['state']), self.env.obs_from_state(obs_in_state))
+                    assert info_next['state'] == obs_in_state
                     rews.append(rew)
+
+                state_obs = next_state_obs
+                info = info_next
+                obs_in_state = next_obs_in_state
                 t += 1
-                if t_max is not None and t > t_max:
+                if (t_max is not None and t > t_max) or (end_trajectories_when_ended and info['ended']):
                     break
             acts = np.asarray(acts)
             infos = np.asarray(infos)
             rews = np.asarray(rews)
-            if recover_previous_alignment_func_in_env:
-                self.env.cur_align_func = prev_al_env
+            obs = np.asarray(obs)
+            if recover_previous_alignment_func_in_env and with_reward:
+                self.env.set_align_func(prev_al_env)
 
             if with_reward:
                 return TrajectoryWithRew(obs=obs, acts=acts, infos=infos, terminal=terminated, rews=rews)
             else:
                 return Trajectory(obs=obs, acts=acts, infos=infos, terminal=terminated)
-
     def obtain_trajectories(self, n_seeds=100, seed=32,
                             options: Union[None, List, Dict] = None, stochastic=True,
                             custom_discount=None, repeat_per_seed=1, with_alignfunctions=[None,], t_max=None,
@@ -295,98 +326,12 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         policy_state = state if state is not None else 0
         return policy_state
 
-    def obtain_trajectory(self, alignment_function=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None,
-                          custom_discount=None, recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False) -> Trajectory:
-        state_obs, info = self.env.reset(
-            seed=seed, options=options) if options is not None else self.env.reset(seed=seed)
+    def obtain_observation(self, next_state_obs):
         if self.expose_state is False:
-            obs_in_state = self.env.obs_from_state(state_obs)
+            obs_in_state = self.env.obs_from_state(next_state_obs)
         else:
-            obs_in_state = state_obs
-
-        if with_reward:
-            if alignment_func_in_env is None:
-                alignment_func_in_env = alignment_function
-            if recover_previous_alignment_func_in_env:
-                prev_al_env = self.env.cur_align_func
-            self.env.cur_align_func = alignment_func_in_env
-        policy_state = self.reset(seed=seed)
-        init_state = self.state_encoder(state_obs, info)
-        if alignment_func_in_env is not None:
-            r_matrix = self.env.reward_matrix_per_align_func(
-                alignment_func_in_env)
-
-        terminated = False
-        truncated = False
-
-        if getattr(self.env, 'horizon', None):
-            if t_max is not None:
-                t_max = min(t_max, self.env.horizon)
-            else:
-                t_max = self.env.horizon
-        # reward_function = lambda s,a,d: 1 # for fast computation
-
-        if only_states:
-            path = []
-            path.append(obs_in_state)
-            t = 0
-            while not (terminated or truncated) and (t_max is None or (t < t_max)):
-
-                action, policy_state = self.act(state_obs, policy_state=policy_state, exploration=exploration,
-                                                stochastic=stochastic, alignment_function=alignment_function)
-                # print(self.environ.cur_state, action, index)
-                state_obs, rew, terminated, truncated, info = self.env.step(
-                    action)
-                if self.expose_state is False:
-                    obs_in_state = self.env.obs_from_state(state_obs)
-                else:
-                    obs_in_state = state_obs
-                path.append(obs_in_state)
-
-                t += 1
-            return path
-        else:
-            obs = [obs_in_state,]
-            rews = []
-            acts = []
-            infos = []
-            # edge_path.append(self.environ.cur_state)
-            t = 0
-            while not ((terminated or truncated) and end_trajectories_when_ended) and (t_max is None or (t < t_max)):
-                action, policy_state = self.act(state_obs, policy_state=policy_state, exploration=exploration,
-                                                stochastic=stochastic, alignment_function=alignment_function)
-                next_state_obs, rew, terminated, truncated, info = self.env.step(
-                    action)
-                if self.expose_state is False:
-                    obs_in_state = self.env.obs_from_state(next_state_obs)
-                else:
-                    obs_in_state = next_state_obs
-                obs.append(obs_in_state)
-                # state_des = self.environ.get_edge_to_edge_state(obs)
-
-                acts.append(action)
-                info['align_func'] = alignment_function
-                info['init_state'] = init_state
-                info['ended'] = terminated or truncated
-                infos.append(info)
-                if with_reward:
-                    rews.append(r_matrix[state_obs, action])
-
-                state_obs = next_state_obs
-                t += 1
-                if (t_max is not None and t > t_max) or (end_trajectories_when_ended and info['ended']):
-                    break
-            acts = np.asarray(acts)
-            infos = np.asarray(infos)
-            rews = np.asarray(rews)
-            obs = np.asarray(obs)
-            if recover_previous_alignment_func_in_env and with_reward:
-                self.env.cur_align_func = prev_al_env
-
-            if with_reward:
-                return TrajectoryWithRew(obs=obs, acts=acts, infos=infos, terminal=terminated, rews=rews)
-            else:
-                return Trajectory(obs=obs, acts=acts, infos=infos, terminal=terminated)
+            obs_in_state = next_state_obs
+        return obs_in_state
 
     def calculate_value_grounding_expectancy(self, value_grounding: np.ndarray, align_function, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
 

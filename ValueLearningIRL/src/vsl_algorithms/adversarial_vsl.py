@@ -2,7 +2,9 @@ from abc import abstractmethod
 from typing import Optional
 
 import numpy as np
+from stable_baselines3 import PPO
 from src.envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from src.vsl_algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 from src.vsl_policies import VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
 from src.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes
 
@@ -10,6 +12,8 @@ from imitation.algorithms import base
 from imitation.data import types
 from imitation.util import logger as imit_logger
 from imitation.util import networks
+
+import imitation.algorithms.adversarial.airl as airl
 from typing import (
     Any,
     Callable,
@@ -27,7 +31,7 @@ def dict_metrics(**kwargs):
     return dict(kwargs)
 
 
-class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
+class AdversarialVSL(BaseVSLAlgorithm):
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory], Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
         pass
 
@@ -54,73 +58,23 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         learn_stochastic_policy=True,
 
         training_mode=TrainingModes.VALUE_GROUNDING_LEARNING,
+        # NEW parameters
+        learner_class=PPO, # accepts env, and a policy parameter
+        learner_kwargs=dict(batch_size=64,
+            ent_coef=0.0,
+            learning_rate=0.0005,
+            gamma=0.95,
+            clip_range=0.1,
+            vf_coef=0.1,
+            n_epochs=5,
+        ),
         *,
         custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
 
     ) -> None:
-        self.discount = discount
-        self.env = env
-
-        self.learn_stochastic_policy = learn_stochastic_policy
-        # self.vgl_expert_sampler = vgl_expert_sampler # list of expert trajectories just to see different origin destinations and align_funcs
-        # self.vsi_expert_sampler = vsi_expert_sampler # list of expert target align_func trajectories
-
-        # self.initial_state_distribution_train = initial_state_distribution_train if initial_state_distribution_train is not None else env.initial_state_dist
-        # self.initial_state_distribution_test= initial_state_distribution_test if initial_state_distribution_test is not None else env.initial_state_dist
-
-        self.vgl_target_align_funcs = vgl_target_align_funcs
-        self.vsi_target_align_funcs = vsi_target_align_funcs
-
-        self.vgl_expert_policy: VAlignedDiscreteSpaceActionPolicy = vgl_expert_policy
-        self.vsi_expert_policy: VAlignedDiscreteSpaceActionPolicy = vsi_expert_policy
-
-        self.target_align_function_sampler = target_align_func_sampler
-
-        super().__init__(
-            demonstrations=None,
-            custom_logger=custom_logger,
-        )
-
-        self.reward_net = reward_net
-        self.probabilistic_reward_net = None
-        self.current_net = reward_net
-
-        self.vgl_optimizer_cls = vgl_optimizer_cls
-        self.vsi_optimizer_cls = vsi_optimizer_cls
-
-        vgl_optimizer_kwargs = vgl_optimizer_kwargs or {"lr": 1e-1}
-        vsi_optimizer_kwargs = vsi_optimizer_kwargs or {"lr": 2e-1}
-        self.vsi_optimizer_kwargs = vsi_optimizer_kwargs
-        self.vgl_optimizer_kwargs = vgl_optimizer_kwargs
-
-        self.probabilistic_vsi_optimizer_cls = vsi_optimizer_cls
-        self.probabilistic_vsi_optimizer_kwargs = vsi_optimizer_kwargs
-
-        self.log_interval = log_interval
-        # ones = np.ones((self.env.state_dim, self.env.action_dim))
-        # uniform_pi = ones / self.env.action_dim
-
-        self.learned_policy_per_va = None
-
-        self.training_mode = training_mode
-        self.reward_net = reward_net
-        self.reward_net.set_mode(self.training_mode)
-
-    def set_reward_net(self, reward_net: AbstractVSLRewardFunction):
-        self.reward_net = reward_net
-
-    def set_probabilistic_net(self, probabilistic_net: ProabilisticProfiledRewardFunction):
-        self.probabilistic_reward_net = probabilistic_net
-
-    def get_reward_net(self):
-        return self.reward_net
-
-    def get_probabilistic_net(self):
-        return self.probabilistic_reward_net
-
-    def get_current_reward_net(self):
-        return self.current_net
-
+        super().__init__(env, reward_net, vgl_optimizer_cls, vsi_optimizer_cls, vgl_optimizer_kwargs, vsi_optimizer_kwargs, discount, log_interval, vgl_expert_policy, vsi_expert_policy, target_align_func_sampler, vsi_target_align_funcs, vgl_target_align_funcs, learn_stochastic_policy, training_mode, custom_logger=custom_logger)
+    
+    
     def get_metrics(self):
         return {}
 

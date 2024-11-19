@@ -44,7 +44,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                          reward_matrix_per_va,
                          reward_matrix_per_va(env.last_profile),
                          env.initial_state_dist, env.horizon, done_when_horizon_is_met, trunc_when_horizon_is_met, **kwargs)
-        self.cur_align_func = env.last_profile
+        self.set_align_func(env.last_profile)
         self._goal_states = [env.cur_des,]
         
     def step(self, action):
