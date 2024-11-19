@@ -116,9 +116,9 @@ if __name__ == "__main__":
     expert_policy_train = VAlignedDictSpaceActionPolicy(
         policy_per_va_dict=profile_to_matrix if USE_PMOVI_EXPERT else profile_to_assumed_matrix, env=env_training, state_encoder=None)
     expert_trajs = expert_policy.obtain_trajectories(
-        n_seeds=N_SEEDS, seed=SEED, stochastic=STOCHASTIC_EXPERT, repeat_per_seed=N_EXPERT_SAMPLES_PER_SEED, with_alignfunctions=profiles, t_max=HORIZON)
+        n_seeds=N_SEEDS, seed=SEED, stochastic=STOCHASTIC_EXPERT, repeat_per_seed=N_EXPERT_SAMPLES_PER_SEED, align_funcs_in_policy=profiles, t_max=HORIZON)
     expert_trajs_train = expert_policy_train.obtain_trajectories(
-        n_seeds=N_SEEDS, seed=SEED, stochastic=STOCHASTIC_EXPERT, repeat_per_seed=N_EXPERT_SAMPLES_PER_SEED, with_alignfunctions=profiles, t_max=HORIZON)
+        n_seeds=N_SEEDS, seed=SEED, stochastic=STOCHASTIC_EXPERT, repeat_per_seed=N_EXPERT_SAMPLES_PER_SEED, align_funcs_in_policy=profiles, t_max=HORIZON)
 
     if EXPERT_FIXED_TRAJECTORIES:
         vgl_expert_train_sampler = partial(

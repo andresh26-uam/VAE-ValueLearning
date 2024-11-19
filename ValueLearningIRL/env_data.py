@@ -323,7 +323,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         
         if sampler_over_precalculated_trajs:
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=n_seeds_for_samplers, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
-                                                                     with_alignfunctions=profiles, t_max=self.horizon)
+                                                                     align_funcs_in_policy=profiles, t_max=self.horizon)
 
             self.vgl_expert_train_sampler = partial(
                 random_sampler_among_trajs, expert_trajs_train)
@@ -576,7 +576,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
                                                                      seed=self.seed, stochastic=self.stochastic_expert,
                                                                      repeat_per_seed=self.n_expert_samples_per_seed, 
-                                                                     with_alignfunctions=profiles,
+                                                                     align_funcs_in_policy=profiles,
                                                                      alignments_in_env=profiles,
                                                                      t_max=self.horizon)
         
@@ -589,7 +589,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total,
                                                                      seed=self.seed, stochastic=self.stochastic_expert,
                                                                      repeat_per_seed=self.n_expert_samples_per_seed, 
-                                                                     with_alignfunctions=profiles,
+                                                                     align_funcs_in_policy=profiles,
                                                                      alignments_in_env=profiles,
                                                                      t_max=self.horizon)
             for tr in expert_trajs_train:
@@ -717,9 +717,9 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(
-            max_iter=200))
+            max_iter=5))
         base['vsi'].update(dict(
-            max_iter=200)) # TODO 200 again... maybe 100 is enough seeing the results..
+            max_iter=5)) # TODO 200 again... maybe 100 is enough seeing the results..
 
         return base
 

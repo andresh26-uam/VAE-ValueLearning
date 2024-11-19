@@ -639,26 +639,26 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         expert_trajs_for_al_estimation = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds*10, repeat_per_seed=n_samples_per_seed, 
                                                          seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                                                         align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
                     for rep in range(len(testing_policy_per_round))}
         policy_trajs_for_al_estimation = {rep: {al: testing_policy_per_round[rep].obtain_trajectories(n_seeds=n_seeds*10, repeat_per_seed=n_samples_per_seed, 
                                                          seed=(seed+74571)*rep,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True,alignments_in_env=[al,]) for al in testing_align_funcs}
+                                                         align_funcs_in_policy=[al,],with_reward=True,alignments_in_env=[al,]) for al in testing_align_funcs}
                         for rep in range(len(testing_policy_per_round))}
         self.env.set_initial_state_distribution( prev_initial_distribution)
 
         expert_trajs = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                          seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
                                                          end_trajectories_when_ended=True,
-                                                         with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                                                         align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
                     for rep in range(len(testing_policy_per_round))}
         
         
         random_trajs = {rep: {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
                                                                 seed=(seed+34355)*rep,stochastic=True,
                                                                 end_trajectories_when_ended=True,
-                                                                with_alignfunctions=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                                                                align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
                 for rep in range(len(testing_policy_per_round))}
         
         real_matrix = {al: self.env.reward_matrix_per_align_func(al) for al in testing_align_funcs}

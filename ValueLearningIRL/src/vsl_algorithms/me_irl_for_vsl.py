@@ -839,7 +839,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 
                 self._learning_policy.set_policy_for_va(target_align_func, prev_pi)
                 trajs = self._learning_policy.obtain_trajectories(
-                    n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, with_alignfunctions=[
+                    n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, align_funcs_in_policy=[
                         target_align_func], t_max=self.env.horizon, exploration=0
                 )
                 visitations_or_feature_expectations = get_demo_oms_from_trajectories(
