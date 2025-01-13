@@ -578,7 +578,6 @@ class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.Rew
     ) -> preference_comparisons.LossAndMetrics:
         """Computes the loss. Same as Cross Entropy but does not overfit to class certainty."""
         probs, gt_probs = preference_model(fragment_pairs)
-        #print(preference_model.model.get_learned_align_function())
         #probs_real, gt_probs_real = preference_model.eval_on_align_func((0.0, 1.0), fragment_pairs)
         
         # TODO(ejnnr): Here and below, > 0.5 is problematic
@@ -587,15 +586,10 @@ class CrossEntropyRewardLossForQualitativePreferences(preference_comparisons.Rew
         #  In a sense that "only" creates class imbalance
         #  but it's still misleading.
         predictions = probs >= 0.5
-
-        #print(predictions)
         
         preferences_th = th.as_tensor(preferences, dtype=th.float32)
        
-        #comparable_things = np.where(preferences_th.detach().numpy() - 0.5 != 0.0)[0]# TODO oh well this is tricky... Makes loss converge to 0 even when ground truth reward loss does not.
-        
         ground_truth = preferences_th >= 0.5
-        #print(ground_truth)
 
         """if preference_model.model.get_learned_align_function()[1] > 0.96:
             exit(0)"""
@@ -744,7 +738,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
               interactive_imitation_iterations=100, 
               total_comparisons=500, initial_epoch_multiplier=10, 
               transition_oversampling=5, initial_comparison_frac=0.2,
-              random_trajs_proportion=0.0):
+              random_trajs_proportion=0.0, **kwargs):
 
         self.resample_trajectories_if_not_already_sampled = resample_trajectories_if_not_already_sampled
         self.initial_comparison_frac = initial_comparison_frac
@@ -778,7 +772,8 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                              n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
                              n_sampled_trajs_per_seed=n_sampled_trajs_per_seed,
                              use_probabilistic_reward=use_probabilistic_reward,
-                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward)
+                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward,
+                             **kwargs)
 
     def train_callback(self, t):
         self.last_accuracies_per_align_func[self.current_target].append(
@@ -803,7 +798,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
         
         """n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
         for rep in range(n_steps_per_change_of_target):
-            TODO: need further testing, to retrain the reference policy after updates...:
+            
             if rep > 0:
                 self.vgl_reference_policy = self.calculate_learned_policies(self.vgl_target_align_funcs)
             
@@ -822,7 +817,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
             
         for target_align_func in self.vgl_target_align_funcs:
             reward_net_per_target[target_align_func] = self.current_net.copy()
-            print(self.current_net.get_learned_grounding())
+            #print(self.current_net.get_learned_grounding())
         return reward_net_per_target
         
                 
@@ -835,12 +830,12 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 self.vgl_reference_trajs_with_rew_per_profile = {
                     pr: self.vgl_reference_policy.obtain_trajectories(n_seeds=n_seeds_for_sampled_trajectories, seed=seed,
                                                                       stochastic=self.stochastic_sampling_in_reference_policy,
-                                                                      repeat_per_seed=n_sampled_trajs_per_seed, with_alignfunctions=[
+                                                                      repeat_per_seed=n_sampled_trajs_per_seed, align_funcs_in_policy=[
                                                                           pr,],
                                                                       exploration=random_trajs_proportion,
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
-                                                                      alignments_in_env=[pr,],custom_discount=self.discount_factor_preferences)
+                                                                      alignments_in_env=[pr,])
                     for pr in self.vgl_target_align_funcs}
             reference_trajs_per_profile = self.vgl_reference_trajs_with_rew_per_profile
         else:
@@ -848,12 +843,11 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 self.vsi_reference_trajs_with_rew_per_profile = {
                     pr: self.vsi_reference_policy.obtain_trajectories(n_seeds=n_seeds_for_sampled_trajectories, seed=seed,
                                                                       stochastic=self.stochastic_sampling_in_reference_policy,
-                                                                      repeat_per_seed=n_sampled_trajs_per_seed, with_alignfunctions=[
+                                                                      repeat_per_seed=n_sampled_trajs_per_seed, align_funcs_in_policy=[
                                                                           pr,],
                                                                       exploration=random_trajs_proportion,
                                                                       t_max=self.env.horizon,
                                                                       with_reward=True,
-                                                                      custom_discount=self.discount_factor_preferences,
                                                                       alignments_in_env=[pr,])
                     for pr in self.vsi_target_align_funcs}
             reference_trajs_per_profile = self.vsi_reference_trajs_with_rew_per_profile

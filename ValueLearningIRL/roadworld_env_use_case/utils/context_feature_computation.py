@@ -60,7 +60,6 @@ def create_path_level_features(edge2attr, transit_dict, graph, num_level, featur
     edge_len = len(edge2attr.keys())
     od_features = np.zeros((edge_len, edge_len, num_level + 6))
     for ori in range(edge_len):
-        print(ori)
         for des in range(edge_len):
             if ori == des:
                 path_features = create_path_features([ori], edge2attr, transit_dict, graph, num_level) + [1]
@@ -71,7 +70,7 @@ def create_path_level_features(edge2attr, transit_dict, graph, num_level, featur
             path_features = create_path_features(candidate_path[0]['path'], edge2attr, transit_dict, graph,
                                                  num_level) + [1]
             od_features[ori, des, :] = path_features
-    print(od_features.shape)
+    
     np.save(feature_path, od_features)
 
 

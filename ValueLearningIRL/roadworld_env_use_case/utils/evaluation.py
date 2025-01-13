@@ -79,7 +79,6 @@ def evaluate_log_prob(test_traj, model):
             next_prob_np = next_prob.detach().cpu().numpy()
             log_prob += next_prob_np[x.action]
         log_prob_list.append(log_prob)
-    print(np.mean(log_prob_list))
     return np.mean(log_prob_list)
 
 

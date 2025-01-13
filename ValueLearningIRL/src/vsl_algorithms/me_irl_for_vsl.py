@@ -137,23 +137,7 @@ def mce_occupancy_measures(
         else:
             Dcum = np.multiply(pi, Dcum[:, np.newaxis])
             assert Dcum.shape == (n_states, n_actions)
-        """if __debug__:
-            D = np.zeros((horizon + 1, n_states))
-
-            D[0, :] = initial_state_distribution
-            for t in range(horizon):
-                for a in range(n_actions):
-                    if len(pi.shape) == 3:
-                        E = D[t] * pi[t, :, a]
-                    elif len(pi.shape) == 2:
-                        E = D[t] * pi[:, a]
-                    else:
-                        E = D[t] * (pi == a)  # Multiarmed bandit variant...?
-                    D[t + 1, :] += E @ T[:, a, :]
-
-            Dstates = rollout.discounted_sum(D, discount)"""
-            # print(np.max(Dstates - np.sum(Dcum, axis=-1)))
-            # assert np.allclose(np.sum(Dcum, axis=-1), Dstates)
+        
         assert isinstance(Dcum, np.ndarray)
     return D, Dcum
 
@@ -345,8 +329,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                                                                                     requires_grad=False,
                                                                                     use_probabilistic_reward=True, n_reps_if_probabilistic_reward=1,
                                                                                     reward_mode=TrainingModes.EVAL)
-        # print("prob reward", target_al, self.target_align_funcs_to_learned_align_funcs[
-        #      target_al], self.probabilistic_reward_net.cur_align_func, align_per_rep, prob_per_rep)
         return new_reward_per_rep[0]
 
     def train_vsl_probabilistic(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, n_reward_reps_if_probabilistic_reward, target_align_func):
@@ -365,7 +347,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             self.grad_norm_per_align_func[target_align_func].append(grad_norm)
 
             self.train_callback(t)
-            if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon or grad_norm <= self.gradient_norm_epsilon:
+            if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon and grad_norm <= self.gradient_norm_epsilon:
                 self._print_statistics(
                     t, visitations, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
                 break
@@ -389,14 +371,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             self.grad_norm_per_align_func[target_align_func].append(grad_norm)
 
             self.train_callback(t)
-            if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon or grad_norm <= self.gradient_norm_epsilon:
+            if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon and grad_norm <= self.gradient_norm_epsilon:
                 self._print_statistics(t, visitations, expert_visitations, loss, reward,
                                        target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
                 break
         del self._learning_policy
         return learned_al_function
 
-    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10) -> np.ndarray:
+    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10, **kwargs) -> np.ndarray:
 
         self.linf_delta_per_align_func = {al: [] for al in set(
             self.vsi_target_align_funcs).union(set(self.vgl_target_align_funcs))}
@@ -410,44 +392,58 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                              n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
                              use_probabilistic_reward=use_probabilistic_reward,
                              n_sampled_trajs_per_seed=n_sampled_trajs_per_seed,
-                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward)
+                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward, **kwargs)
 
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
         reward_nets_per_target_align_func = dict()
-        for t in range(max_iter):
-            for align_func in self.vgl_target_align_funcs:
-                if t > 0 and (self.linf_delta_per_align_func[align_func][-1] <= self.vc_diff_epsilon or self.grad_norm_per_align_func[align_func][-1] <= self.gradient_norm_epsilon):
+        
+        
+        for align_func in self.vgl_target_align_funcs:
+            self.current_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
+            self.current_net.set_alignment_function(align_func)
+            for t in range(max_iter):
+                if t > 0 and (self.linf_delta_per_align_func[align_func][-1] <= self.vc_diff_epsilon and self.grad_norm_per_align_func[align_func][-1] <= self.gradient_norm_epsilon):
                     continue
+                
                 old_reward, visitations, expert_visitations, old_pi, loss, reward = self._train_step_vgl(self.torch_obs_mat,
                                                                                                          align_func=align_func,
                                                                                                          action_mat=self.torch_action_mat,
                                                                                                          obs_action_mat=self.torch_obs_action_mat,
-                                                                                                         n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed)
+                                                                                                         n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, 
+                                                                                                         n_sampled_trajs_per_seed=n_sampled_trajs_per_seed)
                 # self.rewards_per_target_align_func[align_func] = reward
 
                 grad_norm, abs_diff_in_vc = self._train_statistics(
-                    t, expert_visitations, visitations, loss, reward, align_func, learned_grounding=self.current_net.get_learned_grounding())
+                    t, expert_visitations, visitations, loss, reward, 
+                    align_func, learned_grounding=
+                    self.current_net.get_learned_grounding())
                 self.linf_delta_per_align_func[align_func].append(
                     np.max(abs_diff_in_vc))
                 self.grad_norm_per_align_func[align_func].append(grad_norm)
-            # print(self.linf_delta_per_align_func)
-            last_max_vc_diff = max(
-                [lvlist[-1] for al_fun, lvlist in self.linf_delta_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
-            last_max_grad_norm = max(
-                [grlist[-1] for al_fun, grlist in self.grad_norm_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
+                
+                last_max_vc_diff =  self.linf_delta_per_align_func[align_func][-1]
+                last_max_grad_norm =  self.grad_norm_per_align_func[align_func][-1]
+                self.train_callback(t)
+                assert len(self.linf_delta_per_align_func[align_func]) > 0
+                assert len(self.grad_norm_per_align_func[align_func]) > 0
 
-            self.train_callback(t)
-            if last_max_vc_diff <= self.vc_diff_epsilon or last_max_grad_norm <= self.gradient_norm_epsilon:
-                self._print_statistics(t, visitations, expert_visitations, loss, reward, align_func, None,
-                                       grad_norm, abs_diff_in_vc, learned_grounding=self.current_net.get_learned_grounding())
-                break
+                """last_max_vc_diff = max(
+                    [lvlist[-1] for al_fun, lvlist in self.linf_delta_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
+                last_max_grad_norm = max(
+                    [grlist[-1] for al_fun, grlist in self.grad_norm_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
 
-        for align_func in self.vgl_target_align_funcs:
-            self.current_net.set_alignment_function(align_func)
+                self.train_callback(t)
+                if last_max_vc_diff <= self.vc_diff_epsilon and last_max_grad_norm <= self.gradient_norm_epsilon:
+                    self._print_statistics(t, visitations, expert_visitations, loss, reward, align_func, None,
+                                        grad_norm, abs_diff_in_vc, learned_grounding=self.current_net.get_learned_grounding())
+                    break"""
+
             reward_nets_per_target_align_func[align_func] = self.current_net.copy(
             )
             assert len(self.linf_delta_per_align_func[align_func]) > 0
             assert len(self.grad_norm_per_align_func[align_func]) > 0
+
+        
 
         return reward_nets_per_target_align_func
 
@@ -810,12 +806,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def mce_vsl_loss_calculation(self, target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
                                  obs_mat: th.Tensor = None, action_mat: th.Tensor = None,
                                  obs_action_mat: th.Tensor = None):
+        
         use_action_visitations = self.current_net.use_action or self.current_net.use_next_state or self.current_net.use_one_hot_state_action
         #use_action_visitations = False
         if not hasattr(self, '_learning_policy'):
             self._learning_policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(
                     policy_per_va_dict={}, env=self.env)
         prev_pi = None
+        
         if self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             prev_pi = self.mce_partition_fh_per_align_func(
                 target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
@@ -827,6 +825,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             expert_visitations_or_feature_expectation = self.get_expert_demo_om(
                 target_align_func, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, use_action_visitations=use_action_visitations)
             if self.demo_om_from_policy:
+                
                 _, visitations_or_feature_expectations, prev_pi = self.mce_occupancy_measures(
                     reward_matrix=predicted_r_np,
                     deterministic=not self.learn_stochastic_policy, use_action_visitations=use_action_visitations
@@ -864,14 +863,17 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 dtype=self.current_net.dtype,
                 device=self.current_net.device,
             )
-
+            
+            
             if len(predicted_r.shape) == 1:
                 # The "loss" is then:
                 #   E_\pi[r_\theta(S)] - E_D[r_\theta(S)]
                 loss = th.dot(weights_th, predicted_r)
             else:  # Use action in the reward.
                 if predicted_r.shape == weights_th.shape:
-                    loss = th.multiply(predicted_r, weights_th).mean()
+                    
+                    loss_matrix = th.multiply(predicted_r, weights_th)
+                    loss = loss_matrix.mean()
                 else:
                     next_state_prob = th.as_tensor(self.env.transition_matrix, dtype=self.current_net.dtype,
                                                    device=self.current_net.device)
@@ -881,6 +883,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                     loss_matrix = predicted_r.unsqueeze(
                         2) * (next_state_prob * weights_th.unsqueeze(0).unsqueeze(0))  # Shape: (N, M, K)
                     loss = loss_matrix.mean()
+                    
                 # loss = Sum_s,a,s'[R(s,a)*P(s,a,s')*weights_th(s')]
 
         loss.backward()
@@ -914,12 +917,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def _train_step_vgl(self, obs_mat: th.Tensor, align_func: Any, action_mat: th.Tensor = None, obs_action_mat: th.Tensor = None, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3) -> Tuple[np.ndarray, np.ndarray]:
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
         self.vgl_optimizer.zero_grad()
+        
         self.current_net.set_alignment_function(align_func)
 
         predicted_r, predicted_r_np = self.calculate_rewards(align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
                                                              obs_action_mat=obs_action_mat,
                                                              reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING,
                                                              recover_previous_config_after_calculation=False)
+        
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
         visitations, expert_visitations, prev_pi, loss = self.mce_vsl_loss_calculation(align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
                                                                                        obs_mat=obs_mat, action_mat=action_mat,
@@ -930,7 +935,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                                                obs_mat=obs_mat,
                                                action_mat=action_mat,
                                                obs_action_mat=obs_action_mat,
-                                               reward_mode=TrainingModes.EVAL)
+                                               reward_mode=TrainingModes.EVAL, requires_grad=False)
 
         return predicted_r_np, visitations, expert_visitations, prev_pi, loss, new_reward
 

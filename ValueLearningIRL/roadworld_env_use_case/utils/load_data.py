@@ -10,7 +10,6 @@ def ini_od_dist(train_path):
     df = df[['od', 'path']]
     df = df.groupby('od').count()
     df['path'] = df['path'] / num_trips
-    print(df['path'].sum())
     return df.index.tolist(), df['path'].tolist()
 
 

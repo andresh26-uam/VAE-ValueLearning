@@ -1,10 +1,13 @@
 from abc import abstractmethod
-from typing import Optional
+from math import ceil, floor
+from typing import List, Optional
 
 import numpy as np
 from src.envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+
+from src.vsl_algorithms.utils import JSD
 from src.vsl_policies import VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
-from src.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes
+from src.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes, squeeze_r
 
 from imitation.algorithms import base
 from imitation.data import types
@@ -23,6 +26,8 @@ from typing import (
 import torch as th
 
 
+from imitation.data import types, rollout
+
 def dict_metrics(**kwargs):
     return dict(kwargs)
 
@@ -30,7 +35,11 @@ def dict_metrics(**kwargs):
 class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory], Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
         pass
-
+    
+    @property
+    def policy(self):
+        return self.learned_policy_per_va
+    
     def __init__(
         self,
         env: Union[TabularVAMDP, ValueAlignedEnvironment],
@@ -128,7 +137,14 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         # pass
         return
 
-    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10) -> np.ndarray:
+    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, 
+              assumed_grounding=None, 
+              n_seeds_for_sampled_trajectories=None, 
+              n_sampled_trajs_per_seed=1, 
+              use_probabilistic_reward=False, 
+              n_reward_reps_if_probabilistic_reward=10,
+              custom_optimizer_kwargs=None,
+              custom_prob_optimizer_kwargs=None) -> np.ndarray:
 
         self.training_mode = mode
 
@@ -160,8 +176,9 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.target_align_funcs_to_learned_align_funcs = dict()
 
         if mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            optimizer_kwargs = self.vgl_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
             self.vgl_optimizer = self.vgl_optimizer_cls(
-                self.current_net.parameters(), **self.vgl_optimizer_kwargs)
+                self.current_net.parameters(), **optimizer_kwargs)
             self.target_align_funcs_to_learned_align_funcs = {
                 al: al for al in self.vgl_target_align_funcs}
             with networks.training(self.current_net):
@@ -170,6 +187,8 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
             
         elif mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            optimizer_kwargs = self.vsi_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
+            
             reward_nets_per_target_align_func = dict()
             self.target_align_funcs_to_learned_align_funcs = dict()
 
@@ -177,10 +196,13 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                 self.current_net.reset_learned_alignment_function()
                 self.current_net.set_mode(
                     TrainingModes.VALUE_SYSTEM_IDENTIFICATION)
+                self.env.set_align_func(target_align_func)
 
                 if use_probabilistic_reward:
+                    prob_optimizer_kwargs = self.probabilistic_vsi_optimizer_kwargs if custom_prob_optimizer_kwargs is None else custom_prob_optimizer_kwargs
+            
                     self.probabilistic_vsi_optimizer = self.probabilistic_vsi_optimizer_cls(
-                        self.current_net.parameters(), **self.probabilistic_vsi_optimizer_kwargs)
+                        self.current_net.parameters(), **prob_optimizer_kwargs)
                     with networks.training(self.current_net):
                         self.target_align_funcs_to_learned_align_funcs[target_align_func] = self.train_vsl_probabilistic(
                             max_iter=max_iter, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed,
@@ -189,7 +211,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
                 else:
                     self.vsi_optimizer = self.vsi_optimizer_cls(
-                        self.current_net.parameters(), **self.vsi_optimizer_kwargs)
+                        self.current_net.parameters(), **optimizer_kwargs)
                     with networks.training(self.current_net):
                         self.target_align_funcs_to_learned_align_funcs[target_align_func] = self.train_vsl(
                             max_iter=max_iter, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
@@ -216,11 +238,214 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         else:
             return self.current_net.get_learned_grounding(), self.target_align_funcs_to_learned_align_funcs, reward_nets_per_target_align_func, self.get_metrics()
 
-    @abstractmethod
-    def test_accuracy_for_align_funcs(self, learned_rewards_nets_per_rep,
-                               target_align_funcs_to_learned_align_funcs=None,
-                                testing_align_funcs=[]):
-        pass
+    
+    def test_accuracy_for_align_funcs(self, learned_rewards_per_round: List[np.ndarray],
+                                        testing_policy_per_round: List[ValueSystemLearningPolicy],
+                                        target_align_funcs_to_learned_align_funcs: Dict,
+                                        expert_policy: ValueSystemLearningPolicy,
+                                        random_policy: ValueSystemLearningPolicy,
+                                        ratios_expert_random = [1, 0.9, 0.7, 0.5, 0.4, 0.3, 0.2, 0.0],
+                                        n_seeds = 100,
+                                        n_samples_per_seed = 1,
+                                        seed=26,
+                                        epsilon_for_undecided_preference = 0.05,
+                                        testing_align_funcs=[],
+                                        initial_state_distribution_for_expected_alignment_estimation = None,
+                                        basic_profiles=None):
+        
+        basic_profiles = [tuple(v) for v in np.eye(self.reward_net.hid_sizes[-1])]
+        
+        metrics_per_ratio = dict()
+        
+        prev_initial_distribution = self.env.initial_state_dist
+        if initial_state_distribution_for_expected_alignment_estimation is not None:
+            self.env.set_initial_state_distribution(initial_state_distribution_for_expected_alignment_estimation)
+            
+        expert_trajs_for_al_estimation = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds*10, repeat_per_seed=n_samples_per_seed, 
+                                                         seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
+                                                         end_trajectories_when_ended=True,
+                                                         align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                    for rep in range(len(testing_policy_per_round))}
+        policy_trajs_for_al_estimation = {rep: {al: testing_policy_per_round[rep].obtain_trajectories(n_seeds=n_seeds*10, repeat_per_seed=n_samples_per_seed, 
+                                                         seed=(seed+74571)*rep,stochastic=self.stochastic_expert,
+                                                         end_trajectories_when_ended=True,
+                                                         align_funcs_in_policy=[al,],with_reward=True,alignments_in_env=[al,]) for al in testing_align_funcs}
+                        for rep in range(len(testing_policy_per_round))}
+        self.env.set_initial_state_distribution( prev_initial_distribution)
+
+        expert_trajs = {rep: {al: expert_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                         seed=(seed+2352)*rep,stochastic=self.stochastic_expert,
+                                                         end_trajectories_when_ended=True,
+                                                         align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                    for rep in range(len(testing_policy_per_round))}
+        
+        
+        random_trajs = {rep: {al: random_policy.obtain_trajectories(n_seeds=n_seeds, repeat_per_seed=n_samples_per_seed, 
+                                                                seed=(seed+34355)*rep,stochastic=True,
+                                                                end_trajectories_when_ended=True,
+                                                                align_funcs_in_policy=[al,],with_reward=True, alignments_in_env=[al,]) for al in testing_align_funcs}
+                for rep in range(len(testing_policy_per_round))}
+        
+        real_matrix = {al: self.env.reward_matrix_per_align_func(al) for al in testing_align_funcs}
+        value_expectations = {al: [] for al in testing_align_funcs}
+        value_expectations_expert = {al: [] for al in testing_align_funcs}
+        for ratio in ratios_expert_random:
+            
+            
+            qualitative_loss_per_al_func = {al: [] for al in testing_align_funcs}
+            jsd_per_al_func = {al: [] for al in testing_align_funcs}
+            n_repescados_per_al_func = {al: [] for al in testing_align_funcs}
+            
+            for rep, reward_rep in enumerate(learned_rewards_per_round):
+                for al in testing_align_funcs:
+                    real_matrix_al = real_matrix[al]
+                    all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[rep][al]))[0:floor(len(expert_trajs[rep][al])*ratio)]).tolist()), 
+                         *((np.random.permutation(np.asarray(random_trajs[rep][al]))[0:ceil(len(random_trajs[rep][al])*(1.0-ratio))]).tolist())]
+                    
+                    returns_expert = []
+                    returns_estimated = []
+                    returns_real_from_learned_policy = {alb: [] for alb in basic_profiles}
+                    returns_real_from_expert_policy = {alb: [] for alb in basic_profiles}
+                   
+                    for ti in all_trajs:
+                        if isinstance(reward_rep[al], Callable):
+                            estimated_return_i = rollout.discounted_sum(reward_rep[al](ti.obs[:-1], ti.acts), gamma=self.discount)
+                        else:
+                            assert isinstance(reward_rep[al], np.ndarray)
+                            estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
+                        real_return_i = rollout.discounted_sum(real_matrix_al[ti.obs[:-1], ti.acts], gamma=self.discount)
+                        if self.discount == 1.0:
+                            assert np.sum(ti.rews) == np.sum(real_return_i)
+                        returns_expert.append(real_return_i)
+                        returns_estimated.append(estimated_return_i)
+                    returns_expert = np.asarray(returns_expert)
+                    returns_estimated = np.asarray(returns_estimated)    
+                    if float(ratio) == 1.0:
+                        for al_basic in basic_profiles:
+                            rb = real_matrix[al_basic]
+                            for lti in policy_trajs_for_al_estimation[rep][al]:
+                                real_return_in_learned_pol = rollout.discounted_sum(
+                                    rb[lti.obs[:-1], lti.acts], 
+                                    gamma=self.discount)
+                                
+                                returns_real_from_learned_policy[al_basic].append(real_return_in_learned_pol)
+                            for exp in expert_trajs_for_al_estimation[rep][al]:
+                                
+                                real_return_basic_expert = rollout.discounted_sum(
+                                    rb[exp.obs[:-1], exp.acts], 
+                                    gamma=self.discount)
+                                returns_real_from_expert_policy[al_basic].append(real_return_basic_expert)
+                        
+                    
+                    N = len(all_trajs) # Equals the -tn parameter. (default 100)
+                    
+                    i_j = np.random.choice(N, size=(N*10, 2), replace=True)
+                    i_indices, j_indices = i_j[:, 0], i_j[:, 1]
+
+                    estimated_diffs = np.clip(returns_estimated[i_indices] - returns_estimated[j_indices], -50.0, 50.0)
+                    real_diffs = np.clip(returns_expert[i_indices] - returns_expert[j_indices], -50.0, 50.0)
+
+                    probs_estimated = 1 / (1 + np.exp(estimated_diffs))
+                    probs_real = 1 / (1 + np.exp(real_diffs))
+
+                    probs_real = np.array(probs_real) 
+                    probs_estimated = np.array(probs_estimated) 
+            
+                
+                    todos = np.where(probs_real >= 0.0)[0]
+                    epsilons = [0.0,0.01,0.05]
+                    accuracy_per_epsilon = {eps: None for eps in epsilons}
+                    n_repescados_per_epsilon = {eps: 0 for eps in epsilons}
+                    for epsilon in epsilons:
+                        exito_por_mayor = np.intersect1d(np.where(probs_estimated > 0.5)[0], np.where(probs_real > 0.5)[0])
+                        exito_por_menor = np.intersect1d(np.where(probs_estimated < 0.5)[0], np.where(probs_real < 0.5)[0])
+                        exito_por_igual = np.intersect1d(np.where(probs_estimated == 0.5)[0], 
+                                                            np.where(probs_real == 0.5)[0])
+                        
+                        exito_por_aprox_igual = np.intersect1d(np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0], 
+                                                            np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        
+                        acertados = np.union1d(exito_por_mayor, exito_por_menor)
+                        acertados = np.union1d(acertados, exito_por_igual)
+                        
+                        fallados = np.setdiff1d(todos, acertados) 
+
+                        a = np.intersect1d(acertados, np.where(np.abs(probs_real - 0.5) > epsilon)[0])
+                        b = np.intersect1d(fallados, np.where(np.abs(probs_real - 0.5) > epsilon)[0])
+
+                        c1 = np.intersect1d(acertados, np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        c11 = np.intersect1d(c1, np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0])
+                        c12 = np.intersect1d(c1, np.where(np.abs(probs_estimated - 0.5) > epsilon)[0])
+
+                        temp = np.intersect1d(fallados, np.where(np.abs(probs_real - 0.5) <= epsilon)[0])
+                        c2_repescados = np.intersect1d(temp, np.where(np.abs(probs_estimated - 0.5) <= epsilon)[0])
+                        c3 = np.intersect1d(temp, np.where(np.abs(probs_estimated - 0.5) > epsilon)[0])
+                        aall = [a,b,c11,c12,c2_repescados,c3]
+                        
+
+                        total = a
+                        intersec = todos
+                        print("a, b, c11, c12, c2,c3")
+                        for id, set_ in enumerate(aall):
+                            total = np.union1d(total,set_)
+                            intersec = np.intersect1d(intersec,set_)
+                            print("LEN ", id, ": ", len(set_))
+                        len_total_disj = np.sum([len(set_) for set_ in aall])
+                        
+                        exitos = np.union1d(acertados, exito_por_aprox_igual)
+                        print("TOTAL", len(total), "TOTAL_DISJ", len_total_disj)
+                        assert len(total) == len_total_disj
+                        print("INTERSEC", len(intersec))
+                        assert len(intersec) == 0
+                        assert len(exitos) == len(np.union1d(acertados, c2_repescados))
+                        accuracy = len(exitos)/len(todos)
+                        accuracy_per_epsilon[epsilon] = accuracy
+                        n_repescados_per_epsilon[epsilon] = len(c2_repescados)
+                        
+
+                        
+                    is_better_estimated = probs_estimated > (0.5 + epsilon_for_undecided_preference)
+                    is_better_real = probs_real > (0.5 + epsilon_for_undecided_preference)
+                    is_worse_estimated = probs_estimated< (0.5 - epsilon_for_undecided_preference)
+                    is_worse_real = probs_real < (0.5 - epsilon_for_undecided_preference)
+
+                    is_equal_estimated = np.abs(probs_estimated-0.5) <= epsilon_for_undecided_preference
+                    is_equal_real = np.abs(probs_real - 0.5) <= epsilon_for_undecided_preference
+                    
+                    real_labels = np.column_stack((is_better_real, is_equal_real, is_worse_real))
+                    estimated_labels = np.column_stack((is_better_estimated, is_equal_estimated, is_worse_estimated))
+                    
+
+                    #print(real_labels,estimated_labels)
+                    #qualitative_loss = qualitative_loss_score(real_labels, estimated_labels, multi_class="ovr")
+                    # ACC average (dumb). qualitative_loss = np.mean([np.mean(np.array(real_labels[ri]==estimated_labels[ri], dtype=np.float32)) for ri in range(len(real_labels)) ])
+                    # F1 score. (Not exactly okey)
+                    #qualitative_loss = f1_score(real_labels, estimated_labels, average='weighted',zero_division=np.nan)
+                    # Accuracy with new method adding tolerance for equal cases.
+                    
+
+                    qualitative_loss_per_al_func[al].append(accuracy_per_epsilon)
+
+                    n_repescados_per_al_func[al].append(n_repescados_per_epsilon)
+                    #ce_per_al_func[al].append(th.nn.functional.binary_cross_entropy(th.tensor(probs_real), th.tensor(probs_estimated)).detach().numpy())
+                    # JSD (Not used)
+                    jsd = JSD(probs_real, probs_estimated)
+                    jsd_per_al_func[al].append({eps: jsd for eps in epsilons})
+                    # Instead, use the number of artificially misclassified cases inside the interval +-epsilon
+                    
+                    if float(ratio) == 1.0:
+                        value_expectations[al].append({
+                            alb: np.mean(returns_real_from_learned_policy[alb]) for alb in basic_profiles
+                            })
+                        
+                        value_expectations_expert[al].append({
+                            alb: np.mean(returns_real_from_expert_policy[alb]) for alb in basic_profiles
+                            })
+
+            #metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': jsd_per_al_func}
+            metrics_per_ratio[ratio]={'acc': qualitative_loss_per_al_func, 'repescados': n_repescados_per_al_func, 'jsd': jsd_per_al_func}
+            
+        return metrics_per_ratio, value_expectations, value_expectations_expert
     
     @abstractmethod
     def get_policy_from_reward_per_align_func(self, align_funcs, reward_net=None):
@@ -252,3 +477,145 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
     @abstractmethod
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed) -> Dict[Any, AbstractVSLRewardFunction]:
         ...
+
+    def calculate_rewards(self, align_func=None, grounding=None, obs_mat=None, next_state_obs_mat=None, action_mat=None, obs_action_mat=None,
+                          reward_mode=TrainingModes.EVAL, recover_previous_config_after_calculation=True,
+                          use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10, requires_grad=True):
+
+        
+        if self.current_net.use_one_hot_state_action:
+            if obs_action_mat is None:
+                obs_action_mat = th.as_tensor(
+                    np.identity(self.env.state_dim*self.env.action_dim),
+                    dtype=self.current_net.dtype,
+                    device=self.current_net.device,
+                )
+            obs_action_mat.requires_grad_(requires_grad)
+
+        if recover_previous_config_after_calculation:
+            previous_rew_mode = self.current_net.mode
+            previous_rew_ground = self.current_net.cur_value_grounding
+            previous_rew_alignment = self.current_net.cur_align_func
+
+        if requires_grad is False:
+            if obs_mat is not None and isinstance(obs_mat, th.Tensor):
+                obs_mat = obs_mat.detach()
+            if action_mat is not None and isinstance(action_mat, th.Tensor):
+                action_mat = action_mat.detach()
+            if obs_action_mat is not None and isinstance(obs_action_mat, th.Tensor):
+                obs_action_mat = obs_action_mat.detach()
+            if next_state_obs_mat is not None and isinstance(next_state_obs_mat, th.Tensor):
+                next_state_obs_mat = next_state_obs_mat.detach()
+
+        self.current_net.set_mode(reward_mode)
+        self.current_net.set_grounding_function(grounding)
+        self.current_net.set_alignment_function(align_func)
+
+        assert self.current_net.mode == reward_mode
+
+        if use_probabilistic_reward is False:
+            predicted_r, used_align_func, _ = self.calculation_rew(
+                align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
+                obs_action_mat=obs_action_mat, next_state_obs=next_state_obs_mat,
+                use_probabilistic_reward=use_probabilistic_reward)
+
+            predicted_r_np = predicted_r.detach().cpu().numpy()
+
+            
+            ret = predicted_r, predicted_r_np
+        else:
+            list_of_reward_calculations = []
+            align_func_used_in_each_repetition = []
+            prob_of_each_repetition = []
+            for _ in range(n_reps_if_probabilistic_reward):
+                predicted_r, used_align_func, probability = self.calculation_rew(
+                    align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
+                    obs_action_mat=obs_action_mat, next_state_obs=next_state_obs_mat,
+                    use_probabilistic_reward=use_probabilistic_reward)
+
+                list_of_reward_calculations.append(predicted_r)
+                align_func_used_in_each_repetition.append(used_align_func)
+                prob_of_each_repetition.append(probability)
+            predicted_rs = th.stack(list_of_reward_calculations)
+            prob_of_each_repetition_th = th.stack(prob_of_each_repetition)
+            predicted_rs_np = predicted_rs.detach().cpu().numpy()
+
+            ret = predicted_rs, predicted_rs_np, align_func_used_in_each_repetition, prob_of_each_repetition_th
+
+        if recover_previous_config_after_calculation:
+            self.current_net.set_mode(previous_rew_mode)
+            self.current_net.set_grounding_function(previous_rew_ground)
+            self.current_net.set_alignment_function(previous_rew_alignment)
+        
+        return ret
+    def calculation_rew(self, align_func, obs_mat, action_mat=None, obs_action_mat=None, next_state_obs=None, use_probabilistic_reward=False):
+        if use_probabilistic_reward:
+            self.current_net.fix_alignment_function()
+
+        next_state_observations = None
+
+        if self.current_net.use_next_state:
+            next_state_observations = next_state_obs
+
+        if self.current_net.use_one_hot_state_action:
+            if self.current_net.use_next_state:
+                next_state_observations = next_state_observations.view(
+                    *obs_action_mat.shape)
+
+            predicted_r = th.reshape(self.current_net(
+                obs_action_mat, None, next_state_observations, None), (self.env.state_dim, self.env.action_dim))
+        elif self.current_net.use_action or self.current_net.use_next_state:
+            if self.current_net.use_action:
+                assert action_mat is not None
+                #assert action_mat.size() == (self.env.action_dim, obs_mat.shape[0], self.env.action_dim)
+            if self.current_net.use_next_state:
+                assert next_state_observations is not None
+
+            predicted_r = self.current_net(
+                        obs_mat,
+                        action_mat,
+                        next_state_observations if self.current_net.use_next_state else None,
+                        None)
+        
+        
+        used_alignment_func, probability, _ = self.current_net.get_next_align_func_and_its_probability(
+            align_func)
+
+        if use_probabilistic_reward:
+            self.current_net.free_alignment_function()
+
+        state_action_with_predefined_reward_mask = self.env.get_state_actions_with_known_reward(
+            used_alignment_func)
+        
+        if state_action_with_predefined_reward_mask is not None:
+            if len(predicted_r.size()) == 1:
+                lobs = obs_mat.long().to(predicted_r.device)
+                lacts = th.argmax(action_mat, dim=1).long() if len(action_mat.shape) > 1 else action_mat.long()
+                lacts = lacts.to(device=predicted_r.device)
+                lobs = lobs.to(device=predicted_r.device)
+                real_reward_th  = th.tensor(self.env.reward_matrix_per_align_func(used_alignment_func),
+                    dtype=predicted_r.dtype, device=predicted_r.device, requires_grad=False)
+
+
+                mask = state_action_with_predefined_reward_mask[lobs, lacts]
+                # Gather indices for the states and actions that satisfy the mask
+                
+                indices = mask.nonzero()
+
+                # Use advanced indexing to update the predicted rewards
+                predicted_r[indices] = real_reward_th[lobs[indices], lacts[indices]]
+
+                """ DEBUG: for i, (s,a, ns) in enumerate(zip(lobs, lacts, next_state_observations)):
+                    if state_action_with_predefined_reward_mask[int(s),int(a)] == True:
+                        assert predicted_r[i] == real_reward_th[s,a]
+                        predicted_r[i] = real_reward_th[s,a]"""
+                
+            else:
+
+            
+                predicted_r[state_action_with_predefined_reward_mask] = th.as_tensor(
+                    self.env.reward_matrix_per_align_func(used_alignment_func)[
+                        state_action_with_predefined_reward_mask],
+                    dtype=predicted_r.dtype, device=predicted_r.device)
+
+        return predicted_r, used_alignment_func, probability

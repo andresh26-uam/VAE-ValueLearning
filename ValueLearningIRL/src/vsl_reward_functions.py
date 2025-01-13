@@ -46,8 +46,6 @@ class ConvexLinearModule(th.nn.Linear):
 
     def forward(self, input: th.Tensor) -> th.Tensor:
         w_normalized = th.nn.functional.softmax(self.weight, dim=1)
-        # assert th.allclose(w_normalized, th.nn.functional.softmax(self.weight))
-        # print(w_normalized)
         output = th.nn.functional.linear(input, w_normalized)
         assert th.all(output >= 0)
 
@@ -84,7 +82,7 @@ class ConvexTensorModule(th.nn.Module):
 class LinearAlignmentLayer(th.nn.Linear):
     def __init__(self, in_features: int, out_features: int, bias: bool = False, device=None, dtype=None, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
-        self.use_bias = bias
+        self.linear_bias = bias
         with th.no_grad():
             state_dict = self.state_dict()
             state_dict['weight'] = th.nn.functional.sigmoid(
@@ -95,7 +93,7 @@ class LinearAlignmentLayer(th.nn.Linear):
     def forward(self, input: th.Tensor) -> th.Tensor:
         w_bounded, b_bounded = self.get_alignment_layer()
 
-        if self.use_bias:
+        if self.linear_bias:
             output = th.nn.functional.linear(input, w_bounded, b_bounded)
         else:
             output = th.nn.functional.linear(input, w_bounded)
@@ -106,7 +104,7 @@ class LinearAlignmentLayer(th.nn.Linear):
         w_bounded = self.weight
         # assert th.allclose(w_bounded, th.nn.functional.softmax(self.weight))
         b_bounded = 0.0
-        if self.use_bias:
+        if self.linear_bias:
             b_bounded = self.bias
         return w_bounded, b_bounded
 
@@ -119,7 +117,7 @@ class PositiveLinearAlignmentLayer(LinearAlignmentLayer):
         w_bounded = th.nn.functional.softplus(self.weight)
         # assert th.allclose(w_bounded, th.nn.functional.softmax(self.weight))
         b_bounded = 0.0
-        if self.use_bias:
+        if self.linear_bias:
             b_bounded = th.nn.functional.sigmoid(self.bias)
         return w_bounded, b_bounded
 
@@ -133,7 +131,7 @@ class ConvexAlignmentLayer(LinearAlignmentLayer):
         w_bounded = th.nn.functional.softmax(self.weight, dim=1)
         # assert th.allclose(w_bounded, th.nn.functional.softmax(self.weight))
         b_bounded = 0.0
-        if self.use_bias:
+        if self.linear_bias:
             b_bounded = th.nn.functional.sigmoid(self.bias)
         return w_bounded, b_bounded
 
@@ -181,6 +179,8 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                  use_state=False, use_action=False, use_next_state=True,
                  use_done=True, use_one_hot_state_action=False,
                  mode=TrainingModes.VALUE_GROUNDING_LEARNING,
+                 features_extractor_class = None,
+                 features_extractor_kwargs = None,
                  clamp_rewards=None,
                  **kwargs):
         if environment is None and (observation_space is None or action_space is None):
@@ -227,6 +227,39 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         self.cur_value_grounding = None
         self.clamp_rewards = clamp_rewards
 
+        combined_size = 0
+
+        self.state_size = 0
+        self.action_size = 0
+
+        if self.use_one_hot_state_action:
+            combined_size += self.state_dim * self.action_dim
+        else:
+            if self.use_state:
+                self.state_size = preprocessing.get_flattened_obs_dim(
+                    self.observation_space)
+                combined_size += self.state_size
+
+            if self.use_action:
+                self.action_size = preprocessing.get_flattened_obs_dim(
+                    self.action_space)
+                combined_size += self.action_size
+
+            if self.use_next_state:
+                self.state_size = preprocessing.get_flattened_obs_dim(
+                    self.observation_space)
+                combined_size += self.state_size
+            if self.use_done:
+                combined_size += 1
+
+        self.input_size = combined_size
+        self.features_extractor_class = features_extractor_class
+        self.features_extractor_kwargs = features_extractor_kwargs
+        self.features_extractor = None
+        
+                                                                                
+
+
     @abstractmethod
     def value_system_layer(self, align_func) -> th.Tensor:
         ...
@@ -249,7 +282,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
 
     def forward(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor) -> th.Tensor:
         inputs_concat = self.construct_input(state, action, next_state, done)
-
+        
         ret = self._forward(
             inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding)
         if len(ret.shape) > 1 and ret.shape[1] == 1:
@@ -258,7 +291,6 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             return ret
 
     def __copy_args__(self, new):
-        print("COPYING")
         for k, v in vars(self).items():
             try:
                 nv = deepcopy(v)
@@ -283,9 +315,9 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         done: np.ndarray,
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         if self.use_one_hot_state_action:
-
             if len(state.shape) > 1 and (state.shape[0] == state.shape[1] and
                                          state.shape[1] == preprocessing.get_flattened_obs_dim(self.observation_space) * preprocessing.get_flattened_obs_dim(self.action_space)):
+                # no preprocessing needed
                 return super().preprocess(state, action, next_state, done)
             else:
                 num_rows = len(state)
@@ -332,11 +364,24 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             inputs.append(th.flatten(state, 1))
 
         else:
+            
             if self.use_state:
+                if not self.observation_space.contains(state.detach().numpy()[0] if isinstance(state, th.Tensor) else state[0]):
+                    if self.features_extractor is None:
+                        self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+                    state = self.features_extractor(state)
                 inputs.append(th.flatten(state, 1))
             if self.use_action:
-                inputs.append(th.flatten(action, 1))
+                if len(action.shape) > 1:
+                    inputs.append(th.flatten(action, 1))
+                else:
+                    inputs.append(action.unsqueeze(0))
             if self.use_next_state:
+                if not self.observation_space.contains(next_state.detach().numpy()[0] if isinstance(next_state, th.Tensor) else next_state[0]):
+                    if self.features_extractor is None:
+                        self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+                    next_state = self.features_extractor(next_state)
+                    
                 inputs.append(th.flatten(next_state, 1))
             if self.use_done:
                 inputs.append(th.reshape(done, [-1, 1]))
@@ -377,13 +422,22 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                  negative_grounding_layer=False,
                  clamp_rewards=None,
                  independent_grounding_layer=True,
+                 features_extractor_class=None,
+                 features_extractor_kwargs=None,
                  **kwargs):
 
         if hasattr(environment, 'last_profile'):
             self.cur_align_func = environment.last_profile
 
         self.negative_grounding_layer = negative_grounding_layer
-        self.use_bias = use_bias
+        if isinstance(use_bias, list):
+            self.use_bias = use_bias
+            #use bias in the selected layers. Typically you dont use bias in the last layer. 
+            
+        else:
+            # Use bias everywhere.
+            self.use_bias = [use_bias]*len(hid_sizes)
+        assert len(self.use_bias) == len(hid_sizes) + 1
         super().__init__(environment=environment, action_dim=action_dim, state_dim=state_dim, observation_space=observation_space,
                          action_space=action_space,
                          use_state=use_state,
@@ -391,31 +445,16 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                          use_next_state=use_next_state,
                          use_done=use_done,
                          clamp_rewards=clamp_rewards,
-                         use_one_hot_state_action=use_one_hot_state_action, mode=mode,)
-        combined_size = 0
-
-        if self.use_one_hot_state_action:
-            combined_size += self.state_dim * self.action_dim
-        else:
-            if self.use_state:
-                combined_size += preprocessing.get_flattened_obs_dim(
-                    self.observation_space)
-            if self.use_action:
-                combined_size += preprocessing.get_flattened_obs_dim(
-                    self.action_space)
-            if self.use_next_state:
-                combined_size += preprocessing.get_flattened_obs_dim(
-                    self.observation_space)
-            if self.use_done:
-                combined_size += 1
-
-        self.input_size = combined_size
-
+                         use_one_hot_state_action=use_one_hot_state_action, mode=mode,features_extractor_class=features_extractor_class,features_extractor_kwargs=features_extractor_kwargs)
+        
         self.reward_bias = reward_bias
         # self.mlp = networks.build_mlp(**full_build_mlp_kwargs)
 
         self.hid_sizes = deepcopy(hid_sizes)
         self.hid_sizes.insert(0, self.input_size)
+
+        
+
         self.final_activation = activations[-1]()
         self.activations = activations
         self.basic_layer_classes = basic_layer_classes
@@ -455,7 +494,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
 
     def reset_learned_alignment_function(self, new_align_func: tuple = None):
         self.trained_profile_net: LinearAlignmentLayer = self.basic_layer_classes[-1](
-            self.hid_sizes[-1], 1, bias=self.use_bias)
+            self.hid_sizes[-1], 1, bias=self.use_bias[-1])
+        
         with th.no_grad():
             if new_align_func is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
                 assert isinstance(new_align_func, tuple)
@@ -481,8 +521,9 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             if isinstance(custom_layer, th.nn.Module) or callable(custom_layer):
                 def _call(x):
                     with th.no_grad():
-                        # print("CUSTOM", custom_layer)
-                        custom_layer.requires_grad_(False)
+                        if isinstance(custom_layer, th.nn.Module):
+                            custom_layer.requires_grad_(False)
+                        
                         if self.negative_grounding_layer:
                             x = -custom_layer(x)
                             assert th.all(x <= 0)
@@ -539,7 +580,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             if new_grounding_func is None:
                 for i in range(1, len(self.activations)):
                     linmod = self.basic_layer_classes[i-1](
-                        self.hid_sizes[i-1], self.hid_sizes[i], bias=self.use_bias)
+                        self.hid_sizes[i-1], self.hid_sizes[i], bias=self.use_bias[i])
 
                     
                     modules.append(linmod)
@@ -553,7 +594,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def copy(self):
         new = self.__class__(env=None, action_dim=self.action_dim, state_dim=self.state_dim, observation_space=self.observation_space, action_space=self.action_space,
                              use_state=self.use_state, use_action=self.use_action, use_next_state=self.use_next_state, use_done=self.use_done, use_one_hot_state_action=self.use_one_hot_state_action,
-                             activations=self.activations, hid_sizes=self.hid_sizes, basic_layer_classes=self.basic_layer_classes, mode=self.mode, reward_bias=self.reward_bias,
+                             activations=self.activations, hid_sizes=self.hid_sizes[1:], basic_layer_classes=self.basic_layer_classes, mode=self.mode, reward_bias=self.reward_bias,
                              use_bias=self.use_bias, negative_grounding_layer=self.negative_grounding_layer)
         new = self.__copy_args__(new)
         new.cur_align_func = deepcopy(self.cur_align_func)
@@ -705,7 +746,7 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
                 elif len(x.size()) == 3:
                     x = x[:, :, selected_index]
                 else:
-                    print("X IS SIZE IS WEIRD", x.size())
+                    print("X IS SIZE IS NOT EXPECTED", x.size())
                     exit(-1)
                 x = self.final_activation(x) + self.reward_bias
                 return x
@@ -782,6 +823,8 @@ class GroundingEnsemble(th.nn.Module):
         self.input_size = input_size
         self.basic_layer_classes = basic_classes
         self.use_bias = use_bias
+        if isinstance(self.use_bias, bool):
+            self.use_bias = [self.use_bias]*len(self.hid_sizes)
         self.activations = activations
         self.debug = debug
         # Initialize multiple copies of base network with 1 output each
@@ -796,7 +839,7 @@ class GroundingEnsemble(th.nn.Module):
         for i in range(1, len(self.hid_sizes)):
             next_size = self.hid_sizes[i] if i < len(self.hid_sizes)-1 else 1
             linmod = self.basic_layer_classes[i - 1](
-                self.hid_sizes[i - 1],  next_size, bias=self.use_bias
+                self.hid_sizes[i - 1],  next_size, bias=self.use_bias[i-1]
             )
 
             """# Check if it’s a ConvexLinearModule and initialize weights if so

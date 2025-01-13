@@ -30,7 +30,8 @@ def get_linear_combination_of_colors(keys, color_from_keys, mix_weights):
 def pad(array, length):
     new_arr = np.zeros((length,))
     new_arr[0:len(array)] = np.asarray(array)
-    new_arr[len(array):] = array[-1]
+    if len(new_arr) > len(array):
+        new_arr[len(array):] = array[-1]
     return new_arr
 
 
@@ -45,7 +46,7 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
     
 
     for idx, al in enumerate(historic_metric[0].keys()):
-        if al not in historic_metric[0].keys():
+        if al not in historic_metric[0].keys() or len(historic_metric[0][al]) == 0 :
             continue
         if usecmap is None or (np.sum(al) == 1.0 and 1.0 in al):
             color = align_func_colors(al)
@@ -132,10 +133,8 @@ def plot_learned_to_expert_policies(expert_policy, vsl_algo: MaxEntropyIRLForVSL
         axesUp[i].set_ylabel(
             f'State\nSTD: {float("{0:.4f}".format(std_lpol)) if isinstance(learnt_policy, list) else 0.0}')
 
-        # fig.colorbar(im1, ax=axesUp[i], orientation='vertical', label='Value')
-
+        
         # Plot the second matrix
-        # print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
         pol = expert_policy.policy_per_va(al)
         if len(pol.shape) == 3:
             pol = pol[0, :, :]
@@ -334,7 +333,6 @@ def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap=
             f'State\nSTD: {float("{0:.4f}".format(std_reward_al)) if isinstance(learned_rewards_per_al_func, list) else 0.0}')
 
         # Plot the expert matrix
-        # print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
         im2 = axesDown[i].imshow(vsl_algo.env.reward_matrix_per_align_func(
             al), cmap=cmap, interpolation='nearest', aspect=learned_reward_al.shape[1]/learned_reward_al.shape[0])
         axesDown[i].set_title(f'{al}')
@@ -444,7 +442,6 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: MaxEntropyIRLForVSL, ex
             axesUp[i].set_ylabel('Act')
 
         # Plot the second matrix
-        # print(env.real_env.calculate_rewards(env.real_env.translate(152),0,env.real_env.translate(152)))
         im2 = axesDown[i].imshow(eocs, cmap='viridis', interpolation='nearest',
                                  aspect=vsl_algo.env.state_dim/vsl_algo.env.action_dim)
         axesDown[i].set_title(f'{al}')

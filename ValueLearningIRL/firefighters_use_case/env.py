@@ -286,5 +286,5 @@ if __name__ == "__main__":
     print("Rewards:", rewards)
     print("Done:", done)
 
-    print(env.encrypt([0, 3, 4, 0, 0, 3]))
+    #print(env.encrypt([0, 3, 4, 0, 0, 3]))
 

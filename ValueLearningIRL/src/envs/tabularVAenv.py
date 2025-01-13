@@ -67,23 +67,23 @@ class ValueAlignedEnvironment(gym.Wrapper):
         
         s, info = self._reset(seed=seed, options=options)
         info['align_func'] = self.get_align_func()
-        self._prev_observation, self._prev_info = s, info
+        self.prev_observation, self.prev_info = s, info
         self.time = 0
         return s, info
 
     def step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
         ns, original_rew, done, trunc, info = self._step(action)
         self.set_align_func(self.align_func_yielder(
-            action, ns=ns, prev_align_func=self.get_align_func(), info=self._prev_info))
+            action, ns=ns, prev_align_func=self.get_align_func(), info=self.prev_info))
         info['align_func'] = self.get_align_func()
         
-        r = self.get_reward_per_align_func(self.get_align_func(), self._prev_observation, action, ns, info)
+        r = self.get_reward_per_align_func(self.get_align_func(), self.prev_observation, action, ns, info)
         self.time += 1
         if self.horizon is not None and self.time >= self.horizon:
             trunc = self.trunc_when_horizon_is_met or trunc
             done = self.done_when_horizon_is_met or done
-        self._prev_observation = ns
-        self._prev_info = info
+        self.prev_observation = ns
+        self.prev_info = info
         return ns, r, done, trunc, info
 
     def _reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
@@ -118,8 +118,6 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
     def valid_actions(self, state, align_func=None):
         return np.arange(self.reward_matrix.shape[1])
     def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info= None):
-        # TODO: possible cofussion here between obs and state... prev: self.state (which is wrong)
-        
         return self.reward_matrix_per_align_func(align_func)[info['state'], action]
 
     def get_state_actions_with_known_reward(self, align_func):
@@ -137,6 +135,7 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
     def _reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
         s,i = self.unwrapped.reset(seed=seed, options=options)
         i['state'] = self.state
+        i['next_state'] = self.state
         return s,i
 
     def _step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -145,6 +144,7 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
         # d = d or self.env.state in self.goal_states
         i['state'] = prev_state
         i['next_state'] = self.state
+        #d = True if d is True else self.state in self.goal_states
         return ns, r, d, t, i
     
     @property

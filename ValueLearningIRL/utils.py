@@ -4,6 +4,7 @@ import itertools
 import json
 from math import ceil
 import os
+from types import LambdaType
 from typing import List
 
 import imitation
@@ -50,7 +51,8 @@ class NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.floating):
             return float(obj)
         if isinstance(obj, np.ndarray):
-            return obj.tolist()
+            if hasattr(obj, "tolist"):  # numpy arrays have this
+                return {"$array": obj.tolist()}  # Make a tagged object
         return super(NpEncoder, self).default(obj)
         
 def convert(x):
@@ -157,8 +159,7 @@ def create_expert_trajectories(env_creator, from_df_expert_file_or_policy='exper
         for row in df_expert.values:
             for _ in range(repeat_samples):
                 t_states = ast.literal_eval(row[0])
-                t_actions = ast.literal_eval(row[2])
-                #print(t_states)
+                t_actions = ast.literal_eval(row[2])    
                 
                 states.extend( ast.literal_eval(row[0]))
                 rewards.extend(ast.literal_eval(row[1]))
@@ -298,3 +299,70 @@ def filter_none_args(args):
     """Removes arguments that have a None value."""
     filtered_args = {k: v for k, v in vars(args).items() if v is not None}
     return argparse.Namespace(**filtered_args)
+
+
+
+def serialize_lambda(func):
+        """Serialize a lambda function by extracting its source code."""
+        if isinstance(func, LambdaType):
+            if func.__code__.co_argcount != 2:
+                raise ValueError("state_encoder lambda must accept exactly 2 arguments: (state_obs, info)")
+            return {
+                'co_code': func.__code__.co_code.hex(),
+                'co_varnames': func.__code__.co_varnames,
+                'co_names': func.__code__.co_names,
+                'co_consts': func.__code__.co_consts,
+                'co_flags': func.__code__.co_flags,
+            }
+        raise ValueError("State encoder must be a lambda or serializable function.")
+import types
+def deserialize_lambda(code_data):
+        bytecode = bytes.fromhex(code_data['co_code'])
+        code = types.CodeType(
+            2,  # Number of arguments (co_argcount)
+            0,  # Positional-only arguments (Python 3.8+)
+            0,  # KW-only arguments (Python 3.8+)
+            len(code_data['co_varnames']),  # nlocals
+            2,  # stacksize
+            code_data['co_flags'],  # flags
+            bytecode,  # code
+            tuple(code_data['co_consts']),  # constants
+            tuple(code_data['co_names']),  # names
+            tuple(code_data['co_varnames']),  # variable names
+            "",  # filename (empty string)
+            "<lambda>",  # name
+            0,  # first line number
+            b""  # lnotab (empty)
+        )
+        return types.FunctionType(code, globals())
+def import_from_string(module_class_name):
+        """Import a class from its module and name."""
+        splitted = module_class_name.rsplit(".", 1)
+        if len(splitted) == 1:
+            return splitted[0]
+        module_name, class_name = splitted
+        module = __import__(module_name, fromlist=[class_name])
+        return getattr(module, class_name)
+
+def serialize_policy_kwargs(policy_kwargs):
+        """Serialize policy_kwargs with special handling for classes."""
+        serialized_kwargs = {}
+        for key, value in policy_kwargs.items():
+            if isinstance(value, type):  # Handle class types
+                serialized_kwargs[key] = value.__module__ + "." + value.__name__
+            else:
+                serialized_kwargs[key] = value
+        return serialized_kwargs
+
+def deserialize_policy_kwargs(serialized_policy_kwargs):
+        """Deserialize policy_kwargs, reconstructing classes where necessary."""
+        deserialized_kwargs = {}
+        for key, value in serialized_policy_kwargs.items():
+            if isinstance(value, str) and '.' in value:  # Potential class name
+                try:
+                    deserialized_kwargs[key] = import_from_string(value)
+                except (ImportError, AttributeError):
+                    deserialized_kwargs[key] = value  # Fallback to string
+            else:
+                deserialized_kwargs[key] = value
+        return deserialized_kwargs

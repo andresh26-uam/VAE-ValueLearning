@@ -46,18 +46,9 @@ class PolicyApproximators(enum.Enum):
 def dict_metrics(**kwargs):
     return dict(kwargs)
 
-from scipy.stats import entropy
+
 from numpy.linalg import norm
 import numpy as np
-def JSD(P, Q):
-    n = len(P)
-    avg_jsd = 0.0
-    for p,q in zip(P,Q):
-        dist_p = np.array([p,1.0-p])
-        dist_q = np.array([q,1.0-q])
-        M = 0.5 * (dist_p + dist_q)
-        avg_jsd += ((0.5 * (entropy(dist_p, M) + entropy(dist_q,M)))/n)
-    return avg_jsd
 
 def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False, valid_action_checker=None):
     """
@@ -191,7 +182,7 @@ def mce_partition_fh(
         
         while err > value_iteration_tolerance and (iterations < max_iterations):
             values_prev = V.copy()
-            values_prev[env.goal_states] = 0.0
+            #values_prev[env.goal_states] = 0.0
             next_values_s_a = T @ values_prev
             Q = broad_R + discount * next_values_s_a
             V = np.max(Q, axis=1)
@@ -206,7 +197,7 @@ def mce_partition_fh(
         V = np.full((n_states), -1)
         V[env.goal_states] = 0.0
         Q = broad_R
-        illegal_reward = np.max(np.abs(broad_R))*-1000*horizon
+        illegal_reward = np.max(np.abs(broad_R))*-1.0 # we assume the MDP is correct, but illegal state should respond to this rule. By design broad_R should be very negative in illegal states.
 
         inv_states = env.invalid_states
         if inv_states is not None:
@@ -226,21 +217,21 @@ def mce_partition_fh(
         if 'iterations' in approximator_kwargs.keys():
             max_iterations = approximator_kwargs['iterations']
         
-        while err >= value_iteration_tolerance:
+        while err >= value_iteration_tolerance and iterations < max_iterations:
             values_prev = V.copy()
             next_values_s_a = T @ values_prev
             Q = broad_R + discount * next_values_s_a
             
             #Q[valid_state_actions==False] = illegal_reward
             V = np.max(Q, axis=1)
+            V[env.goal_states] = 0.0
             if inv_states is not None:
-                V[env.goal_states] = 0.0
+                
                 V[inv_states] = values_prev[inv_states]
             err = np.max(np.abs(V-values_prev))
-            print(err,iterations, np.mean(np.abs(V-values_prev)))
-            #print(iterations, V[515], values_prev[515], env.goal_states, env._invalid_states)
-            #print(value_iteration_tolerance, err)
-            #print(np.where(np.abs(V-values_prev) == err)[0])
+            if iterations > 1000:
+                print("VALUE ITERATION IS HARD HERE", err,iterations, np.mean(np.abs(V-values_prev)))
+            
             iterations += 1
         pi = scipy.special.softmax(Q - V[:, None], axis=1)
     else:
@@ -315,9 +306,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         # pass
         return
 
-    @property
-    def policy(self):
-        return self.learned_policy_per_va
+
 
     def _resample_next_observations(self):
         n_actions = self.env.action_dim
@@ -495,7 +484,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
         return ret
 
-    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10) -> np.ndarray:
+    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10, **kwargs) -> np.ndarray:
         obs_mat = self.env.observation_matrix
 
         self.torch_obs_mat = th.as_tensor(
@@ -526,7 +515,8 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
         return super().train(max_iter=max_iter, mode=mode, assumed_grounding=assumed_grounding,
                              n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
-                             use_probabilistic_reward=use_probabilistic_reward, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward)
+                             use_probabilistic_reward=use_probabilistic_reward, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, 
+                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward, **kwargs)
 
     def prob_reward_matrix_setter(self, target, use_probabilistic_reward, numpy=True, requires_grad=False, assumed_grounding=None):
         if use_probabilistic_reward:
@@ -614,7 +604,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
             self.current_net = prev_net
         policy = VAlignedDictSpaceActionPolicy(policy_per_va_dict = profile_to_assumed_matrix, env = self.env, state_encoder=state_encoder, expose_state=expose_state)
         return policy, reward_matrix_per_al
-    def test_accuracy_for_align_funcs(self, learned_rewards_per_round: List[np.ndarray],
+    """def test_accuracy_for_align_funcs(self, learned_rewards_per_round: List[np.ndarray],
                                         testing_policy_per_round: List[VAlignedDictSpaceActionPolicy],
                                         target_align_funcs_to_learned_align_funcs: Dict,
                                         expert_policy = VAlignedDictSpaceActionPolicy,
@@ -672,7 +662,6 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
             n_repescados_per_al_func = {al: [] for al in testing_align_funcs}
             
             for rep, reward_rep in enumerate(learned_rewards_per_round):
-                
                 for al in testing_align_funcs:
                     real_matrix_al = real_matrix[al]
                     all_trajs = [*((np.random.permutation(np.asarray(expert_trajs[rep][al]))[0:floor(len(expert_trajs[rep][al])*ratio)]).tolist()), 
@@ -684,7 +673,11 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                     returns_real_from_expert_policy = {alb: [] for alb in basic_profiles}
                    
                     for ti in all_trajs:
-                        estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
+                        if isinstance(reward_rep[al], Callable):
+                            estimated_return_i = rollout.discounted_sum(reward_rep[al](ti.obs[:-1], ti.acts), gamma=self.discount)
+                        else:
+                            assert isinstance(reward_rep[al], np.ndarray)
+                            estimated_return_i = rollout.discounted_sum(reward_rep[al][ti.obs[:-1], ti.acts], gamma=self.discount)
                         real_return_i = rollout.discounted_sum(real_matrix_al[ti.obs[:-1], ti.acts], gamma=self.discount)
                         if self.discount == 1.0:
                             assert np.sum(ti.rews) == np.sum(real_return_i)
@@ -775,31 +768,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
                         n_repescados_per_epsilon[epsilon] = len(c2_repescados)
                         
 
-                        """
-                        assert len(exitos) <= len(i_indices)
-
-                        n_por_mayor = len(exito_por_mayor)
-                        n_por_menor = len(exito_por_menor)
-                        n_por_aprox_igual = len(exito_por_aprox_igual)
-                        print(n_por_mayor)
-                        print(n_por_menor)
-                        print(n_por_aprox_igual)
-                        if epsilon != 0.0:
-                            st = epsilon
-                            x  = np.arange(0.0,1.0+st,step=st)
-                            
-                            plt.xticks(x,rotation=90)
-                            plt.hist(probs_real, bins=x-st/2.0, range=[0.0,1.0])
-                            plt.savefig(f'results/testing/real_pdiffs{epsilon}_ffall.png')
-                            #plt.show()
-                            plt.close()
-                            plt.xticks(x,rotation=90)
-                            plt.hist(probs_estimated, bins=x-st/2.0, range=[0.0,1.0])
-                            plt.savefig(f'results/testing/estimated_pdiffs{epsilon}_ffall.png')
-                            #plt.show()
-                            plt.close()
-                    
-                        exit(0)"""
+                        
                     is_better_estimated = probs_estimated > (0.5 + epsilon_for_undecided_preference)
                     is_better_real = probs_real > (0.5 + epsilon_for_undecided_preference)
                     is_worse_estimated = probs_estimated< (0.5 - epsilon_for_undecided_preference)
@@ -841,4 +810,4 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
             #metrics_per_ratio[ratio]={'f1': qualitative_loss_per_al_func, 'jsd': jsd_per_al_func}
             metrics_per_ratio[ratio]={'acc': qualitative_loss_per_al_func, 'repescados': n_repescados_per_al_func, 'jsd': jsd_per_al_func}
             
-        return metrics_per_ratio, value_expectations, value_expectations_expert
+        return metrics_per_ratio, value_expectations, value_expectations_expert"""

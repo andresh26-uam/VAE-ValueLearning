@@ -15,3 +15,6 @@ results/tables/*
 plots/*.pdf
 plots/*.png
 .DS-Store
+*tensorboard*
+*.code-workspace
+.DS-Store

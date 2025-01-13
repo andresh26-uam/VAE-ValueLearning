@@ -10,6 +10,7 @@ from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL,
 from src.envs.firefighters_env import FeatureSelectionFFEnv
 
 from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
+from src.vsl_algorithms.adversarial_vsl import AdversarialVSL, TabularAdversarialVSL
 from src.vsl_algorithms.me_irl_for_vsl import MaxEntropyIRLForVSL, check_coherent_rewards
 from src.vsl_algorithms.preference_model_vs import PreferenceBasedTabularMDPVSL, SupportedFragmenters
 from src.vsl_algorithms.vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies, plot_learning_curves, plot_vs_preference_metrics
@@ -43,7 +44,7 @@ def parse_args():
     general_group.add_argument('-e', '--environment', type=str, default='roadworld', choices=[
                                'roadworld', 'firefighters'], help='environment (roadworld or firefighters)')
     general_group.add_argument('-a', '--algorithm', type=str, choices=[
-                               'me', 'pc', 'pc-me','me-pc', 'pc-pc', 'me-me'], default='me', help='Algorithm to use (max entropy or preference comparison)')
+                               'me', 'pc', 'pc-me','me-pc', 'pc-pc', 'me-me', 'ad', 'pc-ad', 'ta', 'pc-ta'], default='me', help='Algorithm to use (max entropy or preference comparison)')
     general_group.add_argument('-df', '--discount_factor', type=float, default=0.7,
                                help='Discount factor. For some environments, it will be neglected as they need a specific discount factor.')
 
@@ -76,6 +77,8 @@ def parse_args():
         'Preference Comparisons Parameters')
     pc_group.add_argument('-dfp', '--discount_factor_preferences', type=float,
                           default=None, help='Discount factor for preference comparisons')
+    pc_group.add_argument('-expobs', '--expose_observations', action='store_true',
+                          default=False, help='Discount factor for preference comparisons')
     pc_group.add_argument('-qp', '--use_quantified_preference', action='store_true',
                           default=True, help='Use quantified preference flag')
     pc_group.add_argument('-temp', '--preference_sampling_temperature',
@@ -137,28 +140,41 @@ if __name__ == "__main__":
     training_data: EnvDataForIRL
 
     task = parser_args.task
+    algorithm = parser_args.algorithm
     environment = parser_args.environment
 
+
+    # In any case, Algorithm 1 is the evaluated algorithm for tasks 'vsi' and 'vgl')
+    # Algorithm 0 is only used in the full VSL (Value System Learning) pipeline 
+    # (algorithm[0] is the one used for VGL in that case, which defaults to 'pc')
+    if len(algorithm) == 2:
+        algorithm = ['pc', algorithm] # by default, PC method is used for VSL.
+    else:
+        algorithm = algorithm.split('-')
+
+
+
+    if algorithm[1] == 'ad' or algorithm[1] == 'ta':
+        parser_args.expose_observations = False # the observations will be used only to calculate the rewards with env.obs_from_state or policy.obtain_observation_for_reward
+
     if task == 'vsi' and environment == 'firefighters':
-        parser_args.feature_selection = FeatureSelectionFFEnv.ONE_HOT_OBSERVATIONS
-        parser_args.use_one_hot_state_action = True
+        parser_args.feature_selection = FeatureSelectionFFEnv.ONE_HOT_FEATURES
+        parser_args.use_one_hot_state_action = False #if parser_args.feature_selection == FeatureSelectionFFEnv.ENCRYPTED_OBSERVATIONS else False
+    
     if parser_args.environment == 'firefighters':
         value_names = EnvDataForIRLFireFighters.VALUES_NAMES
         
-        parser_args.approx_expert = True
         training_data = EnvDataForIRLFireFighters(
             env_name=FIRE_FIGHTERS_ENV_NAME,
             **dict(parser_args._get_kwargs()))
         #assert training_data.approx_expert is True
     elif parser_args.environment == 'roadworld':
         value_names = EnvDataForRoadWorld.VALUES_NAMES
-        parser_args.approx_expert = True # TODO Need more testing:
         
         training_data = EnvDataForRoadWorld(
             env_name=ROAD_WORLD_ENV_NAME,
             **dict(parser_args._get_kwargs()))
-        if not training_data.approx_expert: # TODO Still need more testing... For now it is approximating the best route
-            #policy_approximator(env, reward, discount, **approximator_kwargs)
+        if not training_data.approx_expert: 
             training_data.policy_approximation_method = lambda env, reward, discount, **kwargs: (None, None, training_data.compute_precise_policy(env, w=None, reward=reward))
     
         
@@ -176,16 +192,66 @@ if __name__ == "__main__":
         task = 'all'
         target_align_funcs_to_learned_align_funcs_per_round = []
 
-    algorithm = parser_args.algorithm
-    environment = parser_args.environment
     
-    # In any case, Algorithm 1 is the evaluated algorithm for tasks 'vsi' and 'vgl')
-    # Algorithm 0 is only used in the full VSL (Value System Learning) pipeline 
-    # (algorithm[0] is the one used for VGL in that case, which defaults to 'pc')
-    if len(algorithm) == 2:
-        algorithm = ['pc', algorithm] # by default, PC method is used for VSL.
-    else:
-        algorithm = algorithm.split('-')
+    if algorithm[1] == 'ad':
+        print("adversarial testing")
+        vsl_algo = AdversarialVSL(
+            env=training_data.env,
+            reward_net=training_data.get_reward_net(),
+            log_interval=parser_args.log_interval,
+            vsi_optimizer_cls=training_data.vsi_optimizer_cls,
+            vgl_optimizer_cls=training_data.vgl_optimizer_cls,
+            vsi_optimizer_kwargs=training_data.vsi_optimizer_kwargs,
+            vgl_optimizer_kwargs=training_data.vgl_optimizer_kwargs,
+            vgl_expert_policy=training_data.vgl_expert_policy,
+            vsi_expert_policy=training_data.vsi_expert_policy,
+            vgl_expert_sampler=training_data.vgl_expert_train_sampler,
+            vsi_expert_sampler=training_data.vsi_expert_train_sampler,
+            target_align_func_sampler=training_data.target_align_func_sampler,
+            vgl_target_align_funcs=training_data.vgl_targets,
+            vsi_target_align_funcs=training_data.vsi_targets,
+            training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+            learn_stochastic_policy=training_data.learn_stochastic_policy,
+            #policy_approximator=training_data.policy_approximation_method,
+            #approximator_kwargs=training_data.approximator_kwargs,
+            #stochastic_expert=training_data.stochastic_expert,
+            #expert_is_stochastic=training_data.stochastic_expert,
+            discount=training_data.discount_factor,
+            **(training_data.ad_config['vsi'])
+            
+        )
+    if algorithm[1] == 'ta':
+        print("adversarial testing")
+        vsl_algo = TabularAdversarialVSL(
+            env=training_data.env,
+            reward_net=training_data.get_reward_net(),
+            log_interval=parser_args.log_interval,
+            vsi_optimizer_cls=training_data.vsi_optimizer_cls,
+            vgl_optimizer_cls=training_data.vgl_optimizer_cls,
+            vsi_optimizer_kwargs=training_data.vsi_optimizer_kwargs,
+            vgl_optimizer_kwargs=training_data.vgl_optimizer_kwargs,
+            vgl_expert_policy=training_data.vgl_expert_policy,
+            vsi_expert_policy=training_data.vsi_expert_policy,
+            vgl_expert_sampler=training_data.vgl_expert_train_sampler,
+            vsi_expert_sampler=training_data.vsi_expert_train_sampler,
+            target_align_func_sampler=training_data.target_align_func_sampler,
+            vgl_target_align_funcs=training_data.vgl_targets,
+            vsi_target_align_funcs=training_data.vsi_targets,
+            training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+            learn_stochastic_policy=training_data.learn_stochastic_policy,
+            policy_approximator=training_data.policy_approximation_method,
+            approximator_kwargs=training_data.approximator_kwargs,
+            stochastic_expert=training_data.stochastic_expert,
+            discount=training_data.discount_factor,
+            **(training_data.tad_config['vsi'])
+            
+        )
+        """alg_ret = vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING if vgl_or_vsi == 'vgl' else TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
+                                 assumed_grounding=training_data.get_assumed_grounding() if vgl_or_vsi == 'vsi' else None,
+                                 use_probabilistic_reward=parser_args.use_probabilistic_reward if vgl_or_vsi != 'vgl' else False,
+                                 n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
+                                 **(training_data.ad_train_config['vsi']))"""
+        
     if algorithm[1] == 'me':
         vsl_algo = MaxEntropyIRLForVSL(
             env=training_data.env,
@@ -313,9 +379,10 @@ if __name__ == "__main__":
 
         if task == 'all':
             assumed_grounding, reward_net_learned_per_al_func, metrics = vgl_before_vsi_vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING,
+                                                                                                       assumed_grounding=None,
                                                                                                        use_probabilistic_reward=False,
                                                                                                        n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                                       **training_data.pc_train_config['vgl'])
+                                                                                                       **(training_data.pc_train_config['vgl'] if algorithm[0] == 'pc' else training_data.me_train_config['vgl']))
             vsl_algo.reward_net = vgl_before_vsi_vsl_algo.reward_net
             
         elif task == 'vsi':
@@ -328,8 +395,10 @@ if __name__ == "__main__":
                                  assumed_grounding=assumed_grounding if vgl_or_vsi == 'vsi' else None,
                                  use_probabilistic_reward=parser_args.use_probabilistic_reward if vgl_or_vsi != 'vgl' else False,
                                  n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                 **(training_data.me_train_config[vgl_or_vsi] if algorithm[1] == 'me' else training_data.pc_train_config[vgl_or_vsi]))
-
+                                 **(training_data.me_train_config[vgl_or_vsi] if algorithm[1] == 'me' else 
+                                    training_data.ad_train_config[vgl_or_vsi] if algorithm[1] == 'ad' else
+                                    training_data.tad_train_config[vgl_or_vsi] if algorithm[1] == 'ta' else {}))
+        
         if vgl_or_vsi == 'vsi':
             target_align_funcs_to_learned_align_funcs, reward_net_learned_per_al_func, metrics = alg_ret
         else:
@@ -364,7 +433,7 @@ if __name__ == "__main__":
     plot_learning_curves(algo=vsl_algo, historic_metric=plot_metric_per_round,
                          usecmap = 'viridis',
                          ylim=None if name_metric != 'Accuracy' else (0.0, 1.1),
-                         name_metric=name_metric if algorithm[1] == 'me' else 'Accuracy',
+                         name_metric=name_metric, #if algorithm[1] == 'me' else 'Accuracy',
                          name_method=f'{parser_args.experiment_name}{algorithm[1]}_{extras}expected_{name_metric}_over_{n_experiment_reps}_{environment}_{task}',
                          align_func_colors=training_data.align_colors)
 
@@ -417,16 +486,16 @@ if __name__ == "__main__":
 
     preference_metrics_expert_random, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(
         learned_rewards_per_round=learned_reward_per_test_al_round,
-                                                                                                    testing_policy_per_round=testing_policy_per_round,
-                                                                                                    expert_policy=expert_policy_tests,
-                                                                                                    random_policy=random_policy_tests,
-                                                                                                    target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
-                                                                                                    n_seeds=parser_args.n_trajs_testing,  # parser_args.n_trajs_for_testing,
-                                                                                                    seed=training_data.seed+2321489,#not to have the same trajectories as in training
-                                                                                                    ratios_expert_random=parser_args.expert_to_random_ratios,
-                                                                                                    n_samples_per_seed=1,
-                                                                                                    initial_state_distribution_for_expected_alignment_estimation=training_data.initial_state_distribution_for_expected_alignment_eval,
-                                                                                                    testing_align_funcs=testing_profiles)
+        testing_policy_per_round=testing_policy_per_round,
+        expert_policy=expert_policy_tests,
+        random_policy=random_policy_tests,
+        target_align_funcs_to_learned_align_funcs=target_align_funcs_to_learned_align_funcs_per_round,
+        n_seeds=parser_args.n_trajs_testing,  # parser_args.n_trajs_for_testing,
+        seed=training_data.seed+2321489,#not to have the same trajectories as in training
+        ratios_expert_random=parser_args.expert_to_random_ratios,
+        n_samples_per_seed=1,
+        initial_state_distribution_for_expected_alignment_estimation=training_data.initial_state_distribution_for_expected_alignment_eval,
+        testing_align_funcs=testing_profiles)
     plot_vs_preference_metrics(preference_metrics_expert_random, namefig=f'{parser_args.experiment_name}{algorithm[1]}_{extras}expected_over_{n_experiment_reps}_{environment}_{task}',
                     align_func_colors=training_data.align_colors,
                     values_names=value_names,usecmap = 'viridis',
