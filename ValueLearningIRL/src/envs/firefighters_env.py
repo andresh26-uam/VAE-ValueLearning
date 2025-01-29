@@ -108,7 +108,7 @@ class FireFightersEnv(TabularVAMDP):
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s, a, s] = 1.0
                     reward_matrix_per_va[(1.0, 0.0)][s, a], reward_matrix_per_va[(
-                        0.0, 1.0)][s, a] = [0.0,0.0]  if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
+                        0.0, 1.0)][s, a] = self.real_env.calculate_rewards(s_trans, a, ns_trans)  if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
 
         self._goal_states = np.asarray(_goal_states)
         self._invalid_states = np.asarray(_invalid_states)
@@ -145,11 +145,11 @@ class FireFightersEnv(TabularVAMDP):
         
         v = self.reward_matrix_per_va_dict[(1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
         
-        assert np.max(v) <= 1.00001
-        assert np.min(v) >= -1.00001
+        #assert np.max(v) <= 1.00001
+        #assert np.min(v) >= -1.00001
         return v
     def get_state_actions_with_known_reward(self, align_func):
-        return self._states_with_known_reward
+        return None #self._states_with_known_reward
 
     @property
     def state(self) -> np.dtype:

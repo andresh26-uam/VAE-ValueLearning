@@ -1180,7 +1180,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
         elif state == self.cur_des:
             rew = 0.0
         elif nstate == self.cur_des:
-            rew = 10.0 # This is the key... It is hard for RL to converge when 0 (actually learns another thing. To get there need a lot of reward, but not too much to cause overfitting...)
+            rew = 1.0 # This is the key... It is hard for RL to converge when 0 (actually learns another thing. To get there need a lot of reward, but not too much to cause overfitting...)
         elif nstate not in self.valid_edges:
             rew =  -10000.0
         elif action not in self.get_action_list(state):

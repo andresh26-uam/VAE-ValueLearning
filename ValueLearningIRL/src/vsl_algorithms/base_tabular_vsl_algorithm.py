@@ -229,7 +229,7 @@ def mce_partition_fh(
                 
                 V[inv_states] = values_prev[inv_states]
             err = np.max(np.abs(V-values_prev))
-            if iterations > 1000:
+            if iterations > 0.9*max_iterations:
                 print("VALUE ITERATION IS HARD HERE", err,iterations, np.mean(np.abs(V-values_prev)))
             
             iterations += 1
@@ -288,16 +288,14 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
     ) -> None:
         super().__init__(env=env, reward_net=reward_net, vgl_optimizer_cls=vgl_optimizer_cls,
+                         stochastic_expert=stochastic_expert, environment_is_stochastic=environment_is_stochastic,
                          vsi_optimizer_cls=vsi_optimizer_cls, vsi_optimizer_kwargs=vsi_optimizer_kwargs,
                          vgl_optimizer_kwargs=vgl_optimizer_kwargs, discount=discount, log_interval=log_interval, vgl_expert_policy=vgl_expert_policy, vsi_expert_policy=vsi_expert_policy,
                          target_align_func_sampler=target_align_func_sampler, vsi_target_align_funcs=vsi_target_align_funcs,
                          vgl_target_align_funcs=vgl_target_align_funcs, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy)
         self.rewards_per_target_align_func_callable = None
-        self.environment_is_stochastic = environment_is_stochastic
-        self.stochastic_expert= stochastic_expert
         self.approximator_kwargs = approximator_kwargs
         self.policy_approximator=policy_approximator
-        self.__previous_next_states = None
 
     def get_metrics(self):
         return dict_metrics(learned_rewards=self.rewards_per_target_align_func_callable)
@@ -329,30 +327,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
             next_obs_mat, dtype=self.current_net.dtype, device=self.current_net.device)
         return torch_next_obs_mat
 
-    def _resample_next_states(self):
-        n_actions = self.env.action_dim
-        n_states = self.env.state_dim
-
-        next_state_mat = np.zeros((n_states, n_actions))
-        if not self.environment_is_stochastic:
-            if self.__previous_next_states is not None:
-                return self.__previous_next_states.clone().detach()
-
-        for a in range(n_actions):
-            for s in range(n_states):
-                tr = self.env.transition_matrix[s, a]
-                if np.allclose(tr, 0.0):
-                    ns = s
-                else:
-                    ns = np.random.choice(n_states, size=1, p=tr)[0]
-                next_state_mat[s, a] = ns
-
-        """next_states = sample_next_states(self.env.transition_matrix)
-        next_obs_mat = self.env.observation_matrix[next_states]"""
-        torch_next_state_mat = th.as_tensor(
-            next_state_mat, dtype=th.long).requires_grad_(False).detach()
-        self.__previous_next_states = torch_next_state_mat
-        return torch_next_state_mat
+    
 
     def calculation_rew(self, align_func, obs_mat, action_mat=None, obs_action_mat=None, next_state_obs=None, use_probabilistic_reward=False):
         if use_probabilistic_reward:
@@ -402,15 +377,16 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
         if use_probabilistic_reward:
             self.current_net.free_alignment_function()
 
-        state_actions_with_special_reward = self.env.get_state_actions_with_known_reward(
-            used_alignment_func)
-        
+        if obs_mat.shape[0] == self.torch_obs_mat.shape[0]: # TODO. this is a huge issue.
+            state_actions_with_special_reward = self.env.get_state_actions_with_known_reward(
+                used_alignment_func)
+            
 
-        if state_actions_with_special_reward is not None:
-            predicted_r[state_actions_with_special_reward] = th.as_tensor(
-                self.env.reward_matrix_per_align_func(used_alignment_func)[
-                    state_actions_with_special_reward],
-                dtype=predicted_r.dtype, device=predicted_r.device)
+            if state_actions_with_special_reward is not None:
+                predicted_r[state_actions_with_special_reward] = th.as_tensor(
+                    self.env.reward_matrix_per_align_func(used_alignment_func)[
+                        state_actions_with_special_reward],
+                    dtype=predicted_r.dtype, device=predicted_r.device)
 
         return predicted_r, used_alignment_func, probability
 
@@ -484,7 +460,9 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
         return ret
 
-    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10, **kwargs) -> np.ndarray:
+    def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None, 
+              n_seeds_for_sampled_trajectories=None, n_sampled_trajs_per_seed=1, use_probabilistic_reward=False, 
+              n_reward_reps_if_probabilistic_reward=10, **kwargs) -> np.ndarray:
         obs_mat = self.env.observation_matrix
 
         self.torch_obs_mat = th.as_tensor(
@@ -546,7 +524,7 @@ class BaseTabularMDPVSLAlgorithm(BaseVSLAlgorithm):
 
     def state_action_reward_from_computed_reward(self, rewards):
         return rewards
-    def get_policy_from_reward_per_align_func(self, align_funcs, reward_net_per_al: Dict[tuple, AbstractVSLRewardFunction], expert=False, random=False, use_custom_grounding=None, 
+    def get_tabular_policy_from_reward_per_align_func(self, align_funcs, reward_net_per_al: Dict[tuple, AbstractVSLRewardFunction], expert=False, random=False, use_custom_grounding=None, 
                                               target_to_learned =None, use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10,
                                               state_encoder = None, expose_state=True, precise_deterministic=False):
         reward_matrix_per_al = dict()

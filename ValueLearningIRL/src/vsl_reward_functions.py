@@ -153,7 +153,94 @@ class TrainingModes(enum.Enum):
     SIMULTANEOUS = 'sim_learning'
     EVAL = 'eval'
 
+class GroundingEnsemble(th.nn.Module):
+    def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, **kwargs):
+        super(GroundingEnsemble, self).__init__()
+        
+        self.hid_sizes = hid_sizes
+        self.num_outputs = self.hid_sizes[-1]
+        self.input_size = input_size
+        self.basic_layer_classes = basic_classes
+        self.use_bias = use_bias
+        if isinstance(self.use_bias, bool):
+            self.use_bias = [self.use_bias]*len(self.hid_sizes)
+        self.activations = activations
+        self.debug = debug
+        # Initialize multiple copies of base network with 1 output each
+        self.networks = th.nn.ModuleList([
+            self._create_single_output_net() for _ in range(self.num_outputs)
+        ])
+        self.c = 0
 
+    def _create_single_output_net(self):
+        """Creates a single-output version of the original network structure."""
+        modules = []
+        for i in range(1, len(self.hid_sizes)):
+            next_size = self.hid_sizes[i] if i < len(self.hid_sizes)-1 else 1
+            linmod = self.basic_layer_classes[i - 1](
+                self.hid_sizes[i - 1],  next_size, bias=self.use_bias[i-1]
+            )
+
+            """# Check if it’s a ConvexLinearModule and initialize weights if so
+            if isinstance(linmod, ConvexLinearModule):
+                state_dict = linmod.state_dict()
+                state_dict['weight'] = th.rand(
+                    *(state_dict['weight'].shape), requires_grad=True
+                )
+                state_dict['weight'] /= th.sum(state_dict['weight'])
+                linmod.load_state_dict(state_dict)
+                assert th.all(linmod.state_dict()['weight'] > 0)
+"""
+            modules.append(linmod)
+            modules.append(self.activations[i - 1]())
+        
+        return th.nn.Sequential(*modules)
+    def requires_grad_(self, requires_grad = True):
+        r = super().requires_grad_(requires_grad)
+        for n in self.networks:
+            n.requires_grad_(requires_grad)
+        self.networks.requires_grad_(requires_grad)
+        return r
+    def __str__(self):
+        
+        ret = ""
+        for ic in range(self.hid_sizes[-1]):
+            ret += (f"{ic}:" + str(self.networks[ic].state_dict()))
+        
+        
+        return (ret + super().__str__())
+    def forward(self, x):
+        # Run input `x` through each network in self.networks and concatenate outputs
+        outputs = [net(x) for net in self.networks]
+        outputs =  th.cat(outputs, dim=1)
+        if self.debug:
+            if th.is_grad_enabled():
+                # Define a loss function that only considers the output at `target_output_index`
+                target = th.tensor([[1.0]])  # Example target value for selected output
+                profile = [0]*self.hid_sizes[-1]
+                profile[0] = 1.0
+                loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile), bias=None), target)
+
+                # Backward pass to calculate gradients
+                loss.backward(retain_graph=False)
+                
+                
+                # Check gradients for isolation: verify only target network parameters have gradients
+                for idx, network in enumerate(self.networks):
+                    #print(f"Gradients for network {idx}:")
+                    for param in network.parameters():
+                        if param.grad is not None:
+                            if idx == 0:
+                                assert param.grad is not None
+                                assert th.all(param.grad == 0)
+                                continue
+                            else:
+                                none_grad = param.grad is None
+                                if not none_grad:
+                                    
+                                    assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
+        
+        return outputs
 class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
@@ -181,6 +268,8 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                  mode=TrainingModes.VALUE_GROUNDING_LEARNING,
                  features_extractor_class = None,
                  features_extractor_kwargs = None,
+                 action_features_extractor_class = None,
+                 action_features_extractor_kwargs = None,
                  clamp_rewards=None,
                  **kwargs):
         if environment is None and (observation_space is None or action_space is None):
@@ -255,7 +344,10 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         self.input_size = combined_size
         self.features_extractor_class = features_extractor_class
         self.features_extractor_kwargs = features_extractor_kwargs
+        self.action_features_extractor_class = action_features_extractor_class
+        self.action_features_extractor_kwargs = action_features_extractor_kwargs
         self.features_extractor = None
+        self.action_features_extractor = None
         
                                                                                 
 
@@ -372,10 +464,16 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                     state = self.features_extractor(state)
                 inputs.append(th.flatten(state, 1))
             if self.use_action:
-                if len(action.shape) > 1:
-                    inputs.append(th.flatten(action, 1))
+                
+                """if len(action.shape) > 1:
+                    preprocessed_action = th.flatten(action, 1)
                 else:
-                    inputs.append(action.unsqueeze(0))
+                    preprocessed_action = action.unsqueeze(0)"""
+                if self.action_features_extractor is None:
+                    self.action_features_extractor = self.action_features_extractor_class(self.action_space, **self.action_features_extractor_kwargs)
+                preprocessed_action = self.action_features_extractor(action)
+                inputs.append(preprocessed_action)
+                
             if self.use_next_state:
                 if not self.observation_space.contains(next_state.detach().numpy()[0] if isinstance(next_state, th.Tensor) else next_state[0]):
                     if self.features_extractor is None:
@@ -400,7 +498,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         pass
 
     @abstractmethod
-    def get_learned_grounding(self):
+    def get_learned_grounding(self) -> th.nn.Module:
         pass
 
     @abstractmethod
@@ -424,6 +522,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                  independent_grounding_layer=True,
                  features_extractor_class=None,
                  features_extractor_kwargs=None,
+                 action_features_extractor_class = None,
+                 action_features_extractor_kwargs = None,
                  **kwargs):
 
         if hasattr(environment, 'last_profile'):
@@ -436,7 +536,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             
         else:
             # Use bias everywhere.
-            self.use_bias = [use_bias]*len(hid_sizes)
+            self.use_bias = [use_bias]*(len(hid_sizes) + 1)
         assert len(self.use_bias) == len(hid_sizes) + 1
         super().__init__(environment=environment, action_dim=action_dim, state_dim=state_dim, observation_space=observation_space,
                          action_space=action_space,
@@ -445,7 +545,11 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                          use_next_state=use_next_state,
                          use_done=use_done,
                          clamp_rewards=clamp_rewards,
-                         use_one_hot_state_action=use_one_hot_state_action, mode=mode,features_extractor_class=features_extractor_class,features_extractor_kwargs=features_extractor_kwargs)
+                         use_one_hot_state_action=use_one_hot_state_action, mode=mode,
+                         features_extractor_class=features_extractor_class,
+                         features_extractor_kwargs=features_extractor_kwargs,
+                         action_features_extractor_class=action_features_extractor_class,
+                         action_features_extractor_kwargs=action_features_extractor_kwargs)
         
         self.reward_bias = reward_bias
         # self.mlp = networks.build_mlp(**full_build_mlp_kwargs)
@@ -631,7 +735,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def get_learned_align_function(self):
         return self.get_learned_profile()
 
-    def get_learned_grounding(self):
+    def get_learned_grounding(self) -> GroundingEnsemble:
         return self.values_net
 
     def save_checkpoint(self, file="reward_function_checkpoint.pt"):
@@ -814,91 +918,3 @@ def squeeze_r(r_output: th.Tensor) -> th.Tensor:
 
 
 
-class GroundingEnsemble(th.nn.Module):
-    def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, **kwargs):
-        super(GroundingEnsemble, self).__init__()
-        
-        self.hid_sizes = hid_sizes
-        self.num_outputs = self.hid_sizes[-1]
-        self.input_size = input_size
-        self.basic_layer_classes = basic_classes
-        self.use_bias = use_bias
-        if isinstance(self.use_bias, bool):
-            self.use_bias = [self.use_bias]*len(self.hid_sizes)
-        self.activations = activations
-        self.debug = debug
-        # Initialize multiple copies of base network with 1 output each
-        self.networks = th.nn.ModuleList([
-            self._create_single_output_net() for _ in range(self.num_outputs)
-        ])
-        self.c = 0
-
-    def _create_single_output_net(self):
-        """Creates a single-output version of the original network structure."""
-        modules = []
-        for i in range(1, len(self.hid_sizes)):
-            next_size = self.hid_sizes[i] if i < len(self.hid_sizes)-1 else 1
-            linmod = self.basic_layer_classes[i - 1](
-                self.hid_sizes[i - 1],  next_size, bias=self.use_bias[i-1]
-            )
-
-            """# Check if it’s a ConvexLinearModule and initialize weights if so
-            if isinstance(linmod, ConvexLinearModule):
-                state_dict = linmod.state_dict()
-                state_dict['weight'] = th.rand(
-                    *(state_dict['weight'].shape), requires_grad=True
-                )
-                state_dict['weight'] /= th.sum(state_dict['weight'])
-                linmod.load_state_dict(state_dict)
-                assert th.all(linmod.state_dict()['weight'] > 0)
-"""
-            modules.append(linmod)
-            modules.append(self.activations[i - 1]())
-        
-        return th.nn.Sequential(*modules)
-    def requires_grad_(self, requires_grad = True):
-        r = super().requires_grad_(requires_grad)
-        for n in self.networks:
-            n.requires_grad_(requires_grad)
-        self.networks.requires_grad_(requires_grad)
-        return r
-    def __str__(self):
-        
-        ret = ""
-        for ic in range(self.hid_sizes[-1]):
-            ret += (f"{ic}:" + str(self.networks[ic].state_dict()))
-        
-        
-        return (ret + super().__str__())
-    def forward(self, x):
-        # Run input `x` through each network in self.networks and concatenate outputs
-        outputs = [net(x) for net in self.networks]
-        outputs =  th.cat(outputs, dim=1)
-        if self.debug:
-            if th.is_grad_enabled():
-                # Define a loss function that only considers the output at `target_output_index`
-                target = th.tensor([[1.0]])  # Example target value for selected output
-                profile = [0]*self.hid_sizes[-1]
-                profile[0] = 1.0
-                loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile), bias=None), target)
-
-                # Backward pass to calculate gradients
-                loss.backward(retain_graph=False)
-                
-                
-                # Check gradients for isolation: verify only target network parameters have gradients
-                for idx, network in enumerate(self.networks):
-                    #print(f"Gradients for network {idx}:")
-                    for param in network.parameters():
-                        if param.grad is not None:
-                            if idx == 0:
-                                assert param.grad is not None
-                                assert th.all(param.grad == 0)
-                                continue
-                            else:
-                                none_grad = param.grad is None
-                                if not none_grad:
-                                    
-                                    assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
-        
-        return outputs

@@ -812,6 +812,7 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 reward_net_per_target[target_align_func] = self.current_net.copy()
             """
         for vi, target_align_func in enumerate(reversed(self.vgl_target_align_funcs)):
+            self.current_net.set_alignment_function(target_align_func)
             self._train_global(max_iter, target_align_func,
                                 reference_trajs_per_profile,)
             

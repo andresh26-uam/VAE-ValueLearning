@@ -119,7 +119,7 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
         return np.arange(self.reward_matrix.shape[1])
     def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info= None):
         return self.reward_matrix_per_align_func(align_func)[info['state'], action]
-
+    
     def get_state_actions_with_known_reward(self, align_func):
         return None
     

@@ -1,13 +1,13 @@
 from abc import abstractmethod
+from copy import deepcopy
 import enum
 from functools import partial
 import itertools
 import pickle
 import gymnasium as gym
 import numpy as np
-from stable_baselines3 import DQN, PPO
+from stable_baselines3 import PPO
 from sb3_contrib.ppo_mask import MaskablePPO
-from stable_baselines3.dqn.policies import DQNPolicy
 
 from firefighters_use_case.constants import ACTION_AGGRESSIVE_FIRE_SUPPRESSION
 from firefighters_use_case.pmovi import pareto_multi_objective_value_iteration, scalarise_q_function
@@ -172,7 +172,7 @@ class EnvDataForIRL():
         self.profile_variety = 1
         self.n_values = 0
         self.expose_observations = False
-
+        
         self.target_align_func_sampler = lambda al_func: al_func
         self.reward_trainer_kwargs = {
             'epochs': 5,
@@ -182,7 +182,7 @@ class EnvDataForIRL():
         }
         self.horizon = self.__class__.DEFAULT_HORIZON
         self.initial_state_distribution = 'random'
-        self.stochastic_expert = True
+        self.stochastic_expert = False
         self.learn_stochastic_policy = True
         self.environment_is_stochastic = False  # If known to be False,
         # some processes can be made faster for some algorithms.
@@ -243,6 +243,8 @@ class EnvDataForIRL():
             env = self.env,
             dtype=torch.float32,
         )
+        action_features_extractor_class = OneHotFeatureExtractor
+        action_features_extractor_kwargs = dict(n_categories=self.env.action_dim)
         return LinearVSLRewardFunction(
             environment=self.env,
             use_state=self.use_state,
@@ -259,7 +261,10 @@ class EnvDataForIRL():
             clamp_rewards=self.clamp_rewards,
             mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
             features_extractor_class=features_extractor_class,
-            features_extractor_kwargs =features_extractor_kwargs
+            features_extractor_kwargs =features_extractor_kwargs,
+            action_features_extractor_class=action_features_extractor_class,
+            action_features_extractor_kwargs=action_features_extractor_kwargs
+            
         )
 
     @abstractmethod
@@ -298,6 +303,82 @@ class EnvDataForIRL():
 
         return {'vgl': dict(policy_kwargs=policy_kwargs, learner_kwargs=learner_kwargs),
                 'vsi': dict(policy_kwargs=policy_kwargs, learner_kwargs=learner_kwargs)}
+    @property
+    def iq_config(self):
+        qnetwork_kwargs={
+                     'net_arch': [],
+                     'activation_fn': torch.nn.Identity,
+                     'features_extractor_class': OneHotFeatureExtractor,
+                     'features_extractor_kwargs': dict(n_categories=self.env.state_dim),
+                 }
+        pred_network_kwargs = {
+                     'net_arch': [],
+                     'activation_fn': torch.nn.Identity,
+                     'features_extractor_class': OneHotFeatureExtractor,
+                     'features_extractor_kwargs': dict(n_categories=self.env.state_dim),
+                 }
+        return {'vgl': 
+                {
+                    'qnetwork_kwargs': qnetwork_kwargs,
+                    'pred_network_kwargs': pred_network_kwargs,
+                }, 'vsi': {
+                    'qnetwork_kwargs': qnetwork_kwargs,
+                    'pred_network_kwargs': pred_network_kwargs,
+                }
+        }
+    @property
+    def iq_train_config(self):
+        q_optimizer_kwargs = {
+                     'lr': self.vsi_optimizer_kwargs['lr'],
+                     'weight_decay': 0.0
+                 }
+        pred_optimizer_kwargs = {
+            'lr': self.vsi_optimizer_kwargs['lr'],
+            'weight_decay': 0.0
+        }
+        #self.vsi_optimizer_kwargs = {"lr": 0.001, "weight_decay": 0.0000, "betas": (0.5, 0.999)} # FOR DEMO_OM_TRUE 0.05 before
+        #q_optimizer_kwargs = self.vsi_optimizer_kwargs
+        #pred_optimizer_kwargs = self.vsi_optimizer_kwargs # TODO test other parameters
+        n_seeds_for_sampled_trajectories=self.n_seeds_total # 1000 was too few with full variable length trajectories
+        n_sampled_trajs_per_seed=self.n_expert_samples_per_seed
+            
+        return {'vgl': 
+                {
+                    'q_optimizer_kwargs': q_optimizer_kwargs,
+                    'pred_optimizer_kwargs': pred_optimizer_kwargs,
+                    'n_seeds_for_sampled_trajectories': n_seeds_for_sampled_trajectories,
+                    'n_sampled_trajs_per_seed': n_sampled_trajs_per_seed,
+                    'demo_batch_size': 100
+                }, 'vsi': {
+                    'q_optimizer_kwargs': pred_optimizer_kwargs,
+                    'pred_optimizer_kwargs': pred_optimizer_kwargs,
+                    'n_seeds_for_sampled_trajectories': n_seeds_for_sampled_trajectories,
+                    'n_sampled_trajs_per_seed': n_sampled_trajs_per_seed,
+                    'demo_batch_size': 100
+                }}
+    @property
+    def tiq_config(self):
+        return {'vgl': {}, 'vsi': {}}
+    @property
+    def tiq_train_config(self):
+        base = {'vgl': dict(n_seeds_for_sampled_trajectories=self.n_seeds_total,
+                            n_sampled_trajs_per_seed=self.n_expert_samples_per_seed,), 
+                            'vsi': dict(n_seeds_for_sampled_trajectories=self.n_seeds_total,
+                                    n_sampled_trajs_per_seed=self.n_expert_samples_per_seed,)}
+
+        base['vgl'].update(dict(
+            max_iter=10000,
+            alpha_q = 0.01,
+            alpha_sh = 0.01,
+            
+        ))
+        base['vsi'].update(dict(
+            max_iter=10000,
+            alpha_q = 0.01,
+            alpha_sh = 0.01,
+        ))
+        return base
+        
     
     @property
     def me_config(self):
@@ -359,11 +440,11 @@ class EnvDataForIRL():
 class EnvDataForIRLFireFighters(EnvDataForIRL):
     DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
-    DEFAULT_N_SEEDS = 50 
-    DEFAULT_N_SEEDS_MINIBATCH = 10
-    DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 10
-    DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 10
-    DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 10
+    DEFAULT_N_SEEDS = 1000 
+    DEFAULT_N_SEEDS_MINIBATCH = 200
+    DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 1
+    DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 1
+    DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 1
     DEFAULT_FEATURE_SELECTION = FeatureSelectionFFEnv.ONE_HOT_FEATURES
     VALUES_NAMES = {(1.0, 0.0): 'Prof', (0.0, 1.0): 'Prox'}
     POLICY_SAVE_PATH = 'EXPERT_PPO_FF'
@@ -372,7 +453,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         [1, 0, 0], [0, 0, 1], align_func)
 
     def __init__(self, env_name, discount_factor=1.0, feature_selection=DEFAULT_FEATURE_SELECTION, horizon=DEFAULT_HORIZON, is_society=False, initial_state_dist=DEFAULT_INITIAL_STATE_DISTRIBUTION, learn=False, use_pmovi_expert=USE_PMOVI_EXPERT, n_seeds_for_samplers=DEFAULT_N_SEEDS,
-                 sampler_over_precalculated_trajs=False, **kwargs):
+                 sampler_over_precalculated_trajs=True, **kwargs):
         super().__init__(env_name, discount_factor, **kwargs)
 
         self.horizon = horizon
@@ -511,7 +592,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         
         if sampler_over_precalculated_trajs:
             expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
-                                                                        align_funcs_in_policy=profiles, t_max=self.horizon,with_reward=True)
+                                                                        align_funcs_in_policy=[profiles[0]], t_max=self.horizon,with_reward=True)
             
             initial_states_of_expert_trajs = [t.obs[0] for t in expert_trajs_train]
             initial_state_dist_expert_trajs = np.zeros_like(self.env.initial_state_dist)
@@ -525,13 +606,13 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             expert_policy_train.env.set_initial_state_distribution(initial_state_dist_intersected)
             
             # TODO 20000? Maybe a big enough sample is enough to imitate correctly (to test?)
-            expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=20000, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
+            expert_trajs_train = expert_policy_train.obtain_trajectories(n_seeds=self.n_seeds_total, seed=self.seed, stochastic=self.stochastic_expert, repeat_per_seed=self.n_expert_samples_per_seed,
                                                                     align_funcs_in_policy=profiles, t_max=self.horizon,with_reward=True)
         
             self.vgl_expert_train_sampler = partial(
-                partial(random_sampler_among_trajs, replace=True), expert_trajs_train)
+                partial(random_sampler_among_trajs, replace=False), expert_trajs_train)
             self.vsi_expert_train_sampler = partial(
-                partial(random_sampler_among_trajs, replace=True), expert_trajs_train)
+                partial(random_sampler_among_trajs, replace=False), expert_trajs_train)
             
         else:
             self.vgl_expert_train_sampler = partial(
@@ -545,14 +626,19 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.vsi_reference_policy = expert_policy_train
     def set_defaults(self):
 
-        self.stochastic_expert = True # TODO STOCHASTIC FF?
-        self.learn_stochastic_policy = True
+        self.stochastic_expert = False # TODO STOCHASTIC FF?
+        self.learn_stochastic_policy = False
         self.environment_is_stochastic = False
 
         self.vgl_targets = [(1.0, 0.0), (0.0, 1.0)]
-        self.vsi_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.0000, "betas": (0.9, 0.999)} # FOR DEMO_OM_TRUE 0.05 before
-        #self.vsi_optimizer_kwargs = {"lr": 0.01, "weight_decay": 0.0000} # DEMO_OM_FALSE
-        self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.000}
+        #self.vsi_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.0000, "betas": (0.9, 0.999)} # ME DEMO_OM_TRUE 0.05 before
+        self.vsi_optimizer_kwargs = {"lr": 0.01, "weight_decay": 0.0000} # ME DEMO_OM_FALSE
+        #self.vsi_optimizer_kwargs = {"lr": 0.01, "weight_decay": 0.0000, "betas": (0.0, 0.0)} # if IQL TODO
+        #self.vsi_optimizer_kwargs = {"lr": 0.0001, "weight_decay": 0.0000, "betas": (0.0,0.0)} # if TIQL
+        #self.vsi_optimizer_kwargs = {"lr": 0.005, "weight_decay": 0.0000, "betas": (0.0, 0.0)} # if ADL TODO
+        
+        #self.vgl_optimizer_kwargs = {"lr": 0.03, "weight_decay": 0.000} # ME DEMO_OM FALSE
+        self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.000} # IN ME THIS IS NOT USED, SEE CUSTOM_OPTIMIZER_KWARGS.
 
         self.use_state = True
         self.use_action = True
@@ -569,9 +655,9 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 
         self.profile_variety = 6
 
-        self.policy_approximation_method = PolicyApproximators.NEW_SOFT_VALUE_ITERATION
+        self.policy_approximation_method = PolicyApproximators.MCE_ORIGINAL
         self.approximator_kwargs = {
-            'value_iteration_tolerance': 0.0000001, 'iterations': 1000000}
+            'value_iteration_tolerance': 0.0000001, 'iterations': 2000}
         # self.vgl_reference_policy = 'random'
         # self.vsi_reference_policy = 'random'
 
@@ -620,8 +706,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     def me_config(self):
         base = super().me_config
         base['vsi'].update(dict(
-            vc_diff_epsilon=1e-5,
-            gradient_norm_epsilon=1e-9,
+            vc_diff_epsilon=1e-10,
+            gradient_norm_epsilon=1e-10,
             use_feature_expectations_for_vsi=False,
             demo_om_from_policy=False
         ))
@@ -636,17 +722,25 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
     @property
     def me_train_config(self):
         base = super().me_train_config
-        base['vgl'].update(dict(max_iter=200,
+        base['vgl'].update(dict(max_iter=150,
                                 custom_optimizer_kwargs = {
-                                    "lr": 0.01, 
+                                    "lr": 0.002, 
                                     "weight_decay": 0.0000, 
-                                    "betas": (0.5, 0.9)}
+                                    "betas": (0.5, 0.99)} if self.me_config['vgl']['demo_om_from_policy'] is False 
+                                    else {
+                                    "lr": 0.002, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.5, 0.99)}
                                 ))
-        base['vsi'].update(dict(max_iter=200,
+        base['vsi'].update(dict(max_iter=150,
                                 custom_optimizer_kwargs = {
-                                    "lr": 0.01, 
+                                    "lr": 0.03, 
                                     "weight_decay": 0.0000, 
-                                    "betas": (0.5, 0.999)}, # FOR DEMO_OM_TRUE 0.05 before
+                                    "betas": (0.5, 0.99)} if self.me_config['vsi']['demo_om_from_policy'] is False 
+                                    else {
+                                    "lr": 0.05, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.9, 0.99)}, 
             ))#200
         return base
 
@@ -720,8 +814,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
             max_iter=2000000,
             n_seeds_for_sampled_trajectories=self.n_seeds_total*self.n_expert_samples_per_seed, 
             n_sampled_trajs_per_seed=1,
-            demo_batch_size=512, # 256
-            gen_replay_buffer_capacity=2048, # 2048 for RW # 
+            demo_batch_size=500, # 256
+            gen_replay_buffer_capacity=1000, # 2048 for RW # 
             n_disc_updates_per_round=1 
         ))
         return base
@@ -737,17 +831,17 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         base['vgl']['masked_policy'] = False
 
         if base['vsi']['learner_class'] == PPO:
-            new_learner_kwargs =dict(batch_size=32,
+            new_learner_kwargs =dict(batch_size=25,
             # For Roadworld. 
             n_steps=self.horizon, # n_steps should be the real horizon
-            ent_coef=0.01, 
-            learning_rate=0.003,
+            ent_coef=0.1, 
+            learning_rate=0.02,
             gamma=self.discount_factor,
-            gae_lambda=0.9999,
-            clip_range=0.1, 
-            vf_coef=0.005, 
+            gae_lambda=0.999,
+            clip_range=0.05, 
+            vf_coef=0.01, 
             n_epochs=5, 
-            normalize_advantage = False, 
+            normalize_advantage = True, 
             tensorboard_log="./ppo_tensorboard_expert_ff/"
             )
             new_policy_kwargs = dict(
@@ -765,26 +859,7 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
                 features_extractor_kwargs=dict(observation_matrix=self.env.observation_matrix),
                 net_arch=dict(pi=self.hid_sizes, vf=self.hid_sizes), # net arch is input to output linearly,
             ) """
-        elif base['vsi']['learner_class'] == DQN:
-            new_learner_kwargs =dict(batch_size=32,
-                # For Roadworld.
-                buffer_size = 100000, # 1e6 default
-                learning_starts = 1000,
-                learning_rate=0.001,  
-                
-                tau=1.0,
-                verbose=1,
-                max_grad_norm = 1.0,
-                target_update_interval=1000, 
-                exploration_initial_eps=1.0,
-                exploration_final_eps = 0.05,
-                tensorboard_log="./dqn_tensorboard_expert_ff/"
-            )
-            new_policy_kwargs=dict(
-                features_extractor_class=ObservationMatrixFeatureExtractor,
-                features_extractor_kwargs=dict(observation_matrix=self.env.observation_matrix),
-                net_arch=[24,24,24], # net arch is input to output linearly,
-            ) 
+
         else:
             new_learner_kwargs = dict()
         base['vsi']['learner_kwargs'].update(new_learner_kwargs)
@@ -797,8 +872,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
 class EnvDataForRoadWorld(EnvDataForIRL):
     DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
-    DEFAULT_N_SEEDS = 200
-    DEFAULT_N_SEEDS_MINIBATCH = 200
+    DEFAULT_N_SEEDS = 200 # TODO 200 is enough normally
+    DEFAULT_N_SEEDS_MINIBATCH = 100
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 1
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 30
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED = 1
@@ -806,7 +881,8 @@ class EnvDataForRoadWorld(EnvDataForIRL):
 
     VALUES_NAMES = BASIC_PROFILE_NAMES
 
-    def __init__(self, env_name=ROAD_WORLD_ENV_NAME, horizon=DEFAULT_HORIZON, dest=DEFAULT_DEST, n_seeds_for_samplers=DEFAULT_N_SEEDS, sampler_over_precalculated_trajs=True, **kwargs):
+    def __init__(self, env_name=ROAD_WORLD_ENV_NAME, horizon=DEFAULT_HORIZON, dest=DEFAULT_DEST, n_seeds_for_samplers=DEFAULT_N_SEEDS, 
+                 sampler_over_precalculated_trajs=True, **kwargs):
         super().__init__(env_name=env_name, **kwargs)
         self.horizon = horizon
         assert self.discount_factor == 1.0
@@ -883,10 +959,12 @@ class EnvDataForRoadWorld(EnvDataForIRL):
                 
                 
             else:
+                modified_kwargs = deepcopy(self.approximator_kwargs)
+                modified_kwargs['iterations'] = 1000000
                 _, _, assumed_expert_pi = mce_partition_fh(env_real, discount=self.discount_factor,
                                                        reward=reward,
                                                        horizon = env_real.horizon,
-                                                       approximator_kwargs=self.approximator_kwargs,
+                                                       approximator_kwargs=modified_kwargs,
                                                        policy_approximator=self.policy_approximation_method,
                                                        deterministic=not self.stochastic_expert)
             profile_to_assumed_matrix[w] = assumed_expert_pi
@@ -1041,12 +1119,13 @@ class EnvDataForRoadWorld(EnvDataForIRL):
     @property
     def ad_config(self):
         base = super().ad_config
-        base['vsi']['learner_class'] = MaskablePPO
-        base['vgl']['learner_class'] = MaskablePPO
+        base['vsi']['learner_class'] = PPO
+        base['vgl']['learner_class'] = PPO
         base['vsi']['policy_class'] = 'MlpPolicy'
         base['vgl']['policy_class'] = 'MlpPolicy'
-        base['vsi']['masked_policy'] = True # will use the MaskedPPO library. FALSE is better with AIRL
-        base['vgl']['masked_policy'] = True
+        base['vsi']['masked_policy'] = False # will use the MaskedPPO library. FALSE is better with AIRL
+        base['vgl']['masked_policy'] = False
+
 
         if base['vsi']['learner_class'] == MaskablePPO:
             new_learner_kwargs =dict(batch_size=32,
@@ -1056,7 +1135,7 @@ class EnvDataForRoadWorld(EnvDataForIRL):
                 learning_rate=0.004,  
                 gae_lambda=0.999,
                 clip_range=0.05, 
-                vf_coef=0.5, 
+                vf_coef=0.4, 
                 n_epochs=5, 
                 normalize_advantage = False, 
                 tensorboard_log="./mppo_tensorboard_expert_rw/"
@@ -1067,44 +1146,23 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         net_arch=dict(pi=[], vf=[]), # net arch is input to output linearly,
             )
         elif base['vsi']['learner_class'] == PPO:
-            new_learner_kwargs =dict(batch_size=32,
+            new_learner_kwargs =dict(batch_size=50,
                 # For Roadworld. 
-                n_steps=128, 
-                ent_coef=0.1, 
-                learning_rate=0.005,  
+                n_steps=self.horizon, 
+                ent_coef=0.01, 
+                learning_rate=0.001,  
                 gae_lambda=0.999,
                 clip_range=0.05, 
-                vf_coef=0.001, 
+                vf_coef=0.01, 
                 n_epochs=5,
                 normalize_advantage = False, 
                 tensorboard_log="./ppo_tensorboard_expert_rw/"
             )
             new_policy_kwargs=dict(
-        features_extractor_class=OneHotFeatureExtractor,
-        features_extractor_kwargs=dict(n_categories=self.env.state_dim),
-        net_arch=dict(pi=[], vf=[]), # net arch is input to output linearly,
-            )
-
-        elif base['vsi']['learner_class'] == DQN: # DQN is not good at all, no matter what parameters.
-            #DQN
-            new_learner_kwargs =dict(batch_size=32, 
-                buffer_size = 1000000, 
-                learning_starts = 100,
-                learning_rate=0.01, 
-                tau=1.0,
-                verbose=2,
-                train_freq=(10, 'episode'),
-                max_grad_norm = 10.0,
-                target_update_interval=1000, 
-                exploration_initial_eps=1.0,
-                exploration_final_eps = 0.05,
-                tensorboard_log="./dqn_tensorboard_expert_rw/"
-            )
-            new_policy_kwargs=dict(
-        features_extractor_class=OneHotFeatureExtractor,
-        features_extractor_kwargs=dict(n_categories=self.env.state_dim),
-        net_arch=[], # net arch is input to output linearly,
-            )
+            features_extractor_class=OneHotFeatureExtractor,
+            features_extractor_kwargs=dict(n_categories=self.env.state_dim),
+            net_arch=dict(pi=[], vf=[]), # net arch is input to output linearly,
+                )
         else:
             new_learner_kwargs = dict()
         base['vsi']['learner_kwargs'].update(new_learner_kwargs)
@@ -1115,36 +1173,63 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         return base
     @property
     def me_config(self):
-        return super().me_config
+        base = super().me_config
+        base['vgl'].update(dict(vc_diff_epsilon=1e-10,
+            gradient_norm_epsilon=1e-10,
+            use_feature_expectations_for_vsi=False,
+            demo_om_from_policy=False))
+        base['vsi'].update(dict(vc_diff_epsilon=1e-10,
+            gradient_norm_epsilon=1e-10,
+            use_feature_expectations_for_vsi=False,
+            demo_om_from_policy=False))
+        return base
 
     @property
     def me_train_config(self):
         base = super().me_train_config
         base['vgl'].update(dict(
-            max_iter=100))
+            max_iter=100, custom_optimizer_kwargs = {
+                                    "lr": 0.1, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.5, 0.99)} if self.me_config['vgl']['demo_om_from_policy'] is False 
+                                    else {
+                                    "lr": 0.1, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.9, 0.99)}
+                                ))
         base['vsi'].update(dict(
-            max_iter=100)) 
+            max_iter=200, custom_optimizer_kwargs = {
+                                    "lr": 0.07, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.5, 0.99)} if self.me_config['vsi']['demo_om_from_policy'] is False 
+                                    else {
+                                    "lr": 0.1, 
+                                    "weight_decay": 0.0000, 
+                                    "betas": (0.9, 0.99)}
+                                ))
 
         return base
     @property
     def ad_train_config(self):
         base = super().ad_train_config
         base['vgl'].update(dict(
-            max_iter=20000,
-            n_seeds_for_sampled_trajectories=self.n_seeds_total, # 1000 was too few with full variable length trajectories
+            max_iter=50000, # TODO 200000
+            n_seeds_for_sampled_trajectories=self.n_seeds_total, 
             n_sampled_trajs_per_seed=1,
-            demo_batch_size=512, # 512
-            gen_replay_buffer_capacity=2048, # 2048 for RW 
-            n_disc_updates_per_round=2
+            demo_batch_size=500, # 512
+            gen_replay_buffer_capacity=2000, # 2048 for RW 
+            n_disc_updates_per_round=2,
+            custom_optimizer_kwargs={"lr": 0.005, "weight_decay": 0.0000, 'betas': (0.0,0.0)} # TODO TEST.
             
         ))
         base['vsi'].update(dict(
-            max_iter=20000,
+            max_iter=100000, # TODO 200000
             n_seeds_for_sampled_trajectories=self.n_seeds_total, 
             n_sampled_trajs_per_seed=1,
-            demo_batch_size=512, # 512
-            gen_replay_buffer_capacity=2048, # 2048 for RW 
-            n_disc_updates_per_round=2
+            demo_batch_size=500, # 512
+            gen_replay_buffer_capacity=2000, # 2048 for RW 
+            n_disc_updates_per_round=2,
+            custom_optimizer_kwargs={"lr": 0.005, "weight_decay": 0.0000, 'betas': (0.0,0.0)} 
         ))
         return base
 
@@ -1173,13 +1258,16 @@ class EnvDataForRoadWorld(EnvDataForIRL):
         
         #self.vsi_optimizer_kwargs = {"lr": 0.2, "weight_decay": 0.0000} # if MCL
 
-        self.vsi_optimizer_kwargs = {"lr": 0.02, "weight_decay": 0.0000} # if AIRL
+        self.vsi_optimizer_kwargs = {"lr": 0.005, "weight_decay": 0.0000, 'betas': (0.0,0.0)} # if AIRL
         
-        self.vgl_optimizer_kwargs = {"lr": 0.1, "weight_decay": 0.0000}
-
+        #self.vsi_optimizer_kwargs = {"lr": 0.5, "weight_decay": 0.0000} # if IQL
+        
+        #self.vsi_optimizer_kwargs = {"lr": 0.001, "weight_decay": 0.0000} # if TIQL
+        self.vgl_optimizer_kwargs = {"lr": 0.05, "weight_decay": 0.0000, 'betas': (0.0,0.0)} # if AIRL
+        
         self.policy_approximation_method = PolicyApproximators.NEW_SOFT_VALUE_ITERATION
         self.approximator_kwargs = {
-            'value_iteration_tolerance': 0.00001, 'iterations': 100000}
+            'value_iteration_tolerance': 0.00001, 'iterations': 2000}
         # self.vgl_reference_policy = 'random' # SEE __INIT__!
         # self.vsi_reference_policy = 'random' # SEE __INIT__!
 

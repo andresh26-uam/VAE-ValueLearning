@@ -489,6 +489,9 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
             self._act_prob_cache = dict()
         return super().obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic, repeat_per_seed=repeat_per_seed, align_funcs_in_policy=align_funcs_in_policy, t_max=t_max, exploration=exploration, with_reward=with_reward, alignments_in_env=alignments_in_env, use_observations=use_observations, end_trajectories_when_ended= end_trajectories_when_ended, from_initial_states=from_initial_states)
     def act(self, state_obs, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
+        a, ns, prob = self.act_and_obtain_action_distribution(state_obs=state_obs, policy_state=policy_state, exploration=exploration, stochastic=stochastic, alignment_function=alignment_function)
+        return a, ns
+    def act_and_obtain_action_distribution(self, state_obs, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         #pf_total = time.perf_counter()
         if self._sampling_learner is None:
             learner : BaseAlgorithm = self.get_learner_for_alignment_function(alignment_function)
@@ -504,42 +507,60 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
         if np.random.rand() > exploration:
             act_prob = None
             #pf_va = time.perf_counter()
-            if self.env_is_tabular:
+            """if self.env_is_tabular:
                 act_prob = self._act_prob_cache.get(state_obs,None)
-            
+            """
             if self.masked:
                 assert isinstance(learner.policy, MASKEDMlpPolicy)
                 if self.env_is_tabular :
-                    if act_prob is None:
-                        act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0], action_masks=action_masks)
-                        self._act_prob_cache[state_obs] = act_prob
+                    act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0], action_masks=action_masks)
+                        #self._act_prob_cache[state_obs] = act_prob
                     a = int(act_prob.get_actions(deterministic=not stochastic))
                     
                     next_policy_state = None
                 else:
-                    
+                    print("s2")
                     a, next_policy_state = learner.policy.predict(state_obs, state=policy_state, deterministic=not stochastic, action_masks=action_masks)
                     
             else:
                 if self.env_is_tabular :
+                    act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0])
+                    """   
                     if act_prob is None:
                         act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0])
-                        self._act_prob_cache[state_obs] = act_prob
+                        self._act_prob_cache[state_obs] = act_prob"""
                     a = int(act_prob.get_actions(deterministic=not stochastic))
                     next_policy_state = None
                 else:
                     a, next_policy_state = learner.policy.predict(state_obs, state=policy_state, deterministic=not stochastic)
                 
             #pf_va_finish = time.perf_counter()
-            
+            base_distribution = act_prob.distribution.probs[0]
+            valid_distribution = torch.zeros_like(base_distribution) # TODO... Maybe this is wrong when backpropagation? Not used now
+            valid_distribution[valid_actions] = base_distribution[valid_actions]/torch.sum(base_distribution[valid_actions])
             assert isinstance(a, int)
-            if a not in valid_actions:
-                a = np.random.choice(valid_actions)
             if __debug__ and self.masked:
+
                 indices = np.where(action_masks[0]==True)[0]
+                #print("CHECKED", action_masks, indices, valid_actions)
                 np.testing.assert_equal(len(np.setdiff1d(indices, valid_actions)), 0)
+                
+            if self.masked:
+                assert a in valid_actions
+            elif a not in valid_actions:
+                if not stochastic:
+                    max_prob = torch.max(base_distribution[valid_actions])
+                    max_q = torch.where(base_distribution[valid_actions] == max_prob)[0]
+                    action_index = np.random.choice(max_q.detach().numpy())
+                    #print(torch.argmax(base_distribution[valid_actions]))
+                    #print(torch.argmax(base_distribution[valid_actions]).item())
+                    a = valid_actions[action_index]
+                else:
+                    # print(th.softmax(q_values, dim=0), np.sum(th.softmax(q_values, dim=0).float().detach().numpy()))
+                    a = np.random.choice(len(valid_distribution), p=valid_distribution)
+                            
         else:
-            assert True is False
+            assert True is False # This should never ever occur
             if len(valid_actions) == 0:
                 a = menv.action_space.sample()
             else:
@@ -547,9 +568,9 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
             assert isinstance(a, int)
             next_policy_state = None if policy_state is None else policy_state+1 # (Not used)
         #pf_total_finish = time.perf_counter()
-        return a, next_policy_state
-
-
+        assert a in valid_actions
+        assert valid_distribution[a] > 0
+        return a, next_policy_state, valid_distribution
 class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
     def __init__(self, policy_per_va: Callable[[Any], np.ndarray], env: gym.Env, state_encoder=None, expose_state=True, *args, **kwargs):
 
