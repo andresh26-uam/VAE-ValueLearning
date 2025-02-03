@@ -17,20 +17,6 @@ from itertools import chain
 from utils import CHECKPOINTS
 
 
-def print_tensor_and_grad_fn(grad_fn, level=0):
-    indent = "  " * level
-    if grad_fn is None:
-        return
-    if getattr(grad_fn, 'variable', None) is not None:
-        print(f"{indent}AccumulateGrad for tensor: {grad_fn.variable}")
-    else:
-        print(f"{indent}Grad function: {grad_fn}")
-        if hasattr(grad_fn, 'next_functions'):
-            for next_fn in grad_fn.next_functions:
-                if next_fn[0] is not None:
-                    print_tensor_and_grad_fn(next_fn[0], level + 1)
-
-
 class ConvexLinearModule(th.nn.Linear):
 
     def __init__(self, in_features, out_features, bias = False, device=None, dtype=None):
@@ -141,8 +127,6 @@ class PositiveBoundedLinearModule(ConvexAlignmentLayer):
     def forward(self, input: th.Tensor) -> th.Tensor:
         output = super().forward(input)
         assert th.all(output < 0.0)
-        # print(th.where(input<=0.0))
-        # print(input[th.where(input<=0.0)])
         assert th.all(input < 0.0)
         return output
 
@@ -226,19 +210,20 @@ class GroundingEnsemble(th.nn.Module):
                 
                 
                 # Check gradients for isolation: verify only target network parameters have gradients
-                for idx, network in enumerate(self.networks):
-                    #print(f"Gradients for network {idx}:")
-                    for param in network.parameters():
-                        if param.grad is not None:
-                            if idx == 0:
-                                assert param.grad is not None
-                                assert th.all(param.grad == 0)
-                                continue
-                            else:
-                                none_grad = param.grad is None
-                                if not none_grad:
-                                    
-                                    assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
+                if __debug__:
+                    for idx, network in enumerate(self.networks):
+                        #print(f"Gradients for network {idx}:")
+                        for param in network.parameters():
+                            if param.grad is not None:
+                                if idx == 0:
+                                    assert param.grad is not None
+                                    assert th.all(param.grad == 0)
+                                    continue
+                                else:
+                                    none_grad = param.grad is None
+                                    if not none_grad:
+                                        
+                                        assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
         
         return outputs
 class AbstractVSLRewardFunction(reward_nets.RewardNet):
@@ -464,11 +449,6 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                     state = self.features_extractor(state)
                 inputs.append(th.flatten(state, 1))
             if self.use_action:
-                
-                """if len(action.shape) > 1:
-                    preprocessed_action = th.flatten(action, 1)
-                else:
-                    preprocessed_action = action.unsqueeze(0)"""
                 if self.action_features_extractor is None:
                     self.action_features_extractor = self.action_features_extractor_class(self.action_space, **self.action_features_extractor_kwargs)
                 preprocessed_action = self.action_features_extractor(action)
@@ -850,7 +830,7 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
                 elif len(x.size()) == 3:
                     x = x[:, :, selected_index]
                 else:
-                    print("X IS SIZE IS NOT EXPECTED", x.size())
+                    print("X SIZE IS NOT EXPECTED", x.size())
                     exit(-1)
                 x = self.final_activation(x) + self.reward_bias
                 return x

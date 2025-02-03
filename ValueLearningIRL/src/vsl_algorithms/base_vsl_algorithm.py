@@ -7,7 +7,7 @@ from src.envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
 
 from src.vsl_algorithms.utils import JSD
 from src.vsl_policies import VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
-from src.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes, squeeze_r
+from src.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes
 
 from imitation.algorithms import base
 from imitation.data import types
@@ -26,13 +26,8 @@ from typing import (
 from imitation.util import util
 
 import torch as th
-import itertools
 
 from imitation.data import types, rollout
-
-
-def dict_metrics(**kwargs):
-    return dict(kwargs)
 
 
 class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
@@ -115,8 +110,6 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.probabilistic_vsi_optimizer_kwargs = vsi_optimizer_kwargs
 
         self.log_interval = log_interval
-        # ones = np.ones((self.env.state_dim, self.env.action_dim))
-        # uniform_pi = ones / self.env.action_dim
 
         self.learned_policy_per_va = None
 
@@ -141,13 +134,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         return self.current_net
 
     def get_metrics(self):
-
-        # TODO aqui poner learned rewards, como un callable de target a callable de state-action pairs a reward aprendida. Los next state... quizá samplear y punto con... trayectorias del experto? pero si no se sabe que?
         return {'learned_rewards': self.state_action_callable_reward_from_reward_net_per_target_align_func(self.get_reward_net())}
-
-    def train_callback(self, t):
-        # pass
-        return
 
     def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING,
               assumed_grounding=None,
@@ -398,45 +385,48 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
                         fallados = np.setdiff1d(todos, acertados)
 
-                        a = np.intersect1d(acertados, np.where(
+                        acertados_con_margen = np.intersect1d(acertados, np.where(
                             np.abs(probs_real - 0.5) > epsilon)[0])
-                        b = np.intersect1d(fallados, np.where(
+                        fallados_con_margen = np.intersect1d(fallados, np.where(
                             np.abs(probs_real - 0.5) > epsilon)[0])
 
-                        c1 = np.intersect1d(acertados, np.where(
+                        acertados_difussos = np.intersect1d(acertados, np.where(
                             np.abs(probs_real - 0.5) <= epsilon)[0])
-                        c11 = np.intersect1d(c1, np.where(
+                        acertados_difusos_con_estimacion_correcta = np.intersect1d(acertados_difussos, np.where(
                             np.abs(probs_estimated - 0.5) <= epsilon)[0])
-                        c12 = np.intersect1d(c1, np.where(
+                        acertados_difusos_sobreestimados = np.intersect1d(acertados_difussos, np.where(
                             np.abs(probs_estimated - 0.5) > epsilon)[0])
 
-                        temp = np.intersect1d(fallados, np.where(
+                        fallados_difusos = np.intersect1d(fallados, np.where(
                             np.abs(probs_real - 0.5) <= epsilon)[0])
-                        c2_repescados = np.intersect1d(temp, np.where(
+                        fallados_considerados_aciertos_por_margen_de_error = np.intersect1d(fallados_difusos, np.where(
                             np.abs(probs_estimated - 0.5) <= epsilon)[0])
-                        c3 = np.intersect1d(temp, np.where(
+                        fallados_totalmente = np.intersect1d(fallados_difusos, np.where(
                             np.abs(probs_estimated - 0.5) > epsilon)[0])
-                        aall = [a, b, c11, c12, c2_repescados, c3]
+                        all_cases = [acertados_con_margen, fallados_con_margen, acertados_difusos_con_estimacion_correcta,
+                                     acertados_difusos_sobreestimados, fallados_considerados_aciertos_por_margen_de_error, fallados_totalmente]
 
-                        total = a
+                        total = acertados_con_margen
                         intersec = todos
-                        print("a, b, c11, c12, c2,c3")
-                        for id, set_ in enumerate(aall):
+                        # print("a, b, c11, c12, c2,c3")
+                        for id, set_ in enumerate(all_cases):
                             total = np.union1d(total, set_)
                             intersec = np.intersect1d(intersec, set_)
-                            print("LEN ", id, ": ", len(set_))
-                        len_total_disj = np.sum([len(set_) for set_ in aall])
+                            # print("LEN ", id, ": ", len(set_))
+                        len_total_disj = np.sum(
+                            [len(set_) for set_ in all_cases])
 
                         exitos = np.union1d(acertados, exito_por_aprox_igual)
-                        print("TOTAL", len(total), "TOTAL_DISJ", len_total_disj)
+                        # print("TOTAL", len(total), "TOTAL_DISJ", len_total_disj)
                         assert len(total) == len_total_disj
-                        print("INTERSEC", len(intersec))
+                        # print("INTERSEC", len(intersec))
                         assert len(intersec) == 0
                         assert len(exitos) == len(
-                            np.union1d(acertados, c2_repescados))
+                            np.union1d(acertados, fallados_considerados_aciertos_por_margen_de_error))
                         accuracy = len(exitos)/len(todos)
                         accuracy_per_epsilon[epsilon] = accuracy
-                        n_repescados_per_epsilon[epsilon] = len(c2_repescados)
+                        n_repescados_per_epsilon[epsilon] = len(
+                            fallados_considerados_aciertos_por_margen_de_error)
 
                     is_better_estimated = probs_estimated > (
                         0.5 + epsilon_for_undecided_preference)
@@ -491,7 +481,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         return metrics_per_ratio, value_expectations, value_expectations_expert
 
     @abstractmethod
-    def get_tabular_policy_from_reward_per_align_func(self, align_funcs, reward_net=None):
+    def get_tabular_policy_from_reward_per_align_func(self, align_funcs, *args, **kwargs):
         pass
 
     def _resample_next_states(self):
@@ -524,7 +514,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             one_hot_observations = th.eye(
                 self.env.state_dim*self.env.action_dim)
             rewards_per_target_al = dict()
-        
+
             for target, learned in (self.target_align_funcs_to_learned_align_funcs.items() if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else zip(self.all_targets, self.all_targets)):
                 if targets is not None:
                     if target not in targets:
@@ -546,11 +536,11 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     for action in range(self.env.action_dim):
                         action_array = util.safe_to_tensor(np.array(
                             [action]*len(observations)),  dtype=reward_net.dtype, device=reward_net.device).long()
-                        print("OBS", observations)
-                        print("ACTS", action_array)
+                        # print("OBS", observations)
+                        # print("ACTS", action_array)
                         next_state_array = util.safe_to_tensor(next_state_mat[observations.numpy(
                         ), action_array.numpy()],  dtype=reward_net.dtype, device=reward_net.device)
-                        print("NEXTS", next_state_array)
+                        # print("NEXTS", next_state_array)
                         reward_matrix[observations, action_array] += self.calculate_rewards(
                             align_func=learned if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target,
                             # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
@@ -561,19 +551,19 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                             obs_action_mat=one_hot_observations,
                             reward_mode=TrainingModes.EVAL,
                             use_probabilistic_reward=False,  # TODO ?,
-                            n_reps_if_probabilistic_reward=1,  # TODO probabilistic?,
+                            n_reps_if_probabilistic_reward=1,  
                             requires_grad=False
                         )[1]
-                        print("REWARD", reward_matrix)
+                        # print("REWARD", reward_matrix)
                         assert reward_matrix.shape == (
                             self.env.state_dim, self.env.action_dim)
                 rewards_per_target_al[target] = reward_matrix
                 assert rewards_per_target_al[target].shape == (
                     self.env.state_dim, self.env.action_dim)
             return lambda target: (lambda state=None, action=None: (
-                rewards_per_target_al[target] if (state is None and action is None) 
-                else rewards_per_target_al[target][state, :] if action is None and state is not None 
-                else rewards_per_target_al[target][:, action] if action is not None and state is None 
+                rewards_per_target_al[target] if (state is None and action is None)
+                else rewards_per_target_al[target][state, :] if action is None and state is not None
+                else rewards_per_target_al[target][:, action] if action is not None and state is None
                 else rewards_per_target_al[target][state, action]))
         else:
             # TODO: test this if needed... Untested
@@ -605,7 +595,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         obs_action_mat=None,
                         reward_mode=TrainingModes.EVAL,
                         use_probabilistic_reward=False,  # TODO ?,
-                        n_reps_if_probabilistic_reward=1,  # TODO probabilistic?,
+                        n_reps_if_probabilistic_reward=1,  
                         requires_grad=False
                     )[1][0]
                 return rew

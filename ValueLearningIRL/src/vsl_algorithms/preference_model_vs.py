@@ -788,29 +788,13 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                 self.logger.record("Learned grounding: ",
                                    self.current_net.get_learned_grounding())
 
-    def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, epoch_partition = 0.1):
-        # return super().train_vgl(max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_funcs)
+    def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
+        
         reward_net_per_target = dict()
         reference_trajs_per_profile = self.extract_trajectories(
                 n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, self.resample_trajectories_if_not_already_sampled,
                 random_trajs_proportion=self.random_trajs_proportion)
             
-        
-        """n_steps_per_change_of_target = int(self.interactive_imitation_iterations*epoch_partition)
-        for rep in range(n_steps_per_change_of_target):
-            
-            if rep > 0:
-                self.vgl_reference_policy = self.calculate_learned_policies(self.vgl_target_align_funcs)
-            
-            
-            for vi, target_align_func in enumerate(self.vgl_target_align_funcs):
-                
-                self._train_global(max_iter, target_align_func,
-                                reference_trajs_per_profile, partition=ceil(1/epoch_partition), 
-                                starting_t=int(n_steps_per_change_of_target*(rep*2+vi)))
-
-                reward_net_per_target[target_align_func] = self.current_net.copy()
-            """
         for vi, target_align_func in enumerate(reversed(self.vgl_target_align_funcs)):
             self.current_net.set_alignment_function(target_align_func)
             self._train_global(max_iter, target_align_func,
@@ -818,7 +802,6 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
             
         for target_align_func in self.vgl_target_align_funcs:
             reward_net_per_target[target_align_func] = self.current_net.copy()
-            #print(self.current_net.get_learned_grounding())
         return reward_net_per_target
         
                 

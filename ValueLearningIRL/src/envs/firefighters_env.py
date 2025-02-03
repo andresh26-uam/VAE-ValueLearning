@@ -20,7 +20,7 @@ class FeatureSelectionFFEnv(enum.Enum):
     ENCRYPTED_OBSERVATIONS = 'encrypted_observations'
     # Use State encrption, but one hot encoded
     ONE_HOT_OBSERVATIONS = 'observations_one_hot'
-    # TODO: Ordinal Features may remain as 0, 1, 2 but categorical ones are one hot encoded.
+    # TODO: Ordinal Features may remain as 0, 1, 2 but categorical ones are one hot encoded for now.
     ORDINAL_AND_ONE_HOT_FEATURES = 'ordinal_and_one_hot'
     DEFAULT = None
 
@@ -96,10 +96,10 @@ class FireFightersEnv(TabularVAMDP):
                         0.0, 1.0)][s, a] = self.real_env.calculate_rewards(s_trans, a, ns_trans)
             else:
                 if s_trans[STATE_MEDICAL] != 0:
-                    
+
                     _goal_states.append(s)
                 else:
-                    
+
                     _invalid_states.append(s)
                 self._states_with_known_reward[s, :] = True
                 for a in range(self.action_space.n):
@@ -108,7 +108,7 @@ class FireFightersEnv(TabularVAMDP):
                     ns = self.real_env.encrypt(ns_trans)
                     transition_matrix[s, a, s] = 1.0
                     reward_matrix_per_va[(1.0, 0.0)][s, a], reward_matrix_per_va[(
-                        0.0, 1.0)][s, a] = self.real_env.calculate_rewards(s_trans, a, ns_trans)  if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
+                        0.0, 1.0)][s, a] = self.real_env.calculate_rewards(s_trans, a, ns_trans) if ns_trans[STATE_MEDICAL] != 0 else [-1.0, -1.0]
 
         self._goal_states = np.asarray(_goal_states)
         self._invalid_states = np.asarray(_invalid_states)
@@ -121,7 +121,6 @@ class FireFightersEnv(TabularVAMDP):
 
         elif initial_state_distribution == 'uniform' or initial_state_distribution == 'random':
             self.initial_state_dist = np.ones(self.n_states)/self.n_states
-            
 
         else:
             self.initial_state_dist = np.zeros(self.n_states)
@@ -142,14 +141,16 @@ class FireFightersEnv(TabularVAMDP):
         assert isinstance(align_func, tuple)
         assert isinstance(float(align_func[0]), float)
         assert isinstance(float(align_func[1]), float)
-        
-        v = self.reward_matrix_per_va_dict[(1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
-        
-        #assert np.max(v) <= 1.00001
-        #assert np.min(v) >= -1.00001
+
+        v = self.reward_matrix_per_va_dict[(
+            1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
+
+        # assert np.max(v) <= 1.00001
+        # assert np.min(v) >= -1.00001
         return v
+
     def get_state_actions_with_known_reward(self, align_func):
-        return None #self._states_with_known_reward
+        return None  # self._states_with_known_reward
 
     @property
     def state(self) -> np.dtype:
@@ -159,9 +160,11 @@ class FireFightersEnv(TabularVAMDP):
     @property
     def goal_states(self):
         return self._goal_states
+
     @property
     def invalid_states(self):
         return self._invalid_states
+
 
 class FireFightersEnvWithObservation(FireFightersEnv):
     def __init__(self, feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):

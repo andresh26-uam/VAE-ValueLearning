@@ -50,7 +50,7 @@ class ValueSystemLearningPolicy(BasePolicy):
 
         if use_checkpoints:
             def _save_checkpoint_and_exit(sig, frame):
-                print("Ctrl-C pressed. Saving checkpoint for policy: " +
+                print("Ctrl-C pressed. Saving checkpoint (if needed) for policy: " +
                       self.__class__.__name__ + " " + self._get_name())
                 self._save_checkpoint()
                 sys.exit(0)
@@ -125,7 +125,6 @@ class ValueSystemLearningPolicy(BasePolicy):
 
                 action, policy_state = self.act(self.state_encoder(state_obs, info), policy_state=policy_state, exploration=exploration,
                                                 stochastic=stochastic, alignment_function=alignment_func_in_policy)
-                # print(self.environ.cur_state, action, index)
                 state_obs, rew, terminated, truncated, info_next = self.env.step(
                     action)
                 obs_in_state = self.obtain_observation(state_obs)
@@ -184,7 +183,7 @@ class ValueSystemLearningPolicy(BasePolicy):
     def obtain_trajectories(self, n_seeds=100, seed=32,
                             options: Union[None, List, Dict] = None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None,], t_max=None,
                             exploration=0, with_reward=False, alignments_in_env=[None,],
-                            use_observations=False, end_trajectories_when_ended=True,
+                            end_trajectories_when_ended=True,
                             from_initial_states=None) -> List[Trajectory]:
         trajs = []
         if len(alignments_in_env) != len(align_funcs_in_policy):
@@ -288,7 +287,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                 #print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
                 #print(t.obs, t2.obs)
                 assert np.sum(t.rews) >= np.sum(t2.rews)
-                print("CHECK EFF!!!")
+                print("CHECKED EFF!!!")
                 assert np.all(t.obs[0] == t2.obs[0]) and np.all(t.obs[-1] == t2.obs[-1])
             
         if has_initial_state_dist and from_initial_states is not None:
@@ -322,18 +321,6 @@ class ValueSystemLearningPolicy(BasePolicy):
         expected_gr /= len(trajs)
         return expected_gr
 
-    """def sb3_policy_call(self, observations: np.ndarray, state = None, dones: np.ndarray = None):
-        if isinstance(observations, dict):
-            actions = []
-            n_samples = observations[list(observations.keys())[0]].shape[0]
-            obs_items = observations.items()
-            for i in range(n_samples):
-                actions.append(self.act(dict({k: v[i] for k,v in obs_items})))
-            return np.array(actions), state
-        else:
-            print("sb3 trying", observations)
-            return np.array([[self.act(obs) for obs in obs_per_env] for obs_per_env in observations]), state
-    """
     def get_environ(self, alignment_function):
         return self.env
     
@@ -389,6 +376,7 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
 
         with open(os.path.join(save_folder, 'init_params.json'), 'w') as f:
             json.dump(init_params, f, default=NpEncoder().default)
+        print("SAVED LEARNER VSL POLICY TO ", save_folder)
 
     def load(ref_env, path='learner_dummy'):
         
@@ -423,7 +411,7 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
                 
                 new_instance.learner_per_align_func[alignment] = init_params['learner_class'].load(learner_path, env=ref_env)
         ref_env.observation_space = prev_ob_space
-        print("LOADED")
+        print("LOADED LEARNER VSL POLICY FROM ", save_folder)
         return new_instance
     
     
@@ -484,10 +472,10 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
             environ = self.get_environ(alignment_function)
         return self.learner_class(policy=self.policy_class, env=environ, policy_kwargs=self.policy_kwargs, **self.learner_kwargs)
     
-    def obtain_trajectories(self, n_seeds=100, seed=32, options = None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None], t_max=None, exploration=0, with_reward=False, alignments_in_env=[None], use_observations=False, end_trajectories_when_ended=True, from_initial_states=None):
+    def obtain_trajectories(self, n_seeds=100, seed=32, options = None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None], t_max=None, exploration=0, with_reward=False, alignments_in_env=[None], end_trajectories_when_ended=True, from_initial_states=None):
         if self.env_is_tabular:
             self._act_prob_cache = dict()
-        return super().obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic, repeat_per_seed=repeat_per_seed, align_funcs_in_policy=align_funcs_in_policy, t_max=t_max, exploration=exploration, with_reward=with_reward, alignments_in_env=alignments_in_env, use_observations=use_observations, end_trajectories_when_ended= end_trajectories_when_ended, from_initial_states=from_initial_states)
+        return super().obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic, repeat_per_seed=repeat_per_seed, align_funcs_in_policy=align_funcs_in_policy, t_max=t_max, exploration=exploration, with_reward=with_reward, alignments_in_env=alignments_in_env, end_trajectories_when_ended= end_trajectories_when_ended, from_initial_states=from_initial_states)
     def act(self, state_obs, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         a, ns, prob = self.act_and_obtain_action_distribution(state_obs=state_obs, policy_state=policy_state, exploration=exploration, stochastic=stochastic, alignment_function=alignment_function)
         return a, ns
@@ -506,10 +494,7 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
         
         if np.random.rand() > exploration:
             act_prob = None
-            #pf_va = time.perf_counter()
-            """if self.env_is_tabular:
-                act_prob = self._act_prob_cache.get(state_obs,None)
-            """
+            
             if self.masked:
                 assert isinstance(learner.policy, MASKEDMlpPolicy)
                 if self.env_is_tabular :
@@ -519,30 +504,25 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
                     
                     next_policy_state = None
                 else:
-                    print("s2")
                     a, next_policy_state = learner.policy.predict(state_obs, state=policy_state, deterministic=not stochastic, action_masks=action_masks)
                     
             else:
                 if self.env_is_tabular :
                     act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0])
-                    """   
-                    if act_prob is None:
-                        act_prob = learner.policy.get_distribution(learner.policy.obs_to_tensor(state_obs)[0])
-                        self._act_prob_cache[state_obs] = act_prob"""
                     a = int(act_prob.get_actions(deterministic=not stochastic))
                     next_policy_state = None
                 else:
                     a, next_policy_state = learner.policy.predict(state_obs, state=policy_state, deterministic=not stochastic)
                 
-            #pf_va_finish = time.perf_counter()
+            
             base_distribution = act_prob.distribution.probs[0]
             valid_distribution = torch.zeros_like(base_distribution) # TODO... Maybe this is wrong when backpropagation? Not used now
             valid_distribution[valid_actions] = base_distribution[valid_actions]/torch.sum(base_distribution[valid_actions])
             assert isinstance(a, int)
+            assert len(valid_distribution) == self.action_space.n
             if __debug__ and self.masked:
 
                 indices = np.where(action_masks[0]==True)[0]
-                #print("CHECKED", action_masks, indices, valid_actions)
                 np.testing.assert_equal(len(np.setdiff1d(indices, valid_actions)), 0)
                 
             if self.masked:
@@ -552,12 +532,9 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
                     max_prob = torch.max(base_distribution[valid_actions])
                     max_q = torch.where(base_distribution[valid_actions] == max_prob)[0]
                     action_index = np.random.choice(max_q.detach().numpy())
-                    #print(torch.argmax(base_distribution[valid_actions]))
-                    #print(torch.argmax(base_distribution[valid_actions]).item())
                     a = valid_actions[action_index]
                 else:
-                    # print(th.softmax(q_values, dim=0), np.sum(th.softmax(q_values, dim=0).float().detach().numpy()))
-                    a = np.random.choice(len(valid_distribution), p=valid_distribution)
+                    a = np.random.choice(len(valid_distribution), p=valid_distribution.detach().numpy())
                             
         else:
             assert True is False # This should never ever occur
@@ -699,7 +676,7 @@ class VAlignedDictDiscreteStateActionPolicyTabularMDP(VAlignedDictSpaceActionPol
                          state_encoder=state_encoder, expose_state=expose_state, *args, **kwargs)
 
 
-def profiled_society_sampler(align_func_as_basic_profile_probs):
+def profile_sampler_in_society(align_func_as_basic_profile_probs):
     index_ = np.random.choice(
         a=len(align_func_as_basic_profile_probs), p=align_func_as_basic_profile_probs)
     target_align_func = [0.0]*len(align_func_as_basic_profile_probs)
@@ -727,7 +704,7 @@ def profiled_society_traj_sampler_from_policy(policy: ValueSystemLearningPolicy,
     trajs = []
     for al in align_funcs:
         for rep in range(n_seeds):
-            target_align_func = profiled_society_sampler(al)
+            target_align_func = profile_sampler_in_society(al)
 
             trajs.extend(policy.obtain_trajectories(n_seeds=1, stochastic=stochastic,
                                                     repeat_per_seed=n_trajs_per_seed, align_funcs_in_policy=[target_align_func], t_max=horizon))

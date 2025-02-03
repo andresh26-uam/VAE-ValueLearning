@@ -5,7 +5,6 @@ Adapted for the RoadWorld environment
 
 from typing import (
     Any,
-    Callable,
     Iterable,
     Mapping,
     Optional,
@@ -13,9 +12,7 @@ from typing import (
     Type,
     Union,
 )
-import gymnasium as gym
 import numpy as np
-import scipy.special
 import torch as th
 from seals import base_envs
 from imitation.data import types, rollout
@@ -25,7 +22,6 @@ from imitation.util import util
 
 from src.envs.tabularVAenv import TabularVAMDP
 from src.vsl_algorithms.base_tabular_vsl_algorithm import BaseTabularMDPVSLAlgorithm, PolicyApproximators, mce_partition_fh
-from src.vsl_algorithms.base_vsl_algorithm import dict_metrics
 from src.vsl_reward_functions import AbstractVSLRewardFunction, ProabilisticProfiledRewardFunction, TrainingModes
 
 
@@ -137,7 +133,7 @@ def mce_occupancy_measures(
         else:
             Dcum = np.multiply(pi, Dcum[:, np.newaxis])
             assert Dcum.shape == (n_states, n_actions)
-        
+
         assert isinstance(Dcum, np.ndarray)
     return D, Dcum
 
@@ -151,12 +147,13 @@ def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim,
             al = traj.infos[0]['align_func']
             if al not in demo_state_om:
                 num_demos_per_al[al] = 0
-                demo_state_om[al] = np.zeros((state_dim,action_dim)) if use_action else np.zeros((state_dim,)) 
+                demo_state_om[al] = np.zeros(
+                    (state_dim, action_dim)) if use_action else np.zeros((state_dim,))
 
             cum_discount = 1.0
             if use_action:
-                for obs,act in zip(traj.obs[0:-1], traj.acts):
-                    demo_state_om[al][obs,act] += cum_discount
+                for obs, act in zip(traj.obs[0:-1], traj.acts):
+                    demo_state_om[al][obs, act] += cum_discount
                     cum_discount *= discount
             else:
                 for obs in types.assert_not_dictobs(traj.obs):
@@ -167,13 +164,14 @@ def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim,
             demo_state_om[al] /= num_demos_per_al[al]
     else:
         num_demos = 0
-        demo_state_om = np.zeros((state_dim,action_dim)) if use_action else np.zeros((state_dim,))
+        demo_state_om = np.zeros(
+            (state_dim, action_dim)) if use_action else np.zeros((state_dim,))
 
         for traj in trajs:
             cum_discount = 1.0
             if use_action:
-                for obs,act in zip(traj.obs[0:-1], traj.acts):
-                    demo_state_om[obs,act] += cum_discount
+                for obs, act in zip(traj.obs[0:-1], traj.acts):
+                    demo_state_om[obs, act] += cum_discount
                     cum_discount *= discount
             else:
                 for obs in types.assert_not_dictobs(traj.obs):
@@ -189,21 +187,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     """
     Based on https://imitation.readthedocs.io/en/latest/algorithms/mce_irl.html
     """
-
-    def set_reward_net(self, reward_net: AbstractVSLRewardFunction):
-        self.reward_net = reward_net
-
-    def set_probabilistic_net(self, probabilistic_net: ProabilisticProfiledRewardFunction):
-        self.probabilistic_reward_net = probabilistic_net
-
-    def get_reward_net(self):
-        return self.reward_net
-
-    def get_probabilistic_net(self):
-        return self.probabilistic_reward_net
-
-    def get_current_reward_net(self):
-        return self.current_net
 
     def __init__(
         self,
@@ -356,7 +339,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 np.max(abs_diff_in_vc))
             self.grad_norm_per_align_func[target_align_func].append(grad_norm)
 
-            self.train_callback(t)
             if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon and grad_norm <= self.gradient_norm_epsilon:
                 self._print_statistics(
                     t, visitations, loss, reward, target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
@@ -380,7 +362,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 np.max(abs_diff_in_vc))
             self.grad_norm_per_align_func[target_align_func].append(grad_norm)
 
-            self.train_callback(t)
             if self.linf_delta_per_align_func[target_align_func][-1] <= self.vc_diff_epsilon and grad_norm <= self.gradient_norm_epsilon:
                 self._print_statistics(t, visitations, expert_visitations, loss, reward,
                                        target_align_func, learned_al_function, grad_norm, abs_diff_in_vc)
@@ -406,54 +387,39 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
 
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
         reward_nets_per_target_align_func = dict()
-        
-        
+
         for align_func in self.vgl_target_align_funcs:
             self.current_net.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
             self.current_net.set_alignment_function(align_func)
             for t in range(max_iter):
                 if t > 0 and (self.linf_delta_per_align_func[align_func][-1] <= self.vc_diff_epsilon and self.grad_norm_per_align_func[align_func][-1] <= self.gradient_norm_epsilon):
                     continue
-                
+
                 old_reward, visitations, expert_visitations, old_pi, loss, reward = self._train_step_vgl(self.torch_obs_mat,
                                                                                                          align_func=align_func,
                                                                                                          action_mat=self.torch_action_mat,
                                                                                                          obs_action_mat=self.torch_obs_action_mat,
-                                                                                                         n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, 
+                                                                                                         n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
                                                                                                          n_sampled_trajs_per_seed=n_sampled_trajs_per_seed)
                 # self.rewards_per_target_align_func[align_func] = reward
 
                 grad_norm, abs_diff_in_vc = self._train_statistics(
-                    t, expert_visitations, visitations, loss, reward, 
-                    align_func, learned_grounding=
-                    self.current_net.get_learned_grounding())
+                    t, expert_visitations, visitations, loss, reward,
+                    align_func, learned_grounding=self.current_net.get_learned_grounding())
                 self.linf_delta_per_align_func[align_func].append(
                     np.max(abs_diff_in_vc))
                 self.grad_norm_per_align_func[align_func].append(grad_norm)
-                
-                last_max_vc_diff =  self.linf_delta_per_align_func[align_func][-1]
-                last_max_grad_norm =  self.grad_norm_per_align_func[align_func][-1]
-                self.train_callback(t)
+
+                # last_max_vc_diff =  self.linf_delta_per_align_func[align_func][-1]
+                # last_max_grad_norm =  self.grad_norm_per_align_func[align_func][-1]
+
                 assert len(self.linf_delta_per_align_func[align_func]) > 0
                 assert len(self.grad_norm_per_align_func[align_func]) > 0
-
-                """last_max_vc_diff = max(
-                    [lvlist[-1] for al_fun, lvlist in self.linf_delta_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
-                last_max_grad_norm = max(
-                    [grlist[-1] for al_fun, grlist in self.grad_norm_per_align_func.items() if al_fun in self.vgl_target_align_funcs])
-
-                self.train_callback(t)
-                if last_max_vc_diff <= self.vc_diff_epsilon and last_max_grad_norm <= self.gradient_norm_epsilon:
-                    self._print_statistics(t, visitations, expert_visitations, loss, reward, align_func, None,
-                                        grad_norm, abs_diff_in_vc, learned_grounding=self.current_net.get_learned_grounding())
-                    break"""
 
             reward_nets_per_target_align_func[align_func] = self.current_net.copy(
             )
             assert len(self.linf_delta_per_align_func[align_func]) > 0
             assert len(self.grad_norm_per_align_func[align_func]) > 0
-
-        
 
         return reward_nets_per_target_align_func
 
@@ -467,14 +433,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                                                       action_mat=self.torch_action_mat,
                                                       obs_action_mat=self.torch_obs_action_mat,
                                                       reward_mode=TrainingModes.EVAL)
-            # self.learned_policy_per_va.set_policy_for_va(target_align_func, pi)
+
             self.learned_policy_per_va.set_policy_for_va(
                 learned_al_function, pi)
         return self.learned_policy_per_va
 
     def get_metrics(self):
         metrics = super().get_metrics()
-        new_metrics = dict_metrics(
+        new_metrics = dict(
             tvc=self.linf_delta_per_align_func, grad=self.grad_norm_per_align_func)
         metrics.update(new_metrics)
         return metrics
@@ -493,7 +459,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
 
     def _print_statistics(self, t, visitations, expert_visitations, loss, reward, target_align_func, learned_al_function,  grad_norm, abs_diff_in_visitation_counts, learned_grounding=None):
         avg_linf_delta = np.mean(abs_diff_in_visitation_counts)
-        #norm_reward = np.linalg.norm(reward)
+        # norm_reward = np.linalg.norm(reward)
         max_error_state = np.where(
             abs_diff_in_visitation_counts == np.max(abs_diff_in_visitation_counts))
         max_error_state = (max_error_state[0][0], max_error_state[1][0]) if len(
@@ -503,19 +469,19 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
         weight_norm = util.tensor_iter_norm(params).item()
         self.logger.record("iteration", t)
         self.logger.record("Target align_func", target_align_func)
-        
+
         if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             self.logger.record("Learned align_func: ", tuple(
                 [float("{0:.3f}".format(v)) for v in learned_al_function]))
-            optimizer_kwargs =  self.vsi_optimizer_kwargs
-            
+            optimizer_kwargs = self.vsi_optimizer_kwargs
+
         else:
             self.logger.record(
                 "Learned grounding: ", learned_grounding if learned_grounding is not None else "none")
             optimizer_kwargs = self.vgl_optimizer_kwargs
-        
-        for p,v in optimizer_kwargs.items():
-                self.logger.record(f"OpKWargs/{p}", v)
+
+        for p, v in optimizer_kwargs.items():
+            self.logger.record(f"OpKWargs/{p}", v)
 
         self.logger.record("linf_delta", np.max(abs_diff_in_visitation_counts))
         self.logger.record("weight_norm", weight_norm)
@@ -540,22 +506,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
         return transform_state_only_reward_to_state_action_reward(
             rewards, self.env.state_dim, self.env.action_dim, self.env.transition_matrix)
 
-    """
-    def state_action_callable_reward_from_computed_rewards_per_target_align_func(self, rewards_per_target_align_func: Union[Dict, Callable]):
-        if isinstance(rewards_per_target_align_func, dict):
-            for al_f in rewards_per_target_align_func.keys():
-                rewards_per_target_align_func[al_f] = transform_state_only_reward_to_state_action_reward(
-                    rewards_per_target_align_func[al_f], self.env.state_dim, self.env.action_dim, self.env.transition_matrix)
-                                                
-            rewards_per_target_align_func_callable = lambda al_f: rewards_per_target_align_func[al_f]
-        else:
-            rewards_per_target_align_func_callable = lambda al_func: transform_state_only_reward_to_state_action_reward(
-                rewards_per_target_align_func(al_func), 
-                state_dim=self.env.state_dim,  
-                action_dim=self.env.action_dim,
-                transition_matrix=self.env.transition_matrix)
-        return rewards_per_target_align_func_callable """
-
     def get_expert_demo_om(self, seed_target_align_func, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3, use_action_visitations=False):
 
         target_align_func = self.target_align_function_sampler(
@@ -573,7 +523,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                     trajs = self.vsi_expert_sampler(
                         [target_align_func], n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
                     self.vsi_demo_state_om[target_align_func] = get_demo_oms_from_trajectories(
-                        trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False, 
+                        trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False,
                         use_action=use_action_visitations, action_dim=self.env.action_dim)
             return self.vsi_demo_state_om[target_align_func]
         else:
@@ -587,7 +537,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                     trajs = self.vgl_expert_sampler(
                         [target_align_func], n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
                     self.vgl_demo_state_om[target_align_func] = get_demo_oms_from_trajectories(
-                        trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False, 
+                        trajs, state_dim=self.env.state_dim, discount=self.discount, groupby_al_func=False,
                         use_action=use_action_visitations, action_dim=self.env.action_dim)
             return self.vgl_demo_state_om[target_align_func]
 
@@ -612,7 +562,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             the accumulated ones according to the discount and the approximated policy
         """
         if pi is None:
-            V, Q, pi = mce_partition_fh(self.exposed_state_env, reward=reward_matrix, discount=self.discount, 
+            V, Q, pi = mce_partition_fh(self.exposed_state_env, reward=reward_matrix, discount=self.discount,
                                         policy_approximator=self.policy_approximator,
                                         approximator_kwargs=self.approximator_kwargs,
                                         deterministic=deterministic)
@@ -677,16 +627,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                             align_func_i,], t_max=self.env.horizon, exploration=0
                     )
                     visitations_per_repetition[i] = get_demo_oms_from_trajectories(
-                        trajs=trajs, state_dim=self.env.state_dim, discount=self.discount, 
+                        trajs=trajs, state_dim=self.env.state_dim, discount=self.discount,
                         groupby_al_func=False, action_dim=self.env.action_dim, use_action=use_action_visitations)
-
-                    # print(align_func_i, n_seeds, trajs, n_sampled_trajs_per_seed)
                 om_per_align_func[align_func_i] = visitations_per_repetition[i]
 
         for r in range(1):
 
             self.probabilistic_vsi_optimizer.zero_grad()
-            if False:  #  This is one by one. Does not work correctly always
+            if False:  #  TODO. This is adding the losses of each repetition. Does not work correctly always
                 visitation_diff_expectation = np.mean([np.abs(
                     visitations_per_repetition - np.random.permutation(demo_om_per_repetition)) for r in range(1)], axis=0)
                 visitation_diff_expectation_th = th.as_tensor(visitation_diff_expectation, dtype=self.probabilistic_reward_net.dtype,
@@ -695,7 +643,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 average_losses = np.float32(
                     (1-beta)*visitation_diff_expectation + beta*average_losses)
 
-                print("VIS TIME: ", s)
                 prob_of_each_repetition = prob_of_each_repetition.float()
                 weights_th = th.mean(th.matmul(
                     (prob_of_each_repetition), visitation_diff_expectation_th-average_losses), axis=0)
@@ -703,7 +650,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
 
                 loss = weights_th
                 real_loss = th.mean(loss)
-            # This assumes that prob(i) == prob(align_i), and matches expected visitation counts.
+            # This assumes that prob(i) == prob(align_i), and matches expected visitation counts, weighting by this factor.
             seen_al_funcs = []
             demo_om_per_repetition_th = th.as_tensor(demo_om_per_repetition, dtype=self.probabilistic_reward_net.dtype,
                                                      device=self.probabilistic_reward_net.device).requires_grad_(False)
@@ -827,14 +774,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def mce_vsl_loss_calculation(self, target_align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
                                  obs_mat: th.Tensor = None, action_mat: th.Tensor = None,
                                  obs_action_mat: th.Tensor = None):
-        
+
         use_action_visitations = self.current_net.use_action or self.current_net.use_next_state or self.current_net.use_one_hot_state_action
-        #use_action_visitations = False
+        # use_action_visitations = False
         if not hasattr(self, '_learning_policy'):
             self._learning_policy = VAlignedDictDiscreteStateActionPolicyTabularMDP(
-                    policy_per_va_dict={}, env=self.env)
+                policy_per_va_dict={}, env=self.env)
         prev_pi = None
-        
+
         if self.use_feature_expectations and self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             prev_pi = self.mce_partition_fh_per_align_func(
                 target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
@@ -846,7 +793,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
             expert_visitations_or_feature_expectation = self.get_expert_demo_om(
                 target_align_func, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, use_action_visitations=use_action_visitations)
             if self.demo_om_from_policy:
-                
+
                 _, visitations_or_feature_expectations, prev_pi = self.mce_occupancy_measures(
                     reward_matrix=predicted_r_np,
                     deterministic=not self.learn_stochastic_policy, use_action_visitations=use_action_visitations
@@ -856,14 +803,15 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 if prev_pi is None:
                     prev_pi = self.mce_partition_fh_per_align_func(
                         target_align_func, reward_matrix=predicted_r_np, reward_mode=self.current_net.mode)
-                
-                self._learning_policy.set_policy_for_va(target_align_func, prev_pi)
+
+                self._learning_policy.set_policy_for_va(
+                    target_align_func, prev_pi)
                 trajs = self._learning_policy.obtain_trajectories(
                     n_seeds=n_seeds_for_sampled_trajectories, repeat_per_seed=n_sampled_trajs_per_seed, stochastic=self.learn_stochastic_policy, align_funcs_in_policy=[
                         target_align_func], t_max=self.env.horizon, exploration=0
                 )
                 visitations_or_feature_expectations = get_demo_oms_from_trajectories(
-                    trajs=trajs, state_dim=self.env.state_dim, 
+                    trajs=trajs, state_dim=self.env.state_dim,
                     discount=self.discount, use_action=use_action_visitations, action_dim=self.env.action_dim)[target_align_func]
         # Forward/back/step (grads are zeroed at the top).
         # weights_th(s) = \pi(s) - D(s)
@@ -885,17 +833,17 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                 dtype=self.current_net.dtype,
                 device=self.current_net.device,
             )
-            
-            
+
             if len(predicted_r.shape) == 1:
                 # The "loss" is then:
                 #   E_\pi[r_\theta(S)] - E_D[r_\theta(S)]
                 loss = th.dot(weights_th, predicted_r)
             else:  # Use action in the reward.
                 if predicted_r.shape == weights_th.shape:
-                    
+
                     loss_matrix = th.multiply(predicted_r, weights_th)
-                    loss = loss_matrix.sum()/max(np.count_nonzero(weights_th.detach().numpy()), 1.0)
+                    # This makes convergence faster.
+                    loss = loss_matrix.sum()/max(np.float32(np.count_nonzero(weights_th.detach().numpy())), 1.0)
                 else:
                     next_state_prob = th.as_tensor(self.env.transition_matrix, dtype=self.current_net.dtype,
                                                    device=self.current_net.device)
@@ -905,7 +853,7 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
                     loss_matrix = predicted_r.unsqueeze(
                         2) * (next_state_prob * weights_th.unsqueeze(0).unsqueeze(0))  # Shape: (N, M, K)
                     loss = loss_matrix.mean()
-                    
+
                 # loss = Sum_s,a,s'[R(s,a)*P(s,a,s')*weights_th(s')]
 
         loss.backward()
@@ -939,14 +887,14 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def _train_step_vgl(self, obs_mat: th.Tensor, align_func: Any, action_mat: th.Tensor = None, obs_action_mat: th.Tensor = None, n_seeds_for_sampled_trajectories=30, n_sampled_trajs_per_seed=3) -> Tuple[np.ndarray, np.ndarray]:
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
         self.vgl_optimizer.zero_grad()
-        
+
         self.current_net.set_alignment_function(align_func)
 
         predicted_r, predicted_r_np = self.calculate_rewards(align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
                                                              obs_action_mat=obs_action_mat,
                                                              reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING,
                                                              recover_previous_config_after_calculation=False)
-        
+
         assert self.current_net.mode == TrainingModes.VALUE_GROUNDING_LEARNING
         visitations, expert_visitations, prev_pi, loss = self.mce_vsl_loss_calculation(align_func, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, predicted_r, predicted_r_np,
                                                                                        obs_mat=obs_mat, action_mat=action_mat,
@@ -970,8 +918,6 @@ class MaxEntropyIRLForVSL(BaseTabularMDPVSLAlgorithm):
     def set_demonstrations(self, demonstrations: Union[Iterable[types.Trajectory], Iterable[types.TransitionMapping], types.TransitionsMinimal]) -> None:
         pass
 
-    
-    
 
 def check_coherent_rewards(max_entropy_algo: MaxEntropyIRLForVSL, align_funcs_to_test=[], real_grounding=th.nn.Identity(), policy_approx_method=PolicyApproximators.MCE_ORIGINAL, stochastic_expert=False, stochastic_learner=False):
     previous_mode = max_entropy_algo.reward_net.mode

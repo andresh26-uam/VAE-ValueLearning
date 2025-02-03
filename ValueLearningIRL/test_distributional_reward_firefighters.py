@@ -10,7 +10,7 @@ from firefighters_use_case.pmovi import pareto_multi_objective_value_iteration, 
 from src.envs.firefighters_env import FeatureSelectionFFEnv, FireFightersEnv
 from src.vsl_algorithms.me_irl_for_vsl import MaxEntropyIRLForVSL, mce_partition_fh
 from src.vsl_reward_functions import ConvexAlignmentLayer, LinearVSLRewardFunction, TrainingModes
-from src.vsl_policies import VAlignedDictSpaceActionPolicy, profiled_society_sampler, random_sampler_among_trajs, sampler_from_policy
+from src.vsl_policies import VAlignedDictSpaceActionPolicy, profile_sampler_in_society, random_sampler_among_trajs, sampler_from_policy
 from train_vsl import *
 from utils import sample_example_profiles, train_test_split_initial_state_distributions
 from torch import nn
@@ -155,7 +155,7 @@ if __name__ == "__main__":
         vsi_expert_policy=expert_policy_train,
         vgl_expert_sampler=vgl_expert_train_sampler,
         vsi_expert_sampler=vsi_expert_train_sampler,
-        target_align_func_sampler=profiled_society_sampler if SOCIETY_EXPERT else lambda al_func: al_func,
+        target_align_func_sampler=profile_sampler_in_society if SOCIETY_EXPERT else lambda al_func: al_func,
 
         demo_om_from_policy=DEMO_OM_FROM_POLICY,
 

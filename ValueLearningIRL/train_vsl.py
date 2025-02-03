@@ -11,8 +11,8 @@ from env_data import FIRE_FIGHTERS_ENV_NAME, ROAD_WORLD_ENV_NAME, EnvDataForIRL,
 from src.envs.firefighters_env import FeatureSelectionFFEnv
 
 from src.vsl_algorithms.base_tabular_vsl_algorithm import PolicyApproximators
-from src.vsl_algorithms.adversarial_vsl import AdversarialVSL, TabularAdversarialVSL
-from src.vsl_algorithms.inverseQlearning import DeepInverseQLearning, TabularInverseQLearning
+from src.vsl_algorithms.adversarial_vsl import AdversarialVSL
+from src.vsl_algorithms._inverseQlearning import DeepInverseQLearning, TabularInverseQLearning
 from src.vsl_algorithms.me_irl_for_vsl import MaxEntropyIRLForVSL, check_coherent_rewards
 from src.vsl_algorithms.preference_model_vs import PreferenceBasedTabularMDPVSL, SupportedFragmenters
 from src.vsl_algorithms.vsl_plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies, plot_learned_to_expert_policies, plot_learning_curves, plot_vs_preference_metrics
@@ -47,16 +47,30 @@ def parse_args():
     general_group.add_argument('-e', '--environment', type=str, default='roadworld', choices=[
                                'roadworld', 'firefighters'], help='environment (roadworld or firefighters)')
     general_group.add_argument('-a', '--algorithm', type=str, choices=[
-                               'me', 'pc', 'pc-me', 'me-pc', 'pc-pc', 'me-me', 'ad', 'pc-ad', 'ad-ad', 'ta', 'pc-ta', 'pc-iq', 'iq-iq', 'iq', 'ti', 'ti-ti'], default='me', help='Algorithm to use (max entropy or preference comparison)')
+                               'me', 'pc', 'pc-me', 'me-pc', 'pc-pc', 'me-me', 'ad', 'pc-ad', 'ad-ad', 'pc-iq', 'iq-iq', 'iq', 'ti', 'ti-ti'], default='me', help='Algorithm to use (max entropy or preference comparison)')
     general_group.add_argument('-df', '--discount_factor', type=float, default=0.7,
                                help='Discount factor. For some environments, it will be neglected as they need a specific discount factor.')
 
-    general_group.add_argument('-sexp', '--stochastic_expert', action='store_true',
-                               default=None, help='Original Agents have stochastic behavior')
-    general_group.add_argument('-slearn', '--learn_stochastic_policy', action='store_true',
-                               default=None, help='The learned policies will be stochastic')
-    general_group.add_argument('-senv', '--environment_is_stochastic', action='store_true',
-                               default=None, help='Whether it is known the environment is stochastic')
+    general_group.add_argument('-stexp', '--stochastic_expert', action='store_true',
+                               help='The expert/original/reference policies are stochastic. This is set by default in env_data.py, but can override here setting this flag or the opposite')
+    general_group.add_argument('-detexp', '--deterministic_expert', dest='stochastic_expert', action='store_false',
+                               help='The expert/original/reference policies are taken as deterministic.')
+    # Set in env_data.py depending on the environment and algorithm
+    general_group.set_defaults(stochastic_expert=None)
+
+    general_group.add_argument('-stlearn', '--learn_stochastic_policy', action='store_true',
+                               help='The learned policies will be stochastic. This is set by default in env_data.py, but can override here setting this flag or the opposite')
+    general_group.add_argument('-detlearn', '--learn_deterministic_policy', dest='learn_stochastic_policy', action='store_false',
+                               help='The learned policies will be deterministic.')
+    # Set in env_data.py depending on the environment.
+    general_group.set_defaults(learn_stochastic_policy=None)
+
+    general_group.add_argument('-stenv', '--environment_is_stochastic', action='store_true',
+                               help='Use this flag to say the environment has stochastic transitions. This is set by default in env_data.py, but can override here setting this flag or the opposite')
+    general_group.add_argument('-detenv', '--environment_is_deterministic', dest='environment_is_stochastic', action='store_false',
+                               help='Use this flag to say the environment has deterministic transitions. This can save time in some computations of some algoritms.')
+    # Set in env_data.py depending on the environment.
+    general_group.set_defaults(environment_is_stochastic=None)
 
     general_group.add_argument('-n', '--n_experiments', type=int,
                                default=4, help='Number of experiment repetitions')
@@ -65,9 +79,14 @@ def parse_args():
     general_group.add_argument('-hz', '--horizon', type=int, required=False,
                                default=None, help='Maximum environment horizon')
 
-    # Adding arguments for the constants with both long and short options
     general_group.add_argument(
         '-li', '--log_interval', type=int, default=1, help='Log evaluation interval')
+    general_group.add_argument('-fixsamp', '--sampler_over_precalculated_trajs', action='store_true',
+                               help='Use trajectories sampled from a fixed batch instead of using a policy. Set to true typically.')
+    general_group.add_argument('-polsamp', '--sampler_over_policy', dest='sampler_over_precalculated_trajs', action='store_false',
+                               help='Use trajectories sampled from the learned/expert policy directly.')
+    # Set in env_data.py depending on the environment.
+    general_group.set_defaults(sampler_over_precalculated_trajs=None)
 
     task_group = parser.add_argument_group('Task Selection')
     task_group.add_argument('-t', '--task', type=str, required=True, default='vgl',
@@ -96,6 +115,10 @@ def parse_args():
                           default={}, help='Loss Kwargs as a Python dictionary')
     pc_group.add_argument('-acfrag', '--active_fragmenter_on', type=str,
                           default=SupportedFragmenters.CONNECTED_FRAGMENTER, choices=[e.value for e in SupportedFragmenters], help='Active fragmenter criterion')
+    me_group = alg_group.add_argument_group(
+        'Maximum Entropy Parameters')
+    me_group.add_argument('-ompol', '--demo_om_from_policy', action='store_true',
+                          default=False, help='Use the policy itself to estimate state-action visitation counts, without sampling')
 
     debug_params = parser.add_argument_group('Debug Parameters')
     debug_params.add_argument('-db', '--check_rewards', action='store_true',
@@ -154,7 +177,7 @@ if __name__ == "__main__":
     else:
         algorithm = algorithm.split('-')
 
-    if algorithm[1] == 'ad' or algorithm[1] == 'ta' or algorithm[1] == 'iq' or algorithm[1] == 'ti':
+    if algorithm[1] == 'ad' or algorithm[1] == 'iq' or algorithm[1] == 'ti':
         # the observations will be used only to calculate the rewards with env.obs_from_state or policy.obtain_observation_for_reward
         parser_args.expose_observations = False
 
@@ -194,7 +217,6 @@ if __name__ == "__main__":
         target_align_funcs_to_learned_align_funcs_per_round = []
 
     if algorithm[1] == 'ad':
-        print("adversarial testing")
         vsl_algo = AdversarialVSL(
             env=training_data.env,
             reward_net=training_data.get_reward_net(),
@@ -214,100 +236,11 @@ if __name__ == "__main__":
             learn_stochastic_policy=training_data.learn_stochastic_policy,
             # policy_approximator=training_data.policy_approximation_method,
             # approximator_kwargs=training_data.approximator_kwargs,
-            
             stochastic_expert=training_data.stochastic_expert,
             environment_is_stochastic=training_data.environment_is_stochastic,
             discount=training_data.discount_factor,
             **(training_data.ad_config['vsi'])
-
         )
-    elif algorithm[1] == 'iq':
-        print("adversarial testing")
-        vsl_algo = DeepInverseQLearning(
-            env=training_data.env,
-            reward_net=training_data.get_reward_net(),
-            log_interval=parser_args.log_interval,
-            vsi_optimizer_cls=training_data.vsi_optimizer_cls,
-            vgl_optimizer_cls=training_data.vgl_optimizer_cls,
-            vsi_optimizer_kwargs=training_data.vsi_optimizer_kwargs,
-            vgl_optimizer_kwargs=training_data.vgl_optimizer_kwargs,
-            vgl_expert_policy=training_data.vgl_expert_policy,
-            vsi_expert_policy=training_data.vsi_expert_policy,
-            vgl_expert_sampler=training_data.vgl_expert_train_sampler,
-            vsi_expert_sampler=training_data.vsi_expert_train_sampler,
-            target_align_func_sampler=training_data.target_align_func_sampler,
-            vgl_target_align_funcs=training_data.vgl_targets,
-            vsi_target_align_funcs=training_data.vsi_targets,
-            training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-            learn_stochastic_policy=training_data.learn_stochastic_policy,
-            # policy_approximator=training_data.policy_approximation_method,
-            # approximator_kwargs=training_data.approximator_kwargs,
-            stochastic_expert=training_data.stochastic_expert,
-            environment_is_stochastic=training_data.environment_is_stochastic,
-            discount=training_data.discount_factor,
-            **(training_data.iq_config['vsi'])
-
-        )
-    elif algorithm[1] == 'ta':
-        print("adversarial testing")
-        vsl_algo = TabularAdversarialVSL(
-            env=training_data.env,
-            reward_net=training_data.get_reward_net(),
-            log_interval=parser_args.log_interval,
-            vsi_optimizer_cls=training_data.vsi_optimizer_cls,
-            vgl_optimizer_cls=training_data.vgl_optimizer_cls,
-            vsi_optimizer_kwargs=training_data.vsi_optimizer_kwargs,
-            vgl_optimizer_kwargs=training_data.vgl_optimizer_kwargs,
-            vgl_expert_policy=training_data.vgl_expert_policy,
-            vsi_expert_policy=training_data.vsi_expert_policy,
-            vgl_expert_sampler=training_data.vgl_expert_train_sampler,
-            vsi_expert_sampler=training_data.vsi_expert_train_sampler,
-            target_align_func_sampler=training_data.target_align_func_sampler,
-            vgl_target_align_funcs=training_data.vgl_targets,
-            vsi_target_align_funcs=training_data.vsi_targets,
-            training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-            learn_stochastic_policy=training_data.learn_stochastic_policy,
-            policy_approximator=training_data.policy_approximation_method,
-            approximator_kwargs=training_data.approximator_kwargs,
-            stochastic_expert=training_data.stochastic_expert,
-            environment_is_stochastic=training_data.environment_is_stochastic,
-            discount=training_data.discount_factor,
-            **(training_data.tad_config['vsi'])
-
-        )
-    elif algorithm[1] == 'ti':
-        print("tabular iql testing")
-        vsl_algo = TabularInverseQLearning(
-            env=training_data.env,
-            reward_net=training_data.get_reward_net(),
-            log_interval=parser_args.log_interval,
-            vsi_optimizer_cls=training_data.vsi_optimizer_cls,
-            vgl_optimizer_cls=training_data.vgl_optimizer_cls,
-            vsi_optimizer_kwargs=training_data.vsi_optimizer_kwargs,
-            vgl_optimizer_kwargs=training_data.vgl_optimizer_kwargs,
-            vgl_expert_policy=training_data.vgl_expert_policy,
-            vsi_expert_policy=training_data.vsi_expert_policy,
-            vgl_expert_sampler=training_data.vgl_expert_train_sampler,
-            vsi_expert_sampler=training_data.vsi_expert_train_sampler,
-            target_align_func_sampler=training_data.target_align_func_sampler,
-            vgl_target_align_funcs=training_data.vgl_targets,
-            vsi_target_align_funcs=training_data.vsi_targets,
-            training_mode=TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-            learn_stochastic_policy=training_data.learn_stochastic_policy,
-            policy_approximator=training_data.policy_approximation_method,
-            approximator_kwargs=training_data.approximator_kwargs,
-            stochastic_expert=training_data.stochastic_expert,
-            environment_is_stochastic=training_data.environment_is_stochastic,
-            discount=training_data.discount_factor,
-            **(training_data.tiq_config['vsi'])
-
-        )
-        """alg_ret = vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING if vgl_or_vsi == 'vgl' else TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
-                                 assumed_grounding=training_data.get_assumed_grounding() if vgl_or_vsi == 'vsi' else None,
-                                 use_probabilistic_reward=parser_args.use_probabilistic_reward if vgl_or_vsi != 'vgl' else False,
-                                 n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                 **(training_data.ad_train_config['vsi']))"""
-
     elif algorithm[1] == 'me':
         vsl_algo = MaxEntropyIRLForVSL(
             env=training_data.env,
@@ -429,13 +362,12 @@ if __name__ == "__main__":
                 learn_stochastic_policy=training_data.learn_stochastic_policy,
                 # policy_approximator=training_data.policy_approximation_method,
                 # approximator_kwargs=training_data.approximator_kwargs,
-                
                 stochastic_expert=training_data.stochastic_expert,
                 environment_is_stochastic=training_data.environment_is_stochastic,
                 discount=training_data.discount_factor,
                 **(training_data.ad_config['vgl'])
 
-                )
+            )
         else:
             raise ValueError("Unknown algorithm key : " + str(algorithm[0]))
     if parser_args.check_rewards:
@@ -464,17 +396,16 @@ if __name__ == "__main__":
                                                                                                        assumed_grounding=None,
                                                                                                        use_probabilistic_reward=False,
                                                                                                        n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
-                                                                                                       **(training_data.pc_train_config['vgl'] if algorithm[0] == 'pc' else 
+                                                                                                       **(training_data.pc_train_config['vgl'] if algorithm[0] == 'pc' else
                                                                                                           training_data.me_train_config['vgl'] if algorithm[0] == 'me' else
-                                                                                                          training_data.ad_train_config['vgl'] if algorithm[0] == 'ad' else {}
-                                                                                                          ))
+                                                                                                          training_data.ad_train_config['vgl'] if algorithm[0] == 'ad' else {
+                                                                                                       }
+                                                                                                       ))
             vsl_algo.reward_net = vgl_before_vsi_vsl_algo.reward_net
 
         elif task == 'vsi':
             assumed_grounding = training_data.get_assumed_grounding()
 
-        pp.pprint((training_data.me_train_config[vgl_or_vsi] if algorithm[1] ==
-                  'me' else training_data.pc_train_config[vgl_or_vsi]))
         # assert parser_args.use_quantified_preference
         alg_ret = vsl_algo.train(mode=TrainingModes.VALUE_GROUNDING_LEARNING if vgl_or_vsi == 'vgl' else TrainingModes.VALUE_SYSTEM_IDENTIFICATION,
                                  assumed_grounding=assumed_grounding if vgl_or_vsi == 'vsi' else None,
@@ -482,7 +413,6 @@ if __name__ == "__main__":
                                  n_reward_reps_if_probabilistic_reward=training_data.n_reward_samples_per_iteration,
                                  **(training_data.me_train_config[vgl_or_vsi] if algorithm[1] == 'me' else
                                     training_data.ad_train_config[vgl_or_vsi] if algorithm[1] == 'ad' else
-                                    training_data.tad_train_config[vgl_or_vsi] if algorithm[1] == 'ta' else
                                     training_data.iq_train_config[vgl_or_vsi] if algorithm[1] == 'iq' else
                                     training_data.tiq_train_config[vgl_or_vsi] if algorithm[1] == 'ti' else {
                                  }
@@ -509,18 +439,19 @@ if __name__ == "__main__":
             round_policy = LearnerValueSystemLearningPolicy.load(
                 vsl_algo.env, f"{parser_args.experiment_name}_round_save_{rep}")
             tabular_policy = {}
-            for w, lw in target_align_funcs_to_learned_align_funcs.items() if task == 'all' or task =='vsi' else zip(vsl_algo.vgl_target_align_funcs, vsl_algo.vgl_target_align_funcs):
+            for w, lw in target_align_funcs_to_learned_align_funcs.items() if task == 'all' or task == 'vsi' else zip(vsl_algo.vgl_target_align_funcs, vsl_algo.vgl_target_align_funcs):
                 tabular_policy[w] = np.zeros(
-                (vsl_algo.env.state_dim, vsl_algo.env.action_dim))
+                    (vsl_algo.env.state_dim, vsl_algo.env.action_dim))
                 tabular_policy[lw] = np.zeros(
-                (vsl_algo.env.state_dim, vsl_algo.env.action_dim))
+                    (vsl_algo.env.state_dim, vsl_algo.env.action_dim))
 
                 for s in range(vsl_algo.env.state_dim):
-                
+
                     tabular_policy[w][s] = round_policy.act_and_obtain_action_distribution(s,
-                                                                                        stochastic=vsl_algo.learn_stochastic_policy, alignment_function=w)[2].detach().numpy()
+                                                                                           stochastic=vsl_algo.learn_stochastic_policy, alignment_function=w)[2].detach().numpy()
                     tabular_policy[lw][s] = tabular_policy[w][s]
-            tabulated_policies_per_round.append(VAlignedDictDiscreteStateActionPolicyTabularMDP(policy_per_va_dict=tabular_policy, env=vsl_algo.env))
+            tabulated_policies_per_round.append(VAlignedDictDiscreteStateActionPolicyTabularMDP(
+                policy_per_va_dict=tabular_policy, env=vsl_algo.env))
         else:
             tabulated_policies_per_round.append(
                 deepcopy(vsl_algo.learned_policy_per_va))
@@ -596,7 +527,6 @@ if __name__ == "__main__":
                                                                                                         )
 
         learned_reward_per_test_al_round.append(learned_reward_per_test_al_r)
-        # print(learned_reward_per_test_al_r)
         testing_policy_per_round.append(policy_r)
 
     preference_metrics_expert_random, value_expectations_per_ratio, value_expectations_per_ratio_expert = vsl_algo.test_accuracy_for_align_funcs(
