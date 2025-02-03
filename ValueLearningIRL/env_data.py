@@ -440,7 +440,7 @@ class EnvDataForIRL():
 class EnvDataForIRLFireFighters(EnvDataForIRL):
     DEFAULT_HORIZON = 50
     DEFAULT_INITIAL_STATE_DISTRIBUTION = 'random'
-    DEFAULT_N_SEEDS = 1000 
+    DEFAULT_N_SEEDS = 2000 
     DEFAULT_N_SEEDS_MINIBATCH = 200
     DEFAULT_N_EXPERT_SAMPLES_PER_SEED_MINIBATCH = 1
     DEFAULT_N_REWARD_SAMPLES_PER_ITERATION = 1
@@ -626,8 +626,8 @@ class EnvDataForIRLFireFighters(EnvDataForIRL):
         self.vsi_reference_policy = expert_policy_train
     def set_defaults(self):
 
-        self.stochastic_expert = False # TODO STOCHASTIC FF?
-        self.learn_stochastic_policy = False
+        self.stochastic_expert = True # TODO STOCHASTIC FF?
+        self.learn_stochastic_policy = True
         self.environment_is_stochastic = False
 
         self.vgl_targets = [(1.0, 0.0), (0.0, 1.0)]

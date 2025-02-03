@@ -54,8 +54,7 @@ def example_execution(policy, q,max_steps=100, discount_factor=1.0, avg=False, s
         scalar_state = env.encrypt(state)
         state_list.append(scalar_state)
         transitions_list.append(scalar_state)
-        if show_q:
-            print(state, q[scalar_state])
+        if show_q:            print(state, q[scalar_state])
         action = policy[scalar_state]
 
         action_list.append(action)
