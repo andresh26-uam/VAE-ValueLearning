@@ -2,6 +2,7 @@
 "ff": {
         "name": "FireFighters-v0",
         "n_values": 2,
+        "K": 3,
         "horizon": 50,
         "basic_profiles": [[1.0, 0.0], [0.0,1.0]],
         "profiles_colors": [[1,0,0], [0,0,1]],
@@ -18,7 +19,9 @@
             "basic_layer_classes": ["nn.Linear", "nn.Linear", "nn.Linear", "nn.Linear", "ConvexAlignmentLayer"],
             "activations": ["nn.LeakyReLU", "nn.LeakyReLU", "nn.Tanh", "nn.Tanh", "nn.Identity"],
             "use_bias": [true, true, true, false, false],
-            "hid_sizes": [50, 100, 50, 2]
+            "hid_sizes": [50, 100, 50, 2],
+            "negative_grounding_layer": false,
+            "clamp_rewards": false
         },
         "reward_feature_extractor": "FeatureExtractorFromVAEnv",
         "policy_state_feature_extractor": "OneHotFeatureExtractor",
@@ -32,6 +35,8 @@
         "algorithm_config": {
             "pc": {
                 "reward_net": {},
+                "optimizer_kwargs": "default",
+                "optimizer_class": "default",
                 "learn_stochastic_policy": true,
                 "loss_class": "cross_entropy",
                 "loss_kwargs": {},

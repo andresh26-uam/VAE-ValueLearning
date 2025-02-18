@@ -25,6 +25,7 @@ import torch
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.base_class import BaseAlgorithm
 from envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from src.data import TrajectoryWithValueSystemRews
 from utils import CHECKPOINTS, NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
 
 
@@ -85,7 +86,7 @@ class ValueSystemLearningPolicy(BasePolicy):
     def obtain_observation(self, next_state_obs):
         return next_state_obs
 
-    def obtain_trajectory(self, alignment_func_in_policy=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None,
+    def obtain_trajectory(self, alignment_func_in_policy=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, with_grounding=False, alignment_func_in_env=None,
                           recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False, custom_grounding=None) -> Trajectory:
 
         if alignment_func_in_env is None:
@@ -135,6 +136,7 @@ class ValueSystemLearningPolicy(BasePolicy):
         else:
             obs = [obs_in_state,]
             rews = []
+            v_rews = [[] for _ in range(self.env.n_values)]
             acts = []
             infos = []
             # edge_path.append(self.environ.cur_state)
@@ -162,7 +164,9 @@ class ValueSystemLearningPolicy(BasePolicy):
                     assert reward_should_be == rew
                     assert np.allclose(info_next['state'], state_obs)
                     rews.append(rew)
-
+                if with_grounding:
+                    for value_index in range(self.env.n_values):
+                        v_rews[value_index].append(self.env.get_reward_per_value(value_index, obs_in_state, action, next_obs=next_obs_in_state, info=info_next, custom_grounding=self.env.current_assumed_grounding))
                 state_obs = next_state_obs
                 info = info_next
                 obs_in_state = next_obs_in_state
@@ -172,12 +176,15 @@ class ValueSystemLearningPolicy(BasePolicy):
             acts = np.asarray(acts)
             infos = np.asarray(infos)
             rews = np.asarray(rews)
+            v_rews = np.asarray(v_rews)
             obs = np.asarray(obs)
             if recover_previous_alignment_func_in_env and with_reward:
                 self.env.set_align_func(prev_al_env)
 
-            if with_reward:
+            if with_reward and not with_grounding:
                 return TrajectoryWithRew(obs=obs, acts=acts, infos=infos, terminal=terminated, rews=rews)
+            if with_reward and with_grounding:
+                return TrajectoryWithValueSystemRews(obs=obs, acts=acts, infos=infos, rews=rews, terminal=terminated, n_vals=self.env.n_values, v_rews=v_rews)
             else:
                 return Trajectory(obs=obs, acts=acts, infos=infos, terminal=terminated)
 
@@ -185,6 +192,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                             options: Union[None, List, Dict] = None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None,], t_max=None,
                             exploration=0, with_reward=False, alignments_in_env=[None,],
                             end_trajectories_when_ended=True,
+                            with_grounding=False,
                             from_initial_states=None) -> List[Trajectory]:
         trajs = []
         if len(alignments_in_env) != len(align_funcs_in_policy):
@@ -215,7 +223,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                   exploration=exploration,
                                                   end_trajectories_when_ended=end_trajectories_when_ended,
                                                   options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False,
-                                                  with_reward=with_reward, alignment_func_in_env=af_in_env)
+                                                  with_reward=with_reward, with_grounding=with_grounding, alignment_func_in_env=af_in_env)
                     trajs.append(
                         traj
                     )
@@ -228,7 +236,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                 end_trajectories_when_ended=end_trajectories_when_ended,
                                                                 options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                 stochastic=stochastic, only_states=False,
-                                                                with_reward=True, alignment_func_in_env=(1.0, 0.0, 0.0))
+                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0))
 
                                 trajs_sus_sus.append(traj_w)
                                 assert np.all(traj_w.obs == traj.obs)
@@ -239,7 +247,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                  end_trajectories_when_ended=end_trajectories_when_ended,
                                                                  options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                  stochastic=stochastic, only_states=False,
-                                                                 with_reward=True, alignment_func_in_env=(0.0, 0.0, 1.0))
+                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0))
 
                                 trajs_sus_eff.append(traj_w2)
                                 # print(traj.obs, traj_w2.obs, seed, n_seeds, si)
@@ -251,7 +259,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                 end_trajectories_when_ended=end_trajectories_when_ended,
                                                                 options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                 stochastic=stochastic, only_states=False,
-                                                                with_reward=True, alignment_func_in_env=(1.0, 0.0, 0.0))
+                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0))
                                 trajs_eff_sus.append(traj_w)
                                 # print(traj.obs, traj_w.obs, seed, n_seeds, si)
                                 assert np.all(traj_w.obs == traj.obs)
@@ -262,7 +270,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                  end_trajectories_when_ended=end_trajectories_when_ended,
                                                                  options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                  stochastic=stochastic, only_states=False,
-                                                                 with_reward=True, alignment_func_in_env=(0.0, 0.0, 1.0))
+                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0))
 
                                 trajs_eff_eff.append(traj_w2)
                                 # print(traj.obs, traj_w2.obs, seed, n_seeds, si)

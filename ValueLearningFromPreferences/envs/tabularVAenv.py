@@ -38,13 +38,15 @@ def translate_state(state, original_state_space):
 
 class ValueAlignedEnvironment(gym.Wrapper):
 
-    def __init__(self, env: gym.Env, horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True, **kwargs):
+    def __init__(self, env: gym.Env, n_values: int, horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True, **kwargs):
         super().__init__(env)
         self.horizon = horizon
         self.done_when_horizon_is_met = done_when_horizon_is_met
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
         self._cur_align_func = None
         self.current_assumed_grounding = None
+        self.n_values = n_values
+        self.basic_profiles = [tuple(t) for t in np.eye(self.n_values)]
         # self.action_space = self.env.action_space
         # self.observation_space = self.observation_space
 
@@ -56,6 +58,9 @@ class ValueAlignedEnvironment(gym.Wrapper):
     def align_func_yielder(self, a, ns=None, prev_align_func=None, info=None):
         return self._cur_align_func
 
+
+    def get_reward_per_value(self, vindex, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
+        return self.get_reward_per_align_func(align_func=self.basic_profiles[vindex], obs=obs, action=action, next_obs=next_obs, info=info, custom_grounding=custom_grounding)
     @abstractmethod
     def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
         ...
@@ -106,7 +111,7 @@ class ValueAlignedEnvironment(gym.Wrapper):
     
 class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
 
-    def __init__(self, transition_matrix: ndarray, observation_matrix: ndarray,
+    def __init__(self, n_values: int, transition_matrix: ndarray, observation_matrix: ndarray,
                  reward_matrix_per_va: Callable[[Any], ndarray],
                  default_reward_matrix: ndarray, initial_state_dist: ndarray = None,
                  horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True, **kwargs):
@@ -117,7 +122,7 @@ class TabularVAMDP(ValueAlignedEnvironment, base_envs.TabularModelPOMDP):
         self.done_when_horizon_is_met = done_when_horizon_is_met
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
 
-        super().__init__(self._real_env, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
+        super().__init__(self._real_env, n_values=n_values, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
                          trunc_when_horizon_is_met=trunc_when_horizon_is_met)
         self.env: base_envs.TabularModelPOMDP
         self.transition_matrix = self.unwrapped.transition_matrix

@@ -896,3 +896,15 @@ def squeeze_r(r_output: th.Tensor) -> th.Tensor:
 
 
 
+def parse_layer_name(layer_name):
+        if layer_name == 'nn.Linear':
+            return th.nn.Linear
+        if layer_name == 'ConvexAlignmentLayer':
+            return ConvexAlignmentLayer
+        if layer_name == 'nn.LeakyReLU':
+            return th.nn.LeakyReLU
+        if layer_name == 'nn.Tanh':
+            return th.nn.Tanh
+        if layer_name == 'nn.Identity':
+            return th.nn.Identity
+        raise ValueError(f'Unknown layer name: {layer_name}')

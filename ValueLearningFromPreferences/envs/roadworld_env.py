@@ -35,7 +35,8 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         self._invalid_states = [s for s in range(
             env.n_states) if s not in env.valid_edges]
 
-        super().__init__(env.transition_matrix,
+        super().__init__(len(BASIC_PROFILES),
+                         env.transition_matrix,
                          env.observation_matrix,
                          reward_matrix_per_va,
                          reward_matrix_per_va(env.last_profile),

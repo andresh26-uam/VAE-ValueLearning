@@ -147,7 +147,8 @@ class FireFightersEnv(TabularVAMDP):
         # self._cur_state = self.real_env.state
 
         self.reward_matrix_per_va_dict = reward_matrix_per_va
-        super(FireFightersEnv, self).__init__(transition_matrix=transition_matrix, observation_matrix=observation_matrix,
+        super(FireFightersEnv, self).__init__(n_values=2,
+                                              transition_matrix=transition_matrix, observation_matrix=observation_matrix,
                                               reward_matrix_per_va=self._get_reward_matrix_per_va,
                                               default_reward_matrix=reward_matrix_per_va[(0.0, 1.0)], horizon=horizon, initial_state_dist=self.initial_state_dist)
         self.set_align_func((1.0, 0.0))
