@@ -237,12 +237,6 @@ if __name__ == "__main__":
         idxs, discounted_sums, discounted_sums_per_grounding, preferences, preferences_per_grounding = load_preferences(
             epsilon=parser_args.reward_epsilon, dataset_name=dataset_name+'_train', environment_data=environment_data, society_data=society_data, ag=ag, dtype=parser_args.dtype)
         
-        print(idxs)
-        print(discounted_sums)
-        print(discounted_sums_per_grounding)
-        print(preferences)
-        print(preferences_per_grounding)
-        
         trajs_ag = load_trajectories(dataset_name=dataset_name+'_train', ag=ag,
                                      environment_data=environment_data, society_data=society_data, override_dtype=parser_args.dtype)
 

@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 from torch.utils import data as data_th
 import tqdm
-from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory
+from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory, check_assignment_consistency, check_grounding_value_system_networks_consistency_with_optim, check_optimizer_consistency
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 import torch as th
 
@@ -24,72 +24,6 @@ from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, Conv
 
 from imitation.algorithms import preference_comparisons
 
-
-def check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, optimizer):
-        """Checks if the optimizer parameters match the networks' parameters."""
-        optimizer_params = {param for group in optimizer.param_groups for param in group['params']}
-        network_params = {param for cluster in grounding_per_value_per_cluster for network in cluster for param in network.parameters()}
-        network_params.update({param for network in value_system_per_cluster for param in network.parameters()})
-        assert optimizer_params == network_params, "Optimizer parameters do not match the networks' parameters."
-
-
-def check_optimizer_consistency(reward_model_per_agent_id, optimizer):
-    """Checks if the optimizer parameters match the reward model parameters."""
-    optimizer_params = {param for group in optimizer.param_groups for param in group['params']}
-    model_params = {param for model in reward_model_per_agent_id.values() for param in model.parameters()}
-    assert optimizer_params.issuperset(model_params)
-    if optimizer_params != model_params:
-        missing_in_optimizer = model_params - optimizer_params
-        extra_in_optimizer = optimizer_params - model_params
-        error_message = (
-            "Optimizer parameters do not match the reward model parameters.\n"
-            f"Missing in optimizer: {missing_in_optimizer}\n"
-            f"Extra in optimizer: {extra_in_optimizer}"
-        )
-        if len(missing_in_optimizer) > 0:
-            raise AssertionError(error_message)
-
-def check_assignment_consistency(grounding_per_value_per_cluster, value_system_network_per_cluster, assignment_aid_to_gr_cluster, assignment_aid_to_vs_cluster, reward_models_per_aid):
-        
-
-        
-        for aid, model in reward_models_per_aid.items():
-                
-                model: AbstractVSLRewardFunction
-                vsNetwork: ConvexAlignmentLayer = value_system_network_per_cluster[assignment_aid_to_vs_cluster[aid]]
-                th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), vsNetwork.state_dict())
-
-                np.testing.assert_allclose(model.get_learned_align_function(), vsNetwork.get_alignment_layer()[0].detach()[0])
-
-                assignment_per_value = assignment_aid_to_gr_cluster[aid]
-
-                model_params = {param for param in model.parameters()}
-                gNetworksParams = set()
-                for vi in range(len(model.get_learned_align_function())):
-                    grNetwork: ConvexAlignmentLayer = grounding_per_value_per_cluster[vi][assignment_per_value[vi]]
-                    th.testing.assert_close(model.get_network_for_value(vi).state_dict(), grNetwork.state_dict()) # TODO: New class of base clustering vsl algorithm? or gather per grounding and then per agent?
-                    network_params = {param for param in grNetwork.parameters()}
-                    gNetworksParams.update(network_params)
-                all_should_be_params = gNetworksParams.union({p for p in vsNetwork.parameters()})    
-                
-                if all_should_be_params != model_params:
-                    missing_in_optimizer = model_params - all_should_be_params
-                    extra_in_optimizer = all_should_be_params - model_params
-                    error_message = (
-                        "Reward model parameters do not match the ones in the networks.\n"
-                        f"Missing in reward model: {missing_in_optimizer}\n"
-                        f"Extra in networks: {extra_in_optimizer}"
-                    )
-                    raise AssertionError(error_message)
-                
-        model_params = {param for model in reward_models_per_aid.values() for param in model.parameters()}
-        
-        network_params = {param for cluster in grounding_per_value_per_cluster for network in cluster for param in network.parameters()}
-        network_params.update({param for network in value_system_network_per_cluster for param in network.parameters()})
-        assert model_params.issubset(network_params)
-
-        #assert network_params.issubset(model_params)
-        #assert model_params == network_params, "reward model per aid has different parameters than the networks in the grounding and value system networks."
 
 
 
@@ -336,9 +270,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
                                     
                                     try:
+                                        
+                                        th.testing.assert_close(state_dict_new, state_dict_old)
                                         print("NEW ST", state_dict_new)
                                         print("OLD ST", state_dict_old)
-                                        th.testing.assert_close(state_dict_new, state_dict_old)
                                         raise ValueError("State dicts of reward models have not changed")
                                 
                                     except AssertionError:
