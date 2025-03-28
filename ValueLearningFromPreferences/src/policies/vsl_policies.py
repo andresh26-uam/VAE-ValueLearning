@@ -24,14 +24,15 @@ import torch
 
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.base_class import BaseAlgorithm
-from envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from envs.tabularVAenv import ContextualEnv, TabularVAMDP, ValueAlignedEnvironment
+from src.algorithms.utils import PolicyApproximators, mce_partition_fh
 from src.data import TrajectoryWithValueSystemRews
 from utils import CHECKPOINTS, NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
 
 
 class ValueSystemLearningPolicy(BasePolicy):
 
-    def __init__(self, *args, env: ValueAlignedEnvironment, use_checkpoints=True, state_encoder=None, squash_output: bool = False, observation_space=None, action_space=None, **kwargs):
+    def __init__(self, env: ValueAlignedEnvironment, use_checkpoints=True, state_encoder=None, squash_output: bool = False, observation_space=None, action_space=None, **kwargs):
         if observation_space is None:
 
             self.observation_space = env.observation_space
@@ -43,7 +44,7 @@ class ValueSystemLearningPolicy(BasePolicy):
             self.action_space = action_space
 
         self.use_checkpoints = use_checkpoints
-        super().__init__(*args, squash_output=squash_output,
+        super().__init__(squash_output=squash_output,
                          observation_space=self.observation_space, action_space=self.action_space, **kwargs)
         self.env = env
         self.default_alignment = None
@@ -87,7 +88,7 @@ class ValueSystemLearningPolicy(BasePolicy):
         return next_state_obs
 
     def obtain_trajectory(self, alignment_func_in_policy=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, with_grounding=False, alignment_func_in_env=None,
-                          recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False, custom_grounding=None) -> Trajectory:
+                          recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False, reward_dtype=None, agent_name='none') -> Trajectory:
 
         if alignment_func_in_env is None:
             alignment_func_in_env = alignment_func_in_policy
@@ -104,6 +105,7 @@ class ValueSystemLearningPolicy(BasePolicy):
         policy_state = self.reset(seed=seed)
         init_state = self.state_encoder(state_obs, info)
 
+        
         info['align_func'] = alignment_func_in_policy
         info['init_state'] = init_state
         info['ended'] = False
@@ -145,10 +147,12 @@ class ValueSystemLearningPolicy(BasePolicy):
 
                 action, policy_state = self.act(self.state_encoder(state_obs, info), policy_state=policy_state, exploration=exploration,
                                                 stochastic=stochastic, alignment_function=alignment_func_in_policy)
-
+                
                 next_state_obs, rew, terminated, truncated, info_next = self.env.step(
                     action)
+                
                 next_obs_in_state = self.obtain_observation(next_state_obs)
+                
                 obs.append(next_obs_in_state)
                 # state_des = self.environ.get_edge_to_edge_state(obs)
 
@@ -175,8 +179,8 @@ class ValueSystemLearningPolicy(BasePolicy):
                     break
             acts = np.asarray(acts)
             infos = np.asarray(infos)
-            rews = np.asarray(rews)
-            v_rews = np.asarray(v_rews)
+            rews = np.asarray(rews, dtype=reward_dtype)
+            v_rews = np.asarray(v_rews, dtype=reward_dtype)
             obs = np.asarray(obs)
             if recover_previous_alignment_func_in_env and with_reward:
                 self.env.set_align_func(prev_al_env)
@@ -184,7 +188,7 @@ class ValueSystemLearningPolicy(BasePolicy):
             if with_reward and not with_grounding:
                 return TrajectoryWithRew(obs=obs, acts=acts, infos=infos, terminal=terminated, rews=rews)
             if with_reward and with_grounding:
-                return TrajectoryWithValueSystemRews(obs=obs, acts=acts, infos=infos, rews=rews, terminal=terminated, n_vals=self.env.n_values, v_rews=v_rews)
+                return TrajectoryWithValueSystemRews(obs=obs, acts=acts, infos=infos, rews=rews, terminal=terminated, n_vals=self.env.n_values, v_rews=v_rews, agent=agent_name)
             else:
                 return Trajectory(obs=obs, acts=acts, infos=infos, terminal=terminated)
 
@@ -192,7 +196,7 @@ class ValueSystemLearningPolicy(BasePolicy):
                             options: Union[None, List, Dict] = None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None,], t_max=None,
                             exploration=0, with_reward=False, alignments_in_env=[None,],
                             end_trajectories_when_ended=True,
-                            with_grounding=False,
+                            with_grounding=False,reward_dtype=None, agent_name='None',
                             from_initial_states=None) -> List[Trajectory]:
         trajs = []
         if len(alignments_in_env) != len(align_funcs_in_policy):
@@ -205,7 +209,7 @@ class ValueSystemLearningPolicy(BasePolicy):
             possibly_unwrapped = self.env.unwrapped
         else:
             possibly_unwrapped = self.env
-        if isinstance(possibly_unwrapped, base_envs.ResettablePOMDP):
+        if isinstance(possibly_unwrapped, TabularVAMDP):
             has_initial_state_dist = True
             prev_init_state_dist = possibly_unwrapped.initial_state_dist
 
@@ -214,7 +218,7 @@ class ValueSystemLearningPolicy(BasePolicy):
             if has_initial_state_dist and from_initial_states is not None:
                 assert repeat_per_seed == 1
                 base_dist[from_initial_states[si]] = 1.0
-                self.env.set_initial_state_distribution(base_dist)
+                possibly_unwrapped.set_initial_state_distribution(base_dist)
             for af, af_in_env in zip(align_funcs_in_policy, alignments_in_env):
                 for r in range(repeat_per_seed):
 
@@ -222,8 +226,9 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                   seed=seed*n_seeds+si,
                                                   exploration=exploration,
                                                   end_trajectories_when_ended=end_trajectories_when_ended,
+                                                  reward_dtype=reward_dtype,
                                                   options=options[si] if isinstance(options, list) else options, t_max=t_max, stochastic=stochastic, only_states=False,
-                                                  with_reward=with_reward, with_grounding=with_grounding, alignment_func_in_env=af_in_env)
+                                                  with_reward=with_reward, with_grounding=with_grounding, alignment_func_in_env=af_in_env, agent_name=agent_name)
                     trajs.append(
                         traj
                     )
@@ -236,7 +241,8 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                 end_trajectories_when_ended=end_trajectories_when_ended,
                                                                 options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                 stochastic=stochastic, only_states=False,
-                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0))
+                                                                reward_dtype=reward_dtype,
+                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0), agent_name=agent_name)
 
                                 trajs_sus_sus.append(traj_w)
                                 assert np.all(traj_w.obs == traj.obs)
@@ -247,7 +253,8 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                  end_trajectories_when_ended=end_trajectories_when_ended,
                                                                  options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                  stochastic=stochastic, only_states=False,
-                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0))
+                                                                 reward_dtype=reward_dtype,
+                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0), agent_name=agent_name)
 
                                 trajs_sus_eff.append(traj_w2)
                                 # print(traj.obs, traj_w2.obs, seed, n_seeds, si)
@@ -259,7 +266,8 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                 end_trajectories_when_ended=end_trajectories_when_ended,
                                                                 options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                 stochastic=stochastic, only_states=False,
-                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0))
+                                                                reward_dtype=reward_dtype,
+                                                                with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(1.0, 0.0, 0.0), agent_name=agent_name)
                                 trajs_eff_sus.append(traj_w)
                                 # print(traj.obs, traj_w.obs, seed, n_seeds, si)
                                 assert np.all(traj_w.obs == traj.obs)
@@ -270,39 +278,40 @@ class ValueSystemLearningPolicy(BasePolicy):
                                                                  end_trajectories_when_ended=end_trajectories_when_ended,
                                                                  options=options[si] if isinstance(options, list) else options, t_max=t_max,
                                                                  stochastic=stochastic, only_states=False,
-                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0))
+                                                                 reward_dtype=reward_dtype,
+                                                                 with_reward=True, with_grounding=with_grounding, alignment_func_in_env=(0.0, 0.0, 1.0), agent_name=agent_name)
 
                                 trajs_eff_eff.append(traj_w2)
                                 # print(traj.obs, traj_w2.obs, seed, n_seeds, si)
                                 assert np.all(traj_w2.obs == traj.obs)
             if has_initial_state_dist and from_initial_states is not None:
                 base_dist[from_initial_states[si]] = 0.0
-        # testing in roadworld...
-        if __debug__ and (not stochastic and len(af) == 3 and exploration == 0.0):
-            for t, t2 in zip(trajs_sus_sus, trajs_eff_sus):
-                # print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
-                # print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
-                assert np.all(t.obs[0] == t2.obs[0]) and np.all(
-                    t.obs[-1] == t2.obs[-1])
+            # testing in roadworld...
+            if __debug__ and (not stochastic and len(af) == 3 and exploration == 0.0):
+                for t, t2 in zip(trajs_sus_sus, trajs_eff_sus):
+                    # print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
+                    # print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
+                    assert np.all(t.obs[0] == t2.obs[0]) and np.all(
+                        t.obs[-1] == t2.obs[-1])
 
-                print("SUS routes, measuring SUS", [
-                      t.infos[ko]['old_state'] for ko in range(len(t.infos))])
+                    print("SUS routes, measuring SUS", [
+                        t.infos[ko]['old_state'] for ko in range(len(t.infos))])
 
-                print("EFF routes, measuring SUS", [
-                      t2.infos[ko]['old_state'] for ko in range(len(t2.infos))])
-                print(np.sum(t.rews), " vs ", np.sum(t2.rews))
+                    print("EFF routes, measuring SUS", [
+                        t2.infos[ko]['old_state'] for ko in range(len(t2.infos))])
+                    print(np.sum(t.rews), " vs ", np.sum(t2.rews))
 
-                assert np.sum(t.rews) >= np.sum(t2.rews)
-                print("CHECK!!!")
+                    assert np.sum(t.rews) >= np.sum(t2.rews)
+                    print("CHECK!!!")
 
-            for t, t2 in zip(trajs_eff_eff, trajs_sus_eff):
-                # print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
-                # print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
-                # print(t.obs, t2.obs)
-                assert np.sum(t.rews) >= np.sum(t2.rews)
-                print("CHECKED EFF!!!")
-                assert np.all(t.obs[0] == t2.obs[0]) and np.all(
-                    t.obs[-1] == t2.obs[-1])
+                for t, t2 in zip(trajs_eff_eff, trajs_sus_eff):
+                    # print(self.policy_per_va((1.0,0.0,0.0))[t.obs[1]])
+                    # print(self.policy_per_va((0.0,0.0,1.0))[t.obs[1]])
+                    # print(t.obs, t2.obs)
+                    assert np.sum(t.rews) >= np.sum(t2.rews)
+                    print("CHECKED EFF!!!")
+                    assert np.all(t.obs[0] == t2.obs[0]) and np.all(
+                        t.obs[-1] == t2.obs[-1])
 
         if has_initial_state_dist and from_initial_states is not None:
             self.env.set_initial_state_distribution(prev_init_state_dist)
@@ -338,7 +347,20 @@ class ValueSystemLearningPolicy(BasePolicy):
     def get_environ(self, alignment_function):
         return self.env
 
-
+class ContextualValueSystemLearningPolicy(ValueSystemLearningPolicy):
+    def __init__(self, *args, env, use_checkpoints=True, state_encoder=None, squash_output = False, observation_space=None, action_space=None, **kwargs):
+        super().__init__(*args, env=env, use_checkpoints=use_checkpoints, state_encoder=state_encoder, squash_output=squash_output, observation_space=observation_space, action_space=action_space, **kwargs)
+        self.context = None
+    
+    def reset(self, seed=None, state=None):
+        self.context = self.update_context()
+        return super().reset(seed, state)
+    
+    @abstractmethod
+    def update_context(self):
+        return self.context
+    
+    
 def action_mask(valid_actions, action_shape, *va_args):
     valid_actions = valid_actions(*va_args)
 
@@ -481,12 +503,12 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
         # learner.save("dummy_save.zip")
         return learner
 
-    def obtain_trajectory(self, alignment_func_in_policy=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, alignment_func_in_env=None, recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False):
+    def obtain_trajectory(self, alignment_func_in_policy=None, seed=32, options=None, t_max=None, stochastic=False, exploration=0, only_states=False, with_reward=False, with_grounding=False, alignment_func_in_env=None, recover_previous_alignment_func_in_env=True, end_trajectories_when_ended=False, agent_name='None', reward_dtype=None):
         if alignment_func_in_policy != self._alignment_func_in_policy or self._sampling_learner is None or self._alignment_func_in_policy is None:
             self._sampling_learner, self._alignment_func_in_policy = self.get_learner_for_alignment_function(
                 alignment_function=alignment_func_in_policy), alignment_func_in_policy
         traj = super().obtain_trajectory(alignment_func_in_policy, seed, options, t_max, stochastic, exploration, only_states,
-                                         with_reward, alignment_func_in_env, recover_previous_alignment_func_in_env, end_trajectories_when_ended)
+                                         with_reward, alignment_func_in_env, recover_previous_alignment_func_in_env, end_trajectories_when_ended, with_grounding=with_grounding, reward_dtype=reward_dtype, agent_name=agent_name)
 
         return traj
 
@@ -495,10 +517,15 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
             environ = self.get_environ(alignment_function)
         return self.learner_class(policy=self.policy_class, env=environ, policy_kwargs=self.policy_kwargs, **self.learner_kwargs)
 
-    def obtain_trajectories(self, n_seeds=100, seed=32, options=None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None], t_max=None, exploration=0, with_reward=False, alignments_in_env=[None], end_trajectories_when_ended=True, from_initial_states=None):
+    def obtain_trajectories(self, n_seeds=100, seed=32, options=None, stochastic=True, repeat_per_seed=1, align_funcs_in_policy=[None], t_max=None, exploration=0, with_reward=False, alignments_in_env=[None], end_trajectories_when_ended=True, from_initial_states=None,
+                            reward_dtype=None, with_grounding=False, agent_name='None'):
         if self.env_is_tabular:
             self._act_prob_cache = dict()
-        return super().obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic, repeat_per_seed=repeat_per_seed, align_funcs_in_policy=align_funcs_in_policy, t_max=t_max, exploration=exploration, with_reward=with_reward, alignments_in_env=alignments_in_env, end_trajectories_when_ended=end_trajectories_when_ended, from_initial_states=from_initial_states)
+        return super().obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic, repeat_per_seed=repeat_per_seed, 
+                                           align_funcs_in_policy=align_funcs_in_policy, 
+                                           t_max=t_max, exploration=exploration, with_reward=with_reward, 
+                                           alignments_in_env=alignments_in_env, end_trajectories_when_ended=end_trajectories_when_ended, 
+                                           from_initial_states=from_initial_states, with_grounding=with_grounding, reward_dtype=reward_dtype, agent_name=agent_name)
 
     def act(self, state_obs, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         a, ns, prob = self.act_and_obtain_action_distribution(
@@ -589,7 +616,7 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
 class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
     def __init__(self, policy_per_va: Callable[[Any], np.ndarray], env: gym.Env, state_encoder=None, expose_state=True, *args, **kwargs):
 
-        super().__init__(*args, env=env, use_checkpoints=True,
+        super().__init__(*args, env=env,
                          state_encoder=state_encoder, **kwargs)
         self.policy_per_va = policy_per_va
 
@@ -696,7 +723,7 @@ class VAlignedDictSpaceActionPolicy(VAlignedDiscreteSpaceActionPolicy):
     def _callable_from_dict(self):
         return lambda x: self.policy_per_va_dict[x]
 
-    def __init__(self, policy_per_va_dict: Dict[Tuple, np.ndarray], env: gym.Env, state_encoder=None, expose_state=True, *args, **kwargs):
+    def __init__(self,  *args, policy_per_va_dict: Dict[Tuple, np.ndarray], env: gym.Env, state_encoder=None, expose_state=True, **kwargs):
 
         self.policy_per_va_dict = policy_per_va_dict
         policy_per_va = self._callable_from_dict()
@@ -707,13 +734,39 @@ class VAlignedDictSpaceActionPolicy(VAlignedDiscreteSpaceActionPolicy):
         self.policy_per_va_dict[va] = policy
 
 
-class VAlignedDictDiscreteStateActionPolicyTabularMDP(VAlignedDictSpaceActionPolicy):
-    def __init__(self, policy_per_va_dict: Dict[Tuple, NDArray], env: TabularVAMDP, state_encoder=None, expose_state=True, *args, **kwargs):
+class ContextualVAlignedDictSpaceActionPolicy(ContextualValueSystemLearningPolicy, VAlignedDictSpaceActionPolicy):
+    
+    def __init__(self, *args, env, contextual_reward_matrix: Callable[[Any, Any], np.ndarray], contextual_policy_estimation_kwargs = dict(
+            discount=1.0,
+            approximator_kwargs={'value_iteration_tolerance': 0.000001, 'iterations': 5000},
+            policy_approximator = PolicyApproximators.MCE_ORIGINAL,
+            deterministic=True
+    ), use_checkpoints=True, state_encoder=None, squash_output=False, observation_space=None, action_space=None,  **kwargs):
+        super().__init__(*args, env=env, use_checkpoints=use_checkpoints, state_encoder=state_encoder, squash_output=squash_output, observation_space=observation_space, action_space=action_space, **kwargs)
+        self.contextual_reward_matrix = contextual_reward_matrix # new context, old context -> np.ndarray
+        self.contextual_policy_estimation_kwargs = contextual_policy_estimation_kwargs
+        self.contextual_policy_estimation_kwargs['horizon'] = self.env.horizon
 
-        super().__init__(policy_per_va_dict=policy_per_va_dict, env=env,
-                         state_encoder=state_encoder, expose_state=expose_state, *args, **kwargs)
-
-
+        self.contextual_policies = dict()
+    def update_context(self):
+        for va in self.policy_per_va_dict.keys():
+            if self.context is None:
+                new_context = self.get_environ(self.env.get_align_func()).unwrapped.context
+                #print("NEW CONTEXT", new_context)
+                
+                if self.context != new_context:
+                    if new_context not in self.contextual_policies.keys():
+                        self.contextual_policies[new_context] =  dict()
+                    if va not in self.contextual_policies[new_context].keys():
+                        _,_, pi_va = mce_partition_fh(self.env, reward=self.contextual_reward_matrix(new_context, self.context, align_func=va), **self.contextual_policy_estimation_kwargs)
+                        # This is Roadworld testing, remove after no need.
+                        np.testing.assert_allclose(self.contextual_reward_matrix(new_context, self.context, align_func=va)[new_context], 0.0)
+                        
+                        self.contextual_policies[new_context][va] = pi_va
+                    self.set_policy_for_va(va, self.contextual_policies[new_context][va])
+                    self.context = new_context
+        return self.context
+    
 def profile_sampler_in_society(align_func_as_basic_profile_probs):
     index_ = np.random.choice(
         a=len(align_func_as_basic_profile_probs), p=align_func_as_basic_profile_probs)

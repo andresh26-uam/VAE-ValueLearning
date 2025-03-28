@@ -3,7 +3,7 @@ from math import ceil, floor
 from typing import List, Optional
 
 import numpy as np
-from envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from envs.tabularVAenv import ContextualEnv, TabularVAMDP, ValueAlignedEnvironment
 
 from src.policies.vsl_policies import VAlignedDiscreteSpaceActionPolicy, ValueSystemLearningPolicy
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, ConvexTensorModule, ProabilisticProfiledRewardFunction, TrainingModes
@@ -80,8 +80,8 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.vgl_target_align_funcs = vgl_target_align_funcs
         self.vsi_target_align_funcs = vsi_target_align_funcs
         self.all_targets = set()
-        self.all_targets.update(self.vgl_target_align_funcs)
-        self.all_targets.update(self.vsi_target_align_funcs)
+        self.all_targets.update(set(self.vgl_target_align_funcs))
+        self.all_targets.update(set(self.vsi_target_align_funcs))
         self.all_targets = list(self.all_targets)
         self.vgl_expert_policy: VAlignedDiscreteSpaceActionPolicy = vgl_expert_policy
         self.vsi_expert_policy: VAlignedDiscreteSpaceActionPolicy = vsi_expert_policy
@@ -115,6 +115,9 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.training_mode = training_mode
         self.reward_net = reward_net
         self.reward_net.set_mode(self.training_mode)
+
+        self.reward_net_per_agent = dict()
+
         self.__previous_next_states = None
 
     def set_reward_net(self, reward_net: AbstractVSLRewardFunction):
@@ -123,7 +126,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
     def set_probabilistic_net(self, probabilistic_net: ProabilisticProfiledRewardFunction):
         self.probabilistic_reward_net = probabilistic_net
 
-    def get_reward_net(self):
+    def get_reward_net(self, agent_id: str):
         return self.reward_net
 
     def get_probabilistic_net(self):
@@ -133,8 +136,11 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         return self.current_net
 
     def get_metrics(self):
-        return {'learned_rewards': self.state_action_callable_reward_from_reward_net_per_target_align_func(self.get_reward_net())}
-
+        return {'learned_rewards': self.state_action_callable_reward_from_reward_net_per_target_align_func()}
+    @property
+    def assumed_grounding(self):
+        return self._assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else {aid: raid.get_learned_grounding() for aid, raid in self.reward_net_per_agent.items()}
+    
     def train(self, max_iter: int = 1000, mode=TrainingModes.VALUE_GROUNDING_LEARNING,
               assumed_grounding=None,
               n_seeds_for_sampled_trajectories=None,
@@ -146,7 +152,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
               **kwargs) -> np.ndarray:
 
         self.training_mode = mode
-        self.assumed_grounding = assumed_grounding
+        self._assumed_grounding = assumed_grounding
 
         if use_probabilistic_reward:
             if self.probabilistic_reward_net is None:
@@ -168,30 +174,36 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
         self.current_net.set_mode(mode)
         if assumed_grounding is not None and mode in [TrainingModes.EVAL, TrainingModes.VALUE_SYSTEM_IDENTIFICATION]:
-            self.current_net.set_grounding_function(assumed_grounding)
+            self.current_net.set_grounding_function(self.assumed_grounding)
         if mode in [TrainingModes.VALUE_GROUNDING_LEARNING, TrainingModes.SIMULTANEOUS]:
             self.current_net.reset_learned_grounding_function(
                 None)
         target_align_funcs = self.vgl_target_align_funcs if mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.vsi_target_align_funcs
-        self.target_align_funcs_to_learned_align_funcs = dict()
+        self.target_agent_and_align_func_to_learned_ones = dict()
+
+        reward_nets_per_target_align_func = dict()
 
         if mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             optimizer_kwargs = self.vgl_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
             self.vgl_optimizer_kwargs = optimizer_kwargs
             self.vgl_optimizer = self.vgl_optimizer_cls(
                 self.current_net.parameters(), **optimizer_kwargs)
-            self.target_align_funcs_to_learned_align_funcs = {
+            self.target_agent_and_align_func_to_learned_ones = {
                 al: al for al in self.vgl_target_align_funcs}
             with networks.training(self.current_net):
-                reward_nets_per_target_align_func = self.train_vgl(
+                self.reward_net_per_agent = self.train_vgl(
                     max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
+            for aid_and_al in self.vgl_target_align_funcs:
+                aid, al = aid_and_al
+                r_copy = self.reward_net_per_agent[aid].copy()
+                r_copy.set_alignment_function(al)
+                reward_nets_per_target_align_func[aid_and_al] =  r_copy  
 
         elif mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             optimizer_kwargs = self.vsi_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
             self.vsi_optimizer_kwargs = optimizer_kwargs
 
-            reward_nets_per_target_align_func = dict()
-            self.target_align_funcs_to_learned_align_funcs = dict()
+            self.target_agent_and_align_func_to_learned_ones = dict()
 
             for ti, target_align_func in enumerate(target_align_funcs):
                 self.current_net.reset_learned_alignment_function()
@@ -205,7 +217,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     self.probabilistic_vsi_optimizer = self.probabilistic_vsi_optimizer_cls(
                         self.current_net.parameters(), **prob_optimizer_kwargs)
                     with networks.training(self.current_net):
-                        self.target_align_funcs_to_learned_align_funcs[target_align_func] = self.train_vsl_probabilistic(
+                        self.target_agent_and_align_func_to_learned_ones[target_align_func] = self.train_vsl_probabilistic(
                             max_iter=max_iter, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed=n_sampled_trajs_per_seed,
                             n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward,
                             target_align_func=target_align_func)
@@ -214,7 +226,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     self.vsi_optimizer = self.vsi_optimizer_cls(
                         self.current_net.parameters(), **optimizer_kwargs)
                     with networks.training(self.current_net):
-                        self.target_align_funcs_to_learned_align_funcs[target_align_func] = self.train_vsl(
+                        self.target_agent_and_align_func_to_learned_ones[target_align_func] = self.train_vsl(
                             max_iter=max_iter, n_seeds_for_sampled_trajectories=n_seeds_for_sampled_trajectories,
                             n_sampled_trajs_per_seed=n_sampled_trajs_per_seed, target_align_func=target_align_func)
 
@@ -223,20 +235,44 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
         else:
             # TODO: Simultaneous learning?
-            raise NotImplementedError(
-                "Simultaneous learning mode is not implemented")
+            optimizer_kwargs = self.vsi_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
+            self.vsi_optimizer_kwargs = optimizer_kwargs
+            self.vsi_optimizer = self.vsi_optimizer_cls(
+                self.current_net.parameters(), **optimizer_kwargs)
+            self.target_agent_and_align_func_to_learned_ones = {
+                al: None for al in self.vsi_target_align_funcs}
+            with networks.training(self.current_net):
+                self.reward_net_per_agent = self.train_simultaneous_vsl(
+                    max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
+            for al in self.vsi_target_align_funcs:
+                self.target_agent_and_align_func_to_learned_ones[al] = (al[0], self.reward_net_per_agent[al[0]].get_learned_align_function())
+
+            for aid_and_al in self.vgl_target_align_funcs:
+                aid, al = aid_and_al
+                r_copy = self.reward_net_per_agent[aid].copy()
+                r_copy.set_alignment_function(al)
+                reward_nets_per_target_align_func[aid_and_al] =  r_copy 
+            
+            
 
         # Organizing learned content:
 
         self.learned_policy_per_va = self.calculate_learned_policies(
             target_align_funcs)
 
-        if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
-            return self.target_align_funcs_to_learned_align_funcs, reward_nets_per_target_align_func, self.get_metrics()
+        """if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            return self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
         elif mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             return self.current_net.get_learned_grounding(), reward_nets_per_target_align_func, self.get_metrics()
         else:
-            return self.current_net.get_learned_grounding(), self.target_align_funcs_to_learned_align_funcs, reward_nets_per_target_align_func, self.get_metrics()
+            return self.current_net.get_learned_grounding(), self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()"""
+        
+        if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+            return self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
+        elif mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            return self.assumed_grounding, reward_nets_per_target_align_func, self.get_metrics()
+        else:
+            return self.current_net.get_learned_grounding(), self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
 
     def test_accuracy_for_align_funcs(self, learned_rewards_per_round: List[np.ndarray],
                                       testing_policy_per_round: List[ValueSystemLearningPolicy],
@@ -500,15 +536,18 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.__previous_next_states = torch_next_state_mat
         return torch_next_state_mat
 
-    def state_action_callable_reward_from_reward_net_per_target_align_func(self, reward_net: AbstractVSLRewardFunction, targets=None):
+    def state_action_callable_reward_from_reward_net_per_target_align_func(self, reward_per_agent=None, targets=None, info=None):
         if hasattr(self.env, 'state_dim'):
             one_hot_observations = th.eye(
                 self.env.state_dim*self.env.action_dim)
-            rewards_per_target_al = dict()
+            rewards_per_target_agent_and_al = dict()
 
-            for target, learned in (self.target_align_funcs_to_learned_align_funcs.items() if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else zip(self.all_targets, self.all_targets)):
+            for target_aid_and_al, learned_aid_and_al in (self.target_agent_and_align_func_to_learned_ones.items() if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else zip(self.all_targets, self.all_targets)):
+                aid, rew_al = learned_aid_and_al if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target_aid_and_al
+                reward_net = self.reward_net_per_agent[aid] if reward_per_agent is None else reward_per_agent[aid]
+
                 if targets is not None:
-                    if target not in targets:
+                    if target_aid_and_al not in targets:
                         continue
                 reward_matrix = th.zeros(
                     (self.env.state_dim, self.env.action_dim))
@@ -532,34 +571,40 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         next_state_array = util.safe_to_tensor(next_state_mat[observations.numpy(
                         ), action_array.numpy()],  dtype=reward_net.dtype, device=reward_net.device)
                         # print("NEXTS", next_state_array)
+                            
                         reward_matrix[observations, action_array] += self.calculate_rewards(
-                            align_func=learned if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target,
-                            # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
-                            grounding=self.assumed_grounding,
-                            obs_mat=observations,
-                            action_mat=action_array,
-                            next_state_obs_mat=next_state_array,
-                            obs_action_mat=one_hot_observations,
-                            reward_mode=TrainingModes.EVAL,
-                            use_probabilistic_reward=False,  # TODO ?,
-                            n_reps_if_probabilistic_reward=1,  
-                            requires_grad=False
-                        )[1]
+                                align_func=rew_al,
+                                # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
+                                grounding=self.assumed_grounding[aid],
+                                obs_mat=observations,
+                                action_mat=action_array,
+                                next_state_obs_mat=next_state_array,
+                                obs_action_mat=one_hot_observations,
+                                reward_mode=TrainingModes.EVAL,
+                                use_probabilistic_reward=False,  # TODO ?,
+                                n_reps_if_probabilistic_reward=1,  
+                                custom_model=reward_net,
+                                requires_grad=False,
+                                info=info
+                            )[1]
+                        
                         # print("REWARD", reward_matrix)
                         assert reward_matrix.shape == (
                             self.env.state_dim, self.env.action_dim)
-                rewards_per_target_al[target] = reward_matrix
-                assert rewards_per_target_al[target].shape == (
+                rewards_per_target_agent_and_al[target_aid_and_al] = reward_matrix
+                assert rewards_per_target_agent_and_al[target_aid_and_al].shape == (
                     self.env.state_dim, self.env.action_dim)
-            return lambda target: (lambda state=None, action=None: (
-                rewards_per_target_al[target] if (state is None and action is None)
-                else rewards_per_target_al[target][state, :] if action is None and state is not None
-                else rewards_per_target_al[target][:, action] if action is not None and state is None
-                else rewards_per_target_al[target][state, action]))
+            return lambda target: (lambda state=None, action=None, info=None: (
+                rewards_per_target_agent_and_al[target] if (state is None and action is None)
+                else rewards_per_target_agent_and_al[target][state, :] if action is None and state is not None
+                else rewards_per_target_agent_and_al[target][:, action] if action is not None and state is None
+                else rewards_per_target_agent_and_al[target][state, action]))
         else:
             # TODO: test this if needed... Untested
 
-            def state_action_reward(target, learned, state, action):
+            def state_action_reward(target_aid_and_al, learned_aid_and_al, state, action):
+                aid, rew_al = learned_aid_and_al if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target_aid_and_al
+                reward_net = self.reward_net_per_agent if reward_per_agent is None else reward_per_agent[aid]
 
                 obs = util.safe_to_tensor([state] if isinstance(state, int) else np.asarray(
                     state) if isinstance(state, np.ndarray) else state.detach().numpy())
@@ -577,9 +622,9 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     next_obs = util.safe_to_tensor(self.env.transition(
                         state, act),  dtype=reward_net.dtype, device=reward_net.device)
                     rew += self.calculate_rewards(
-                        align_func=learned if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target,
+                        align_func=rew_al,
                         # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
-                        grounding=self.assumed_grounding,
+                        grounding=self.assumed_grounding[aid],
                         obs_mat=obs,
                         action_mat=act,
                         next_state_obs_mat=next_obs,
@@ -587,10 +632,12 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         reward_mode=TrainingModes.EVAL,
                         use_probabilistic_reward=False,  # TODO ?,
                         n_reps_if_probabilistic_reward=1,  
-                        requires_grad=False
+                        custom_model=reward_net,
+                        requires_grad=False,
+                        info =info
                     )[1][0]
                 return rew
-            return lambda target: lambda state, action: state_action_reward(target, self.target_align_funcs_to_learned_align_funcs[target] if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else None, state, action)
+            return lambda target: lambda state, action: state_action_reward(target, self.target_agent_and_align_func_to_learned_ones[target] if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else None, state, action)
 
     @abstractmethod
     def calculate_learned_policies(self, target_align_funcs) -> ValueSystemLearningPolicy:
@@ -601,6 +648,8 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         ...
 
     @abstractmethod
+    def train_simultaneous_vsl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed) -> Dict[Any, AbstractVSLRewardFunction]:
+        ...
     def train_vsl_probabilistic(self, max_iter,
                                 n_seeds_for_sampled_trajectories,
                                 n_sampled_trajs_per_seed,
@@ -614,7 +663,12 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
     def calculate_rewards(self, align_func=None, grounding=None, obs_mat=None, next_state_obs_mat=None, action_mat=None, obs_action_mat=None,
                           reward_mode=TrainingModes.EVAL, recover_previous_config_after_calculation=True,
-                          use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10, requires_grad=True):
+                          use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10, requires_grad=True, custom_model=None, 
+                          forward_groundings=False, info=None):
+        
+        if custom_model is not None:
+            prev_model = self.current_net
+            self.current_net = custom_model
 
         if self.current_net.use_one_hot_state_action:
             if obs_action_mat is None:
@@ -647,23 +701,25 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         assert self.current_net.mode == reward_mode
 
         if use_probabilistic_reward is False:
-            predicted_r, used_align_func, _ = self.calculation_rew(
+            predicted_r, predicted_r_gr, used_align_func, _ = self.calculation_rew(
                 align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
                 obs_action_mat=obs_action_mat, next_state_obs=next_state_obs_mat,
-                use_probabilistic_reward=use_probabilistic_reward)
+                use_probabilistic_reward=use_probabilistic_reward, forward_groundings=forward_groundings, info=info)
 
             predicted_r_np = predicted_r.detach().cpu().numpy()
-
-            ret = predicted_r, predicted_r_np
+            if forward_groundings:
+                ret = predicted_r, predicted_r_np, predicted_r_gr, (predicted_r_gr.detach().cpu().numpy() if predicted_r_gr is not None else None)
+            else:
+                ret = predicted_r, predicted_r_np
         else:
             list_of_reward_calculations = []
             align_func_used_in_each_repetition = []
             prob_of_each_repetition = []
             for _ in range(n_reps_if_probabilistic_reward):
-                predicted_r, used_align_func, probability = self.calculation_rew(
+                predicted_r, predicted_r_gr, used_align_func, probability = self.calculation_rew(
                     align_func=align_func, obs_mat=obs_mat, action_mat=action_mat,
                     obs_action_mat=obs_action_mat, next_state_obs=next_state_obs_mat,
-                    use_probabilistic_reward=use_probabilistic_reward)
+                    use_probabilistic_reward=use_probabilistic_reward, forward_groundings=forward_groundings,info=info)
 
                 list_of_reward_calculations.append(predicted_r)
                 align_func_used_in_each_repetition.append(used_align_func)
@@ -672,18 +728,41 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             prob_of_each_repetition_th = th.stack(prob_of_each_repetition)
             predicted_rs_np = predicted_rs.detach().cpu().numpy()
 
-            ret = predicted_rs, predicted_rs_np, align_func_used_in_each_repetition, prob_of_each_repetition_th
+            if forward_groundings:
+                ret = predicted_rs, predicted_rs_np, predicted_r_gr, (predicted_r_gr.detach().cpu().numpy() if predicted_r_gr is not None else None), align_func_used_in_each_repetition, prob_of_each_repetition_th
+            else:
+                ret = predicted_rs, predicted_rs_np, align_func_used_in_each_repetition, prob_of_each_repetition_th
 
         if recover_previous_config_after_calculation:
             self.current_net.set_mode(previous_rew_mode)
             self.current_net.set_grounding_function(previous_rew_ground)
             self.current_net.set_alignment_function(previous_rew_alignment)
 
+        if custom_model is not None:
+            self.current_net = prev_model
+        
+        
+        if requires_grad:
+            try:
+                """print(obs_mat)
+                l = th.sum(predicted_r_gr)
+                print("OSS", l)
+                l.backward()
+                print("Gradient:", obs_mat.grad)
+                exit(0)"""
+            except Exception as e:
+                print("nono", e)
+                pass
+
+        if predicted_r._version == 3 or predicted_r_gr._version == 3:
+            #            exit(0)
+            pass
         return ret
 
-    def calculation_rew(self, align_func, obs_mat, action_mat=None, obs_action_mat=None, next_state_obs=None, use_probabilistic_reward=False):
+    def calculation_rew(self, align_func, obs_mat, action_mat=None, obs_action_mat=None, next_state_obs=None, use_probabilistic_reward=False, forward_groundings=False, info=None):
         if use_probabilistic_reward:
             self.current_net.fix_alignment_function()
+        predicted_r_gr = None
 
         next_state_observations = None
 
@@ -694,21 +773,40 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             if self.current_net.use_next_state:
                 next_state_observations = next_state_observations.view(
                     *obs_action_mat.shape)
-
-            predicted_r = th.reshape(self.current_net(
-                obs_action_mat, None, next_state_observations, None), (self.env.state_dim, self.env.action_dim))
-        elif self.current_net.use_action or self.current_net.use_next_state:
+            if forward_groundings:
+                predicted_r, predicted_r_gr = self.current_net.forward_all(
+                    obs_action_mat, None, next_state_observations, None, info=info)
+                predicted_r_gr = th.reshape(predicted_r_gr, (self.env.n_values, self.env.state_dim, self.env.action_dim))
+            else:
+                predicted_r = self.current_net(
+                    obs_action_mat, None, next_state_observations, None, info=info)
+            
+            predicted_r = th.reshape(predicted_r, (self.env.state_dim, self.env.action_dim))
+            
+            
+                
+        elif self.current_net.use_action or self.current_net.use_next_state or self.current_net.use_state:
             if self.current_net.use_action:
                 assert action_mat is not None
                 # assert action_mat.size() == (self.env.action_dim, obs_mat.shape[0], self.env.action_dim)
             if self.current_net.use_next_state:
                 assert next_state_observations is not None
+            else:
+                next_state_observations = None
 
-            predicted_r = self.current_net(
-                obs_mat,
-                action_mat,
-                next_state_observations if self.current_net.use_next_state else None,
-                None)
+            if not forward_groundings:
+                predicted_r = self.current_net(
+                    obs_mat,
+                    action_mat,
+                    next_state_observations if self.current_net.use_next_state else None,
+                    None,
+                    info=info)
+            else:
+                predicted_r, predicted_r_gr = self.current_net.forward_all(
+                    obs_mat,
+                    action_mat,
+                    next_state_observations if self.current_net.use_next_state else None,
+                    None, info=info)
 
         used_alignment_func, probability, _ = self.current_net.get_next_align_func_and_its_probability(
             align_func)
@@ -718,25 +816,38 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
         state_action_with_predefined_reward_mask = self.env.get_state_actions_with_known_reward(
             used_alignment_func)
-
+        
         if state_action_with_predefined_reward_mask is not None:
+
+            overridden_tensor_r = th.empty_like(predicted_r)
+            overridden_tensor_r_gr = th.empty_like(predicted_r_gr)
+            
             if len(predicted_r.size()) == 1:
-                lobs = obs_mat.long().to(predicted_r.device)
-                lacts = th.argmax(action_mat, dim=1).long() if len(
-                    action_mat.shape) > 1 else action_mat.long()
-                lacts = lacts.to(device=predicted_r.device)
-                lobs = lobs.to(device=predicted_r.device)
-                real_reward_th = th.tensor(self.env.reward_matrix_per_align_func(used_alignment_func),
-                                           dtype=predicted_r.dtype, device=predicted_r.device, requires_grad=False)
+                with th.no_grad():
+                    lobs = obs_mat.long().to(overridden_tensor_r.device)
+                    lacts = th.argmax(action_mat, dim=1).long() if len(
+                        action_mat.shape) > 1 else action_mat.long()
+                    lacts = lacts.to(device=overridden_tensor_r.device)
+                    lobs = lobs.to(device=overridden_tensor_r.device)
+                    real_reward_th = th.tensor(self.env.reward_matrix_per_align_func(used_alignment_func),
+                                            dtype=overridden_tensor_r.dtype, device=overridden_tensor_r.device, requires_grad=False)
 
-                mask = state_action_with_predefined_reward_mask[lobs, lacts]
-                # Gather indices for the states and actions that satisfy the mask
-
-                indices = mask.nonzero()
-
+                    mask = state_action_with_predefined_reward_mask[lobs, lacts]
+                    # Gather indices for the states and actions that satisfy the mask
+                    
+                    indices = mask.nonzero()
+                    nonindices = (~mask).nonzero()
                 # Use advanced indexing to update the predicted rewards
-                predicted_r[indices] = real_reward_th[lobs[indices],
+                overridden_tensor_r[indices] = real_reward_th[lobs[indices],
                                                       lacts[indices]]
+                overridden_tensor_r[nonindices] = predicted_r[nonindices]
+                
+                if forward_groundings:
+                    for j in range(predicted_r_gr.shape[0]):
+                        overridden_tensor_r_gr[j, indices] = th.tensor(self.env.reward_matrix_per_align_func(self.env.basic_profiles[j]),
+                                            dtype=predicted_r.dtype, device=predicted_r.device, requires_grad=False)[lobs[indices],
+                                                      lacts[indices]]
+                    overridden_tensor_r_gr[:, nonindices] = predicted_r_gr[:, nonindices]
 
                 """ DEBUG: for i, (s,a, ns) in enumerate(zip(lobs, lacts, next_state_observations)):
                     if state_action_with_predefined_reward_mask[int(s),int(a)] == True:
@@ -744,10 +855,18 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         predicted_r[i] = real_reward_th[s,a]"""
 
             else:
-
+                raise NotImplementedError("caution, use overriden ")
                 predicted_r[state_action_with_predefined_reward_mask] = th.as_tensor(
                     self.env.reward_matrix_per_align_func(used_alignment_func)[
                         state_action_with_predefined_reward_mask],
                     dtype=predicted_r.dtype, device=predicted_r.device)
+                
+                for j in range(predicted_r_gr.shape[0]):
+                    predicted_r_gr[j,indices] = th.as_tensor(self.env.reward_matrix_per_align_func(self.env.basic_profiles[j])[
+                        state_action_with_predefined_reward_mask], dtype=predicted_r.dtype, device=predicted_r.device)
 
-        return predicted_r, used_alignment_func, probability
+            return overridden_tensor_r, overridden_tensor_r_gr, used_alignment_func, probability
+        
+        else:
+
+            return predicted_r, predicted_r_gr, used_alignment_func, probability

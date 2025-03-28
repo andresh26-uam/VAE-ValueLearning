@@ -2,13 +2,18 @@
 "ff": {
         "name": "FireFighters-v0",
         "n_values": 2,
-        "K": 3,
+        "K": 1,
+        "L": 4,
         "horizon": 50,
+
+        "assume_variable_horizon": false,
+        "is_contextual": false,
+        
         "basic_profiles": [[1.0, 0.0], [0.0,1.0]],
         "profiles_colors": [[1,0,0], [0,0,1]],
         "feature_selection": "features_one_hot",
         "initial_state_distribution": "random",
-        "environment_is_stochastic": true,
+        "environment_is_stochastic": false,
         "discount": 1.0,
         "use_pmovi_expert": false,
         "default_reward_net": {
@@ -17,7 +22,7 @@
             "use_next_state": false,
             "use_done": false,
             "basic_layer_classes": ["nn.Linear", "nn.Linear", "nn.Linear", "nn.Linear", "ConvexAlignmentLayer"],
-            "activations": ["nn.LeakyReLU", "nn.LeakyReLU", "nn.Tanh", "nn.Tanh", "nn.Identity"],
+            "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Identity"],
             "use_bias": [true, true, true, false, false],
             "hid_sizes": [50, 100, 50, 2],
             "negative_grounding_layer": false,
@@ -27,9 +32,9 @@
         "policy_state_feature_extractor": "OneHotFeatureExtractor",
         "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv", "OneHotFeatureExtractor", "ObservationMatrixFeatureExtractor"],
         "default_optimizer_kwargs": {
-            "lr": 0.001,
+            "lr": 0.01,
             "weight_decay": 0.0000,
-            "betas": [0.0, 0.1]
+            "betas": [0.9, 0.999]
         },
         "default_optimizer_class": "Adam",
         "algorithm_config": {
@@ -38,10 +43,12 @@
                 "optimizer_kwargs": "default",
                 "optimizer_class": "default",
                 "learn_stochastic_policy": true,
-                "loss_class": "cross_entropy",
-                "loss_kwargs": {},
-                "_loss_class_options": ["cross_entropy_modified", "cross_entropy"],
-                "active_fragmenter_on": "random",
+                "loss_class": "cross_entropy_cluster",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 0.001,
+                    "apply_on_misclassified_pairs_only": false, 
+                    "confident_penalty": 0.1},
+                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
                 "discount_factor_preferences": 1.0,
 
                 "policy_approximation_method": "mce_original",
@@ -50,15 +57,12 @@
                 "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
                 "use_quantified_preference": false,
                 "preference_sampling_temperature": 0,
-                "query_schedule": "hyperbolic",
+                "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 10000,
-                    "trajectory_batch_size": 1000,
+                    "max_iter": 100,
+                    "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
-                    "imitation_iterations": 200,
-                    "initial_comparison_frac": 0.15,
-                    "initial_epoch_multiplier": 50,
-                    "transition_oversampling": 1
+                    "max_assignment_memory": 5
                 },
 
                 "learner_policy_class": "PPO",
@@ -79,7 +83,205 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 5,
-                    "batch_size": 512
+                    "refining_steps_after_cluster_assignment": 1,
+                    "qualitative_cluster_assignment": true,
+                    "initial_refining_steps": 1,
+                    "initial_exploration_rate": 0.2,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": 1
+                }
+            }
+        }
+    }
+    ,
+"rw": {
+        "name": "VariableDestRoadWorld-v0",
+        "n_values": 3,
+        "K": 1,
+        "L": 3,
+        "horizon": 50,
+
+        "is_contextual": true,
+
+        "assume_variable_horizon": true,
+        
+        "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
+        "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
+        
+        "feature_selection": "only_costs",
+        "feature_preprocessing": "norm",
+        "environment_is_stochastic": false,
+        "discount": 1.0,
+        
+        "default_reward_net": {
+            "use_state": false,
+            "use_action": false,
+            "use_next_state": true,
+            "use_done": false,
+            "basic_layer_classes": ["ConvexLinearModule", "ConvexAlignmentLayer"],
+            "activations": ["nn.Identity", "nn.Identity"],
+            "use_bias": false,
+            "hid_sizes": [3],
+            "negative_grounding_layer": true,
+            "clamp_rewards": false
+        },
+        "reward_feature_extractor": "ContextualFeatureExtractorFromVAEnv",
+        "policy_state_feature_extractor": "OneHotFeatureExtractor",
+        "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv", "ContextualFeatureExtractorFromVAEnv"],
+        "default_optimizer_kwargs": {
+            "lr": 0.001,
+            "weight_decay": 0.0000,
+            "betas": [0.9, 0.999]
+        },
+        "default_optimizer_class": "Adam",
+        "algorithm_config": {
+            "pc": {
+                "reward_net": {},
+                "optimizer_kwargs": "default",
+                "optimizer_class": "default",
+                "learn_stochastic_policy": true,
+                "loss_class": "cross_entropy_cluster",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 0.001,
+                    "apply_on_misclassified_pairs_only": false, 
+                    "confident_penalty": 0.1},
+                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
+                "discount_factor_preferences": 1.0,
+
+                "policy_approximation_method": "mce_original",
+                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+
+                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                "use_quantified_preference": false,
+                "preference_sampling_temperature": 0,
+                "query_schedule": "constant",
+                "train_kwargs": {
+                    "max_iter": 100,
+                    "trajectory_batch_size": 1500,
+                    "fragment_length": "horizon",
+
+                    "max_assignment_memory": 7
+                },
+
+                "learner_policy_class": "PPO",
+                "learner_policy_kwargs" : 
+                {
+                    "batch_size": 25,
+                    "n_steps": 50,
+                    "ent_coef": 0.1,
+                    "learning_rate": 0.02,
+                    "gamma": 1.0,
+                    "gae_lambda": 0.999,
+                    "clip_range": 0.05,
+                    "vf_coef": 0.01,
+                    "n_epochs": 5,
+                    "normalize_advantage": true,
+                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
+                },
+                
+                "reward_trainer_kwargs": {
+                    "epochs": 1,
+                    "refining_steps_after_cluster_assignment": 10,
+                    "qualitative_cluster_assignment": true,
+                    "initial_refining_steps": 1,
+                    "initial_exploration_rate": 0.0,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": 3
+                }
+            }
+        }
+    },
+
+"apollo": {
+        "name": "RouteChoiceEnvironmentApollo-v0",
+        "n_values": 4,
+        "K": 1,
+        "L": 5,
+        "horizon": 2,
+
+        "is_contextual": false,
+
+        "assume_variable_horizon": false,
+        
+        "basic_profiles": [[1.0, 0.0, 0.0,0.0], [0.0,1.0, 0.0,0.0], [0.0, 0.0, 1.0,0.0], [0.0, 0.0,0.0,1.0]],
+        "profiles_colors": [[1,0,0], [0,0,1], [0,1,0], [1,1,0]],
+        
+        "environment_is_stochastic": false,
+        "discount": 1.0,
+        
+        "default_reward_net": {
+            "use_state": true,
+            "use_action": false,
+            "use_next_state": false,
+            "use_done": false,
+            "basic_layer_classes": ["nn.Linear", "ConvexAlignmentLayer"],
+            "activations": ["nn.Identity", "nn.Identity"],
+            "use_bias": false,
+            "hid_sizes": [4],
+            "negative_grounding_layer": false,
+            "clamp_rewards": false
+        },
+        "reward_feature_extractor": "FeatureExtractorFromVAEnv",
+        "policy_state_feature_extractor": "OneHotFeatureExtractor",
+        "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
+        "default_optimizer_kwargs": {
+            "lr": 0.001,
+            "weight_decay": 0.0000,
+            "betas": [0.9, 0.999]
+        },
+        "default_optimizer_class": "Adam",
+        "algorithm_config": {
+            "pc": {
+                "reward_net": {},
+                "optimizer_kwargs": "default",
+                "optimizer_class": "default",
+                "learn_stochastic_policy": true,
+                "loss_class": "cross_entropy_cluster",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 0.001,
+                    "apply_on_misclassified_pairs_only": false, 
+                    "confident_penalty": 0.1},
+                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
+                "discount_factor_preferences": 1.0,
+
+                "policy_approximation_method": "mce_original",
+                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+
+                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                "use_quantified_preference": false,
+                "preference_sampling_temperature": 0,
+                "query_schedule": "constant",
+                "train_kwargs": {
+                    "max_iter": 100,
+                    "trajectory_batch_size": "full",
+                    "fragment_length": "horizon",
+                    "max_assignment_memory": 7
+                },
+
+                "learner_policy_class": "PPO",
+                "learner_policy_kwargs" : 
+                {
+                    "batch_size": 25,
+                    "n_steps": 50,
+                    "ent_coef": 0.1,
+                    "learning_rate": 0.02,
+                    "gamma": 1.0,
+                    "gae_lambda": 0.999,
+                    "clip_range": 0.05,
+                    "vf_coef": 0.01,
+                    "n_epochs": 5,
+                    "normalize_advantage": true,
+                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
+                },
+                
+                "reward_trainer_kwargs": {
+                    "epochs": 50,
+                    "refining_steps_after_cluster_assignment": 5,
+                    "qualitative_cluster_assignment": true,
+                    "initial_refining_steps": 10,
+                    "initial_exploration_rate": 0.0,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": 2
                 }
             }
         }

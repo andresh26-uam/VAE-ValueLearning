@@ -1,4 +1,8 @@
 .venv
 checkpoints
 __pycache__
-_*
+datasets/comparisons/*
+datasets/trajectories/*
+datasets/environments/*
+_*[^_]
+!__init__.py

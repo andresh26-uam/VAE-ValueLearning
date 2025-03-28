@@ -175,10 +175,7 @@ class FireFightersEnv(TabularVAMDP):
     def get_state_actions_with_known_reward(self, align_func):
         return None  # self._states_with_known_reward
 
-    @property
-    def state(self) -> np.dtype:
-        """Data type of state vectors (must be np.int64)."""
-        return self._cur_state
+   
 
     @property
     def goal_states(self):
@@ -195,7 +192,7 @@ class FireFightersEnv(TabularVAMDP):
                 (self.state_dim*self.action_dim, 2), dtype=np.float64)
             assumed_grounding[:, 0] = np.reshape(self.obtain_grounding( variant=variants[0] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate), 
-                (self.state_dim*self.env.action_dim,))
+                (self.state_dim*self.action_dim,))
             assumed_grounding[:, 1] = np.reshape(self.obtain_grounding( variant=variants[1] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
 , (self.state_dim*self.action_dim,))
@@ -203,7 +200,7 @@ class FireFightersEnv(TabularVAMDP):
             return assumed_grounding, assumed_grounding
         elif self.feature_selection == FeatureSelectionFFEnv.ONE_HOT_FEATURES:
             assumed_grounding = np.zeros(
-                (self.env.state_dim, self.env.action_dim, 2), dtype=np.float64)
+                (self.state_dim, self.action_dim, 2), dtype=np.float64)
             assumed_grounding[:, :, 0] = self.obtain_grounding( variant=variants[0] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate)
             assumed_grounding[:, :, 1] = self.obtain_grounding( variant=variants[1] if variants is not None else None, 

@@ -11,16 +11,16 @@ from torch.functional import F
 from gymnasium.spaces import Discrete, MultiDiscrete, Box
 from gymnasium import spaces
 
-from roadworld_env_use_case.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS, PROFILE_NAMES_TO_TUPLE, VALUE_COSTS, VALUE_COSTS_PRE_COMPUTED_FEATURES
-from roadworld_env_use_case.network_utils import angle_between
+from use_cases.roadworld_env_use_case.values_and_costs import BASIC_PROFILE_NAMES, BASIC_PROFILES, PROFILE_COLORS, PROFILE_NAMES_TO_TUPLE, VALUE_COSTS, VALUE_COSTS_PRE_COMPUTED_FEATURES
+from use_cases.roadworld_env_use_case.network_utils import angle_between
 
-from roadworld_env_use_case.utils.load_data import load_link_feature, load_path_feature, minmax_normalization, minmax_normalization01
+from use_cases.roadworld_env_use_case.utils.load_data import load_link_feature, load_path_feature, minmax_normalization, minmax_normalization01
 
 Step = namedtuple('Step', ['cur_state', 'action', 'next_state', 'reward', 'done'])
 INVALID_EDGES = {604, 515}
-NETWORK_PLOTS_DIR = 'plots/network_plots/'
-PATH_FEATURES_PATH = 'data/path_features.npy'
-MAX_PATH_FEATURES_PATH = 'data/max_path_features.npy'
+NETWORK_PLOTS_DIR = 'use_cases/roadworld_env_use_case/plots/network_plots/'
+PATH_FEATURES_PATH = 'use_cases/roadworld_env_use_case/data/path_features.npy'
+MAX_PATH_FEATURES_PATH = 'use_cases/roadworld_env_use_case/data/max_path_features.npy'
 
 class FeatureSelection(enum.Enum):
 
@@ -89,7 +89,6 @@ class RoadWorld(object):
 
         self.pre_state = pre_state
         self.pre_state_list = pre_state_list
-        acts_pre_s_prev = dict()
         
         self.netconfig = netconfig_dict
         self.states_from_state = states_from_state
@@ -148,7 +147,7 @@ class RoadWorld(object):
             self.od_list = pre_reset[0]
             self.od_dist = pre_reset[1]
             self.od_list_int = [(int(od.split('_')[0]), int(od.split('_')[1])) for od in self.od_list]
-
+        self.destination_list = [d for o,d in self.od_list_int]
         self.all_rewards_per_profile = dict()
         self.all_rewards_per_profile[self.last_profile] = dict()
         self._get_reward = None
@@ -172,6 +171,7 @@ class RoadWorld(object):
         if profile is not None:
             self.last_profile = profile
         
+        self.cur_state = None
         while self.cur_state == self.cur_des or self.cur_state is None:
             if st is not None and des is not None:
                 self.cur_state, self.cur_des = int(st), int(des)
@@ -299,8 +299,8 @@ import networkx as nx
 
 
 
-DATA_FOLDER = './data/'
-TRAINED_MODELS = './trained_models/'
+DATA_FOLDER = 'use_cases/roadworld_env_use_case/data/'
+TRAINED_MODELS = 'use_cases/roadworld_env_use_case/trained_models/'
 """
 def ini_od_dist(train_path):
     # find the most visited destination in train data
@@ -1087,7 +1087,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     def states_to_observation(self, state_des: np.ndarray , check_destinations=True):
         return state_des
 
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, des=413, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile,feature_selection, use_optimal_reward_per_profile, feature_preprocessing, visualize_example)
         
         self.horizon = horizon
@@ -1105,15 +1105,31 @@ class RoadWorldGymPOMDP(RoadWorldGym):
         
         self.last_profile = tuple(profile)
 
-        (self.cur_state, self.cur_des), info = super().reset(seed=None, options=None, profile=profile, des=des)
+        (self.cur_state, self.cur_des), info = super().reset(seed=None, options=None, profile=profile, des=destinations[0] if destinations is not None else None)
+
+        
+        #self.observation_matrix[:,:] = self.process_features(torch.tensor([(s,self.cur_des) for s in self.states]).detach(), feature_selection=self.feature_selection, use_real_env_rewards_as_feature=self.use_optimal_reward_per_profile, feature_preprocessing=self.feature_preprocessing).numpy()
+        #assert np.all(self.observation_matrix > 0)
+
+        self._all_state_des_pairs = {}
+        self._all_state_des_pairs_th = {}
+        self._all_obs_by_dest = {}
+        for d in self.valid_edges:
+            self._all_state_des_pairs[d] = np.array([(s,d) for s in range(self.n_states) ], dtype=np.long)
+            self._all_state_des_pairs_th[d] = torch.tensor(self._all_state_des_pairs[d], dtype=torch.long).detach()
+            self._all_obs_by_dest[d] = self.process_features(
+                    self._all_state_des_pairs_th[d],
+                    feature_selection=self.feature_selection, 
+                    use_real_env_rewards_as_feature=self.use_optimal_reward_per_profile, 
+                    feature_preprocessing=self.feature_preprocessing
+                ).numpy()
+
+        self.observation_matrix = self._all_obs_by_dest[self.cur_des]
 
         self.state_actions_with_known_reward = np.zeros((self.n_states,self.n_actions), dtype=np.bool_) 
         print("ROAD_WORLD_POMDP initialied to destination: ", self.cur_des, ", and profile: ", self.last_profile)
-        #self.observation_matrix[:,:] = self.process_features(torch.tensor([(s,self.cur_des) for s in self.states]).detach(), feature_selection=self.feature_selection, use_real_env_rewards_as_feature=self.use_optimal_reward_per_profile, feature_preprocessing=self.feature_preprocessing).numpy()
-        #assert np.all(self.observation_matrix > 0)
+
         for s in range(self.n_states):
-            #self.state_action[s, :] = [-1]*self.state_action.shape[1]
-            self.observation_matrix[s, :] = self.process_features(torch.tensor([(s,self.cur_des),]).detach(),  feature_selection=self.feature_selection, use_real_env_rewards_as_feature=self.use_optimal_reward_per_profile, feature_preprocessing=self.feature_preprocessing).numpy()[0]
             
             """if s in self.valid_edges:
                 self.reward_matrix[self.last_profile][s] = self._get_reward_state(s, self.cur_des, profile)
@@ -1133,7 +1149,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
                     self.state_actions_with_known_reward[s,a] = True
                     self.transition_matrix[s, a, s] = 1.0
 
-                
+        
         #initial_states = np.array([int(od.split('_')[0]) for od in self.od_list])
         #self.transition_matrix = sp.as_coo(self.transition_matrix)
         
@@ -1141,10 +1157,63 @@ class RoadWorldGymPOMDP(RoadWorldGym):
         indices = np.asarray(list(self.valid_edges))
         self.initial_state_dist[indices] = 1/len(self.valid_edges)
 
+    def update_destination(self, new_des, prev_des):
+        updated_state_actions = deepcopy(self.state_actions_with_known_reward)
+       
+        updated_state_actions[new_des] = True
+        updated_state_actions[prev_des, self.get_action_list(prev_des)] = False
+        updated_state_actions[self.pre_acts_and_pre_states[prev_des][1], self.pre_acts_and_pre_states[prev_des][0]] = False
+        updated_state_actions[self.pre_acts_and_pre_states[new_des][1], self.pre_acts_and_pre_states[new_des][0]] = True
+        updated_state_actions[new_des] = True
+
+        updated_transition_matrix = deepcopy(self.transition_matrix)
+        updated_transition_matrix[new_des, self.get_action_list(new_des), [self.get_state_des_transition((new_des, prev_des), action= a)[0] for a in self.get_action_list(new_des)]] = 0.0
+        updated_transition_matrix[new_des, self.get_action_list(new_des), new_des] = 1.0
+        #updated_transition_matrix[new_des, self.get_action_list(new_des), [self.get_state_des_transition((new_des, prev_des), action= a)[0] for a in self.get_action_list(new_des)]] = 1.0
+        updated_transition_matrix[prev_des, self.get_action_list(prev_des), prev_des] = 0.0
+        updated_transition_matrix[prev_des, self.get_action_list(prev_des), [self.get_state_des_transition((prev_des, new_des), action= a)[0] for a in self.get_action_list(prev_des)]] = 1.0
+        
+        
+        self.transition_matrix = updated_transition_matrix
+        
+        self.state_actions_with_known_reward = updated_state_actions
+        self.observation_matrix = self._all_obs_by_dest[new_des]
+
+        self.cur_des = new_des
+
+        
+        """old_s_w_k_r = np.zeros_like(self.state_actions_with_known_reward)
+        trmat = deepcopy(np.zeros_like(self.transition_matrix))
+        for s in range(self.n_states):
+            
+            if s not in self.valid_edges or s == self.cur_des:
+                old_s_w_k_r[s] = True
+            
+            for a in range(self.n_actions):
+                if a in self.get_action_list(s):
+                    ns = self.get_state_des_transition((s, self.cur_des), a)[0]
+                    trmat[s, a, ns] = 1.0
+                    if ns == self.cur_des:
+                        old_s_w_k_r[s,a] = True
+                else:
+                    old_s_w_k_r[s,a] = True
+                    trmat[s, a, s] = 1.0
+        print(np.where(old_s_w_k_r != updated_state_actions))
+        np.testing.assert_allclose(old_s_w_k_r, updated_state_actions)
+        np.testing.assert_allclose(trmat, self.transition_matrix)"""
+        
+
+
     def reset(self,  seed=None,  options=None, st=None, des=None, profile=(1.0, 0.0,0.0), full_random=True):
         prev_des = self.cur_des
-        ret, info = super().reset(seed, options, st, des if des is not None else self.cur_des, profile=profile, full_random=full_random)
-        assert self.cur_des == prev_des
+        
+        ret, info = super().reset(seed, options, st, des, profile=profile, full_random=full_random)
+        
+        if des is None or self.cur_des != prev_des:
+            self.update_destination(self.cur_des, prev_des)
+
+        else:
+            assert self.cur_des == prev_des
         self.state = self.cur_state
         return self.state, info
     
@@ -1165,35 +1234,45 @@ class RoadWorldGymPOMDP(RoadWorldGym):
         return self.state, r, d, t, i
     
     def get_reward(self, state, action, des, profile=None):
-        assert des == self.cur_des
+
+        if des is not None:
+            assert des == self.cur_des
+        else:
+            des = self.valid_edges[0]
+            nstate = self._get_state_des_transition_try((int(state), des), action)
+            i=0
+            while des == state or nstate == des:
+                des = self.valid_edges[i]
+                nstate = self._get_state_des_transition_try((int(state), des), action)
+                i+=1
 
         nstate = self._get_state_des_transition_try((int(state), des), action)
         if profile is None:
             profile = self.last_profile
         profile = tuple(profile)
         if profile not in self.reward_matrix.keys():
-            self.reward_matrix[profile] = np.zeros((self.n_states, self.n_actions), dtype=np.float32)
+            self.reward_matrix[profile] = np.zeros((self.n_states, self.n_actions, self.n_states), dtype=np.float32)
 
         
         if state not in self.valid_edges:
             rew = -10000.0
-        elif state == self.cur_des:
+        elif state == des:
             rew = 0.0
-        elif nstate == self.cur_des:
+        elif nstate == des:
             rew = 1.0 # This is the key... It is hard for RL to converge when 0 (actually learns another thing. To get there need a lot of reward, but not too much to cause overfitting...)
         elif nstate not in self.valid_edges:
             rew =  -10000.0
         elif action not in self.get_action_list(state):
             rew = -10000.0
         else:
-            rew =  -self.cost_model(profile=profile, normalization =self.feature_preprocessing)((nstate, self.cur_des))
+            rew =  -self.cost_model(profile=profile, normalization =self.feature_preprocessing)((nstate, des))
             
-            if 0.0 != self.reward_matrix[profile][state,action]:
-                old_res = self.reward_matrix[profile][state,action]
+            if 0.0 != self.reward_matrix[profile][state,action, des]:
+                old_res = self.reward_matrix[profile][state,action, des]
                 assert rew == old_res
-        self.reward_matrix[profile][state,action] = rew
+        self.reward_matrix[profile][state,action, des] = rew
             
-        return self.reward_matrix[profile][state,action]
+        return self.reward_matrix[profile][state,action,des]
     
 
 class RoadWorldPOMDPStateAsTuple(RoadWorldGym):

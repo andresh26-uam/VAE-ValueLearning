@@ -2,7 +2,7 @@ from abc import abstractmethod
 from copy import deepcopy
 import enum
 import os
-from typing import Iterator, Tuple
+from typing import Callable, Iterator, Self, Tuple
 import gymnasium as gym
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
@@ -27,7 +27,7 @@ class ConvexLinearModule(th.nn.Linear):
         super().__init__(in_features, out_features, bias, device, dtype)
         state_dict = self.state_dict()
         state_dict['weight'] = th.rand(
-            *(state_dict['weight'].shape), requires_grad=True)
+            *(state_dict['weight'].shape), requires_grad=True)*10
 
         state_dict['weight'] = state_dict['weight'] / \
             th.sum(state_dict['weight'])
@@ -45,9 +45,10 @@ class ConvexLinearModule(th.nn.Linear):
 
 
 class ConvexTensorModule(th.nn.Module):
-    def __init__(self, size, init_tuple=None, bias=None, **kwargs) -> None:
+    def __init__(self, size, init_tuple=None, dtype=th.float32, bias=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.size = size
+        self.dtype= dtype
         self.reset(init_tuple)
 
     def get_tensor_as_tuple(self):
@@ -60,10 +61,10 @@ class ConvexTensorModule(th.nn.Module):
             new_profile = new_profile/np.sum(new_profile)
             new_profile = tuple(new_profile)
         self.weights = th.tensor(
-            np.array(new_profile, dtype=np.float64), dtype=th.float32, requires_grad=True)
+            np.array(new_profile, dtype=np.float64), dtype=self.dtype, requires_grad=True)
 
     def forward(self, x=None):
-        return th.nn.functional.softmax(self.weights, dtype=th.float64, dim=0)
+        return th.nn.functional.softmax(self.weights, dtype=self.dtype, dim=0)
 
     def parameters(self, recurse: bool = True) -> Iterator[th.nn.Parameter]:
         return iter([self.weights])
@@ -113,12 +114,12 @@ class PositiveLinearAlignmentLayer(LinearAlignmentLayer):
 
 
 class ConvexAlignmentLayer(LinearAlignmentLayer):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None, data=None) -> None:
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=th.float16, data=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype, data)
 
     def get_alignment_layer(self):
 
-        w_bounded = th.nn.functional.softmax(self.weight, dim=1)
+        w_bounded = th.nn.functional.softmax(self.weight, dim=1, dtype=self.weight.dtype)
         # assert th.allclose(w_bounded, th.nn.functional.softmax(self.weight))
         b_bounded = 0.0
         if self.linear_bias:
@@ -136,13 +137,14 @@ class PositiveBoundedLinearModule(ConvexAlignmentLayer):
 
 
 class GroundingEnsemble(th.nn.Module):
-    def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, **kwargs):
+    def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, dtype=th.float32, **kwargs):
         super(GroundingEnsemble, self).__init__()
         
         self.hid_sizes = hid_sizes
         self.num_outputs = self.hid_sizes[-1]
         self.input_size = input_size
         self.basic_layer_classes = basic_classes
+        self.desired_dtype=dtype
         self.use_bias = use_bias
         if isinstance(self.use_bias, bool):
             self.use_bias = [self.use_bias]*len(self.hid_sizes)
@@ -152,7 +154,7 @@ class GroundingEnsemble(th.nn.Module):
         self.networks = th.nn.ModuleList([
             self._create_single_output_net() for _ in range(self.num_outputs)
         ])
-        self.c = 0
+        
 
     def _create_single_output_net(self):
         """Creates a single-output version of the original network structure."""
@@ -160,7 +162,8 @@ class GroundingEnsemble(th.nn.Module):
         for i in range(1, len(self.hid_sizes)):
             next_size = self.hid_sizes[i] if i < len(self.hid_sizes)-1 else 1
             linmod = self.basic_layer_classes[i - 1](
-                self.hid_sizes[i - 1],  next_size, bias=self.use_bias[i-1]
+                self.hid_sizes[i - 1],  next_size, bias=self.use_bias[i-1],
+                dtype=self.desired_dtype
             )
 
             """# Check if it’s a ConvexLinearModule and initialize weights if so
@@ -175,7 +178,7 @@ class GroundingEnsemble(th.nn.Module):
 """
             modules.append(linmod)
             modules.append(self.activations[i - 1]())
-        
+            
         return th.nn.Sequential(*modules)
     def requires_grad_(self, requires_grad = True):
         r = super().requires_grad_(requires_grad)
@@ -198,10 +201,10 @@ class GroundingEnsemble(th.nn.Module):
         if self.debug:
             if th.is_grad_enabled():
                 # Define a loss function that only considers the output at `target_output_index`
-                target = th.tensor([[1.0]])  # Example target value for selected output
+                target = th.tensor([[1.0]], dtype=self.desired_dtype)  # Example target value for selected output
                 profile = [0]*self.hid_sizes[-1]
                 profile[0] = 1.0
-                loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile), bias=None), target)
+                loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile, dtype=self.desired_dtype), bias=None), target)
 
                 # Backward pass to calculate gradients
                 loss.backward(retain_graph=False)
@@ -228,6 +231,15 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
 
+    @abstractmethod
+    def set_network_for_value(self, value_id, network):
+        ...
+    
+    @abstractmethod
+    def get_network_for_value(self, value_id) -> th.nn.Module | Callable:
+        ...
+
+
     def set_alignment_function(self, align_func=None):
         self.cur_align_func = align_func
 
@@ -243,6 +255,12 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         if grounding is None:
             return
         self.cur_value_grounding = grounding
+    @abstractmethod
+    def get_trained_alignment_function_network(self):
+        ...
+    @abstractmethod
+    def set_trained_alignment_function_network(self, nn: th.nn.Module):
+        ...
 
     def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None,
                  observation_space=None, action_space=None,
@@ -254,6 +272,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                  action_features_extractor_class = None,
                  action_features_extractor_kwargs = None,
                  clamp_rewards=None,
+                 dtype=None,
                  **kwargs):
         if environment is None and (observation_space is None or action_space is None):
             raise ValueError(
@@ -285,6 +304,8 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                 self.action_space)
 
         super().__init__(self.observation_space, self.action_space, True)
+
+        self.desired_dtype=dtype if dtype is not None else th.float32
 
         self.mode = mode
         self.use_action = use_action
@@ -350,13 +371,20 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         x = self.value_system_layer(align_func=align_func)(x)
 
         return x
+    def _forward_all(self, features, align_func=None, grounding=None):
 
-    def forward_value_groundings(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor):
-        inputs_concat = self.construct_input(state, action, next_state, done)
+        grounding = self.value_grounding_layer(custom_layer=grounding)(features)
+
+        value_system = self.value_system_layer(align_func=align_func)(grounding)
+
+        return value_system, grounding.t()
+
+    def forward_value_groundings(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor, info = None):
+        inputs_concat = self.construct_input(state, action, next_state, done, info=info)
         return self.value_grounding_layer(custom_layer=self.cur_value_grounding)(inputs_concat)
 
-    def forward(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor) -> th.Tensor:
-        inputs_concat = self.construct_input(state, action, next_state, done)
+    def forward(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor, info=None) -> th.Tensor:
+        inputs_concat = self.construct_input(state, action, next_state, done, info=info)
         
         ret = self._forward(
             inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding)
@@ -364,11 +392,30 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
             return squeeze_r(ret)
         else:
             return ret
-
+    def forward_all(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: th.Tensor, info=None) -> th.Tensor:
+        inputs_concat = self.construct_input(state, action, next_state, done, info = info)
+        
+        ret, ret_r = self._forward_all(
+            inputs_concat, align_func=self.cur_align_func, grounding=self.cur_value_grounding)
+        if len(ret.shape) > 1 and ret.shape[1] == 1:
+            return squeeze_r(ret), ret_r
+        else:
+            return ret, ret_r
+        
     def __copy_args__(self, new):
         for k, v in vars(self).items():
+            
             try:
-                nv = deepcopy(v)
+                if isinstance(v, dict) and 'env' in v.keys():
+                    nv = dict()
+                    for a,av in v.items():
+                        if a != 'env':
+                            nv[a] = deepcopy(av)
+                        else:
+                            nv[a] = av
+                    
+                else:
+                    nv = deepcopy(v)
                 if isinstance(v, th.nn.Module):
                     nv.load_state_dict(v.state_dict())
                 if isinstance(v, GroundingEnsemble):
@@ -423,13 +470,13 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                         self.normalize_images,
                     ),
                 )
-                done_th = util.safe_to_tensor(done, dtype=th.float32).to(
-                    self.device).to(th.float32)
+                done_th = util.safe_to_tensor(done, dtype=self.dtype).to(
+                    self.device).to(self.dtype)
                 return state_th, action_th, next_state_th, done_th
         else:
             return super().preprocess(state, action, next_state, done)
 
-    def construct_input(self, state, action, next_state, done):
+    def construct_input(self, state, action, next_state, done, info=None):
         inputs = []
 
         if self.use_one_hot_state_action:
@@ -437,31 +484,35 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                 self.observation_space) * preprocessing.get_flattened_obs_dim(self.action_space)
             # Assume state encodes state-action pairs.
             inputs.append(th.flatten(state, 1))
-
         else:
             
             if self.use_state:
                 if not self.observation_space.contains(state.detach().numpy()[0] if isinstance(state, th.Tensor) else state[0]):
                     if self.features_extractor is None:
                         self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+                    self.features_extractor.adapt_info(info)
+                    #print("NC", self.features_extractor.env.context)
                     state = self.features_extractor(state)
                 inputs.append(th.flatten(state, 1))
             if self.use_action:
                 if self.action_features_extractor is None:
                     self.action_features_extractor = self.action_features_extractor_class(self.action_space, **self.action_features_extractor_kwargs)
+                #self.action_features_extractor.adapt_info(info)
+                #print("NCA", self.features_extractor.env.context)
                 preprocessed_action = self.action_features_extractor(action)
                 inputs.append(preprocessed_action)
-                
             if self.use_next_state:
                 if not self.observation_space.contains(next_state.detach().numpy()[0] if isinstance(next_state, th.Tensor) else next_state[0]):
                     if self.features_extractor is None:
                         self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+                    self.features_extractor.adapt_info(info)
+                    #print("NCNS", self.features_extractor.env.context)
                     next_state = self.features_extractor(next_state)
                     
                 inputs.append(th.flatten(next_state, 1))
             if self.use_done:
                 inputs.append(th.reshape(done, [-1, 1]))
-
+        #print("INPUT", inputs)
         inputs_concat = th.cat(inputs, dim=1)
         # If mode is not eval, cur_align_func and cur_value_grounding is not used. This depends on the implementation.
         return inputs_concat
@@ -480,7 +531,7 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         pass
 
     @abstractmethod
-    def copy(self):
+    def copy(self) -> Self:
         pass
 
 
@@ -502,6 +553,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                  features_extractor_kwargs=None,
                  action_features_extractor_class = None,
                  action_features_extractor_kwargs = None,
+                 dtype=None,
                  **kwargs):
 
         if hasattr(environment, 'last_profile'):
@@ -527,7 +579,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                          features_extractor_class=features_extractor_class,
                          features_extractor_kwargs=features_extractor_kwargs,
                          action_features_extractor_class=action_features_extractor_class,
-                         action_features_extractor_kwargs=action_features_extractor_kwargs)
+                         action_features_extractor_kwargs=action_features_extractor_kwargs,
+                         dtype=dtype)
         
         self.reward_bias = reward_bias
         # self.mlp = networks.build_mlp(**full_build_mlp_kwargs)
@@ -544,6 +597,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
         self.reset_learned_grounding_function()
 
         self.reset_learned_alignment_function()
+
+        
 
         # th.tensor((0,0,0), requires_grad=True,device=self.parameters()[0].device)
 
@@ -574,21 +629,27 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
         if self.cur_align_func is not None:
             assert self.hid_sizes[-1] == len(self.cur_align_func)
 
+    def get_trained_alignment_function_network(self):
+        return self.trained_profile_net
+    
+    def set_trained_alignment_function_network(self, nn: th.nn.Module):
+        self.trained_profile_net = nn
+
     def reset_learned_alignment_function(self, new_align_func: tuple = None):
         self.trained_profile_net: LinearAlignmentLayer = self.basic_layer_classes[-1](
-            self.hid_sizes[-1], 1, bias=self.use_bias[-1])
+            self.hid_sizes[-1], 1, bias=self.use_bias[-1], dtype=self.desired_dtype)
         
         with th.no_grad():
             if new_align_func is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
                 assert isinstance(new_align_func, tuple)
                 state_dict = self.trained_profile_net.state_dict()
                 state_dict['weight'] = th.log(
-                    th.as_tensor([list(new_align_func)]).clone())
+                    th.as_tensor([list(new_align_func)], dtype=self.desired_dtype).clone())
 
                 self.trained_profile_net.load_state_dict(state_dict)
 
     def clamp_tensor(self, x):
-        if self.clamp_rewards is not None:
+        if self.clamp_rewards is not None and self.clamp_rewards != False:
             x = th.clamp(x, self.clamp_rewards[0], self.clamp_rewards[1])
 
         return x
@@ -624,7 +685,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                     else:
                         # .reshape((1, len(profile)))
                         pt = th.tensor(
-                            custom_layer, requires_grad=False, dtype=th.float32)
+                            custom_layer, requires_grad=False, dtype=self.dtype)
                     if self.negative_grounding_layer:
                         x = -th.nn.functional.linear(x, pt.T)
                         assert th.all(x <= 0)
@@ -641,7 +702,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             def _call(x):
                 # .reshape((1, len(profile)))
                 pt = th.tensor(align_func, requires_grad=False,
-                               dtype=th.float32)
+                               dtype=self.dtype)
                 x = th.nn.functional.linear(x, pt)
                 x = self.clamp_tensor(
                     self.final_activation(x) + self.reward_bias)
@@ -656,13 +717,13 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def reset_learned_grounding_function(self, new_grounding_func=None):
 
         if self.independent_groundings:
-            self.values_net = GroundingEnsemble(basic_classes=self.basic_layer_classes,input_size=self.input_size,hid_sizes=self.hid_sizes,activations=self.activations,use_bias=self.use_bias)
+            self.values_net = GroundingEnsemble(basic_classes=self.basic_layer_classes,input_size=self.input_size,hid_sizes=self.hid_sizes,activations=self.activations,use_bias=self.use_bias, dtype=self.desired_dtype)
         else:
             modules = []
             if new_grounding_func is None:
                 for i in range(1, len(self.activations)):
                     linmod = self.basic_layer_classes[i-1](
-                        self.hid_sizes[i-1], self.hid_sizes[i], bias=self.use_bias[i])
+                        self.hid_sizes[i-1], self.hid_sizes[i], bias=self.use_bias[i], dtype=self.desired_dtype)
 
                     
                     modules.append(linmod)
@@ -673,14 +734,20 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             else:
                 self.values_net = new_grounding_func
 
-    def copy(self):
+    def copy(self) -> Self:
         new = self.__class__(env=None, action_dim=self.action_dim, state_dim=self.state_dim, observation_space=self.observation_space, action_space=self.action_space,
                              use_state=self.use_state, use_action=self.use_action, use_next_state=self.use_next_state, use_done=self.use_done, use_one_hot_state_action=self.use_one_hot_state_action,
                              activations=self.activations, hid_sizes=self.hid_sizes[1:], basic_layer_classes=self.basic_layer_classes, mode=self.mode, reward_bias=self.reward_bias,
-                             use_bias=self.use_bias, negative_grounding_layer=self.negative_grounding_layer)
+                             use_bias=self.use_bias, negative_grounding_layer=self.negative_grounding_layer, dtype=self.desired_dtype,
+                             
+                         features_extractor_kwargs=self.features_extractor_kwargs,
+                         features_extractor_class=self.features_extractor_class,
+                         action_features_extractor_class=self.action_features_extractor_class,
+                         action_features_extractor_kwargs=self.action_features_extractor_kwargs)
         new = self.__copy_args__(new)
         new.cur_align_func = deepcopy(self.cur_align_func)
         new.cur_value_grounding = deepcopy(self.cur_value_grounding)
+        new.features_extractor_kwargs['env'] = self.features_extractor_kwargs['env'] # the env should be exactly the same.
         return new
 
     def parameters(self, recurse: bool = True) -> Iterator:
@@ -694,7 +761,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def value_matrix(self):
         with th.no_grad():
             params = th.tensor(
-                list(p.data for name, p in self.values_net.named_parameters(recurse=True))[-1])
+                list(p.data for name, p in self.values_net.named_parameters(recurse=True))[-1], dtype=self.desired_dtype)
             assert params.dim() == 2
             return params
 
@@ -716,6 +783,11 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def get_learned_grounding(self) -> GroundingEnsemble:
         return self.values_net
 
+    def set_network_for_value(self, value_id, network) :
+        self.values_net.networks[value_id] = network
+    def get_network_for_value(self, value_id) -> th.nn.Module:
+        return self.values_net.networks[value_id]
+        
     def save_checkpoint(self, file="reward_function_checkpoint.pt"):
         th.save(self, os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
         # th.save(self.values_net, os.path.join(CHECKPOINTS, "reward_function_checkpoint.pt"))
@@ -743,7 +815,7 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
 
     def reset_learned_alignment_function(self, new_align_func: tuple = None):
         self.trained_profile_net = ConvexTensorModule(
-            size=self.hid_sizes[-1], init_tuple=new_align_func)
+            size=self.hid_sizes[-1], init_tuple=new_align_func, dtype=self.desired_dtype)
         self.cur_align_func = None
 
     def fix_alignment_function(self, align_func=None, random=True):
@@ -766,6 +838,7 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
     def get_learned_profile(self, with_bias=False):
         return self.trained_profile_net.get_tensor_as_tuple()
 
+
     def parameters(self, recurse: bool = True) -> Iterator:
         if self.mode == TrainingModes.VALUE_GROUNDING_LEARNING:
             return self.values_net.parameters(recurse)
@@ -780,7 +853,7 @@ class ProabilisticProfiledRewardFunction(LinearVSLRewardFunction):
             align_tensor = self.trained_profile_net()
         else:
             if not isinstance(from_specific_align_func, th.Tensor):
-                align_tensor = th.as_tensor(from_specific_align_func, dtype=self.dtype, device=self.device).requires_grad_(
+                align_tensor = th.as_tensor(from_specific_align_func, dtype=self.desired_dtype, device=self.device).requires_grad_(
                     self.mode != TrainingModes.EVAL)
             else:
                 align_tensor = from_specific_align_func
@@ -907,4 +980,7 @@ def parse_layer_name(layer_name):
             return th.nn.Tanh
         if layer_name == 'nn.Identity':
             return th.nn.Identity
+        if layer_name == 'ConvexLinearModule':
+            return ConvexLinearModule
+        
         raise ValueError(f'Unknown layer name: {layer_name}')

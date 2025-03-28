@@ -1,4 +1,5 @@
 import enum
+import random
 from typing import Callable, Iterable, Optional, Tuple, Union
 from gymnasium import Env
 import numpy as np
@@ -7,6 +8,19 @@ from seals import base_envs
 from imitation.data import types, rollout
 from imitation.util import logger as imit_logger
 from imitation.util import util
+
+from colorama import Fore, Style, init
+
+def convert_nested_list_to_tuple(nested_list):
+    if isinstance(nested_list, list):
+        return tuple(convert_nested_list_to_tuple(item) for item in nested_list)
+    return nested_list
+
+def assign_colors(num_coordinates):
+    init()
+    colors = [Fore.RED, Fore.GREEN, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.YELLOW, Fore.WHITE, Fore.LIGHTRED_EX, Fore.LIGHTGREEN_EX, Fore.LIGHTBLUE_EX, Fore.LIGHTMAGENTA_EX, Fore.LIGHTCYAN_EX, Fore.LIGHTYELLOW_EX, Fore.LIGHTWHITE_EX]
+    assigned_colors = [colors[i % len(colors)] for i in range(num_coordinates)]
+    return assigned_colors
 
 class PolicyApproximators(enum.Enum):
     MCE_ORIGINAL = 'mce_original'
