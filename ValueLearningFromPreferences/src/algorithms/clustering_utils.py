@@ -1,10 +1,11 @@
 
 
 from copy import deepcopy
+import itertools
 import random
-from typing import Any, List, Mapping, Tuple
+from typing import Any, List, Mapping, Self, Tuple
 
-from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction
+from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, LinearAlignmentLayer
 
 import numpy as np
 import torch as th
@@ -41,7 +42,7 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
         for aid, model in reward_models_per_aid.items():
                 
                 model: AbstractVSLRewardFunction
-                vsNetwork: ConvexAlignmentLayer = value_system_network_per_cluster[assignment_aid_to_vs_cluster[aid]]
+                vsNetwork: LinearAlignmentLayer = value_system_network_per_cluster[assignment_aid_to_vs_cluster[aid]]
                 th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), vsNetwork.state_dict())
 
                 np.testing.assert_allclose(model.get_learned_align_function(), vsNetwork.get_alignment_layer()[0].detach()[0])
@@ -51,7 +52,7 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
                 model_params = {param for param in model.parameters()}
                 gNetworksParams = set()
                 for vi in range(len(model.get_learned_align_function())):
-                    grNetwork: ConvexAlignmentLayer = grounding_per_value_per_cluster[vi][assignment_per_value[vi]]
+                    grNetwork: LinearAlignmentLayer = grounding_per_value_per_cluster[vi][assignment_per_value[vi]]
                     th.testing.assert_close(model.get_network_for_value(vi).state_dict(), grNetwork.state_dict()) # TODO: New class of base clustering vsl algorithm? or gather per grounding and then per agent?
                     network_params = {param for param in grNetwork.parameters()}
                     gNetworksParams.update(network_params)
@@ -183,7 +184,11 @@ class ClusterAssignment():
     def L(self):
         return sum(1 for c in self.assignment_vs if len(c) > 0) # TODO: take into account inter cluster distances?, if they are 0 they are actually the same cluster...
 
-
+    def active_vs_clusters(self):
+        return [(i, len(self.assignment_vs[i])) for i in range(len(self.assignment_vs)) if len(self.assignment_vs[i]) > 0]
+    
+    def active_gr_clusters(self):
+        return [[(i, len(self.assignment_gr[value_i][i])) for i in range(len(self.assignment_gr[value_i])) if len(self.assignment_gr[value_i][i]) > 0] for value_i in range(self.n_values)]
     @property
     def K(self):
         return [sum(1 for c in self.assignment_gr[value_i] if len(c) > 0)for value_i in range(self.n_values)] # TODO: take into account inter cluster distances?, if they are 0 they are actually the same cluster...
@@ -260,7 +265,21 @@ class ClusterAssignment():
 
     def __repr__(self):
         return self.__str__()
+    
+    def is_equivalent_assignment(self, other: Self):
+        if self.L != other.L:
+            return False
+        if self.K != other.K:
+            return False
+        return self.agent_distribution_gr() == other.agent_distribution_gr() and self.agent_distribution_vs() == other.agent_distribution_vs()
 
+    def agent_distribution_gr(self):
+
+        dist = [set(tuple(cluster) for cluster in self.assignment_gr[vi]) for vi in range(len(self.assignment_gr))]
+        return dist
+    def agent_distribution_vs(self):
+        dist = set([tuple(cluster) for cluster in self.assignment_vs])
+        return dist
 
 class ClusterAssignmentMemory():
 
@@ -268,10 +287,12 @@ class ClusterAssignmentMemory():
         result = "Cluster Assignment Memory:\n"
         for i, assignment in enumerate(self.memory):
             result += f"Assignment {i}:"
-            result += f" {assignment.combined_cluster_score_vs(), assignment.combined_cluster_score_gr_aggr()}"
+            result += f" {assignment.combined_cluster_score_vs(), assignment.combined_cluster_score_gr_aggr()}, K: {assignment.K}, L: {assignment.L} \n"
+            result += f" GR Clusters: {assignment.active_gr_clusters()} VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
         return result
 
+    
     def __len__(self):
         return len(self.memory)
     def __init__(self, max_size):
@@ -314,18 +335,45 @@ class ClusterAssignmentMemory():
             else:
                 return x.combined_cluster_score_vs() - y.combined_cluster_score_vs()
 
-    def insert_assignment(self, assignment) -> Tuple[int, ClusterAssignment]:
+    def insert_assignment(self, assignment: ClusterAssignment) -> Tuple[int, ClusterAssignment]:
         index = 0
-        while index < len(self.memory) and ClusterAssignmentMemory.compare_assignments(self.memory[index], assignment) > 0:
-            index += 1
+        dont_insert = False
 
+        for a,b in itertools.combinations(range(len(self.memory)), 2):
+            assert not self.memory[a].is_equivalent_assignment(self.memory[b]), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
+        
+        dont_insert = False
+        while index < len(self.memory):
+            cmp = ClusterAssignmentMemory.compare_assignments(self.memory[index], assignment) 
+            eq = self.memory[index].is_equivalent_assignment(assignment)
+            if cmp <= 0:
+                if eq:
+                    dont_insert = True # The assignment is equivalent to the one in the memory, but it is better.
+                break
+            
+            else:
+                if eq:
+                    return len(self.memory), self.memory[index] # There is already an equivalent assignment in the memory that is better.
+                index += 1
+        if dont_insert:
+            old = self.memory[index].copy()
 
-        if index == len(self.memory):
-            self.memory.append(assignment)
-            old = self.memory[index-1]
-        else:
-            self.memory.insert(index, assignment)
-            old = self.memory[index]
+            assert self.memory[index].is_equivalent_assignment(assignment)
+            self.memory[index] = assignment
+        elif index < self.max_size:
+            if index == len(self.memory):
+                self.memory.append(assignment)
+                old = self.memory[index-1]
+            else:
+                old = self.memory[index]
+                self.memory.insert(index, assignment)
+        remaining = index + 1      
+        while remaining < len(self.memory):
+            if self.memory[remaining].is_equivalent_assignment(assignment):
+                self.memory.pop(remaining)
+                remaining -= 1
+            remaining+=1
+                
         if len(self.memory) > self.max_size:
             self.memory.pop()
         return index, old

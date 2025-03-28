@@ -385,7 +385,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             time.sleep(5)
                         else:
                             print("Inserted before: ", old_assignment.vs_score, old_assignment.gr_score,"new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
-                            
+                            print(assignment_ranking)
+                            #time.sleep(2)
                         
                         end = time.time()
                         print(f"Epoch Validation time: {end-st}")
@@ -475,11 +476,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                 gr_intra_cluster_distances_per_value_per_cluster[vi][ci] = discordance_cluster_aid
 
                             np.testing.assert_allclose(probs.detach().cpu().numpy(), probs_real)
-                            """# TODO: BY AGENT, DO NOT AGGREGATE, BUT KEEP THE REPR ERROR OF EACH AGENT  
-                            discordance_cluster = 1.0-calculate_accuracies(probs_vs=probs.detach().cpu().numpy(),
-                                gt_probs_vs=preferences_on_each_cluster[vi][ci], apply_indifference_in_gt=False, indifference_tolerance=self.loss.model_indifference_tolerance)[0]
-                            gr_intra_cluster_distances[vi].append(discordance_cluster)
-                            gr_intra_cluster_distances_per_value_per_cluster[vi][ci] = discordance_cluster"""
+                            
 
                             
 
@@ -1188,7 +1185,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
 
 
                 # Assert that the optimizer parameters are still those of the changed networks
-            exploration = 1.0 if len(best_assignments_list) < best_assignments_list.max_size else 0.0#self.reward_trainer.initial_exploration_rate*(1-1/num_iterations)
+            exploration = 1.0 if len(best_assignments_list) < best_assignments_list.max_size else self.reward_trainer.initial_exploration_rate*(1-1/num_iterations)
             print("EXPLORATION RATE", exploration)
             
             best_assignments_list = self.reward_trainer.train(
