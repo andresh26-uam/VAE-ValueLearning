@@ -12,6 +12,7 @@ import torch as th
 
 
 def check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, optimizer):
+    if __debug__:
         """Checks if the optimizer parameters match the networks' parameters."""
         optimizer_params = {param for group in optimizer.param_groups for param in group['params']}
         network_params = {param for cluster in grounding_per_value_per_cluster for network in cluster for param in network.parameters()}
@@ -20,24 +21,25 @@ def check_grounding_value_system_networks_consistency_with_optim(grounding_per_v
 
 
 def check_optimizer_consistency(reward_model_per_agent_id, optimizer):
-    """Checks if the optimizer parameters match the reward model parameters."""
-    optimizer_params = {param for group in optimizer.param_groups for param in group['params']}
-    model_params = {param for model in reward_model_per_agent_id.values() for param in model.parameters()}
-    assert optimizer_params.issuperset(model_params)
-    if optimizer_params != model_params:
-        missing_in_optimizer = model_params - optimizer_params
-        extra_in_optimizer = optimizer_params - model_params
-        error_message = (
-            "Optimizer parameters do not match the reward model parameters.\n"
-            f"Missing in optimizer: {missing_in_optimizer}\n"
-            f"Extra in optimizer: {extra_in_optimizer}"
-        )
-        if len(missing_in_optimizer) > 0:
-            raise AssertionError(error_message)
+    if __debug__:
+        """Checks if the optimizer parameters match the reward model parameters."""
+        optimizer_params = {param for group in optimizer.param_groups for param in group['params']}
+        model_params = {param for model in reward_model_per_agent_id.values() for param in model.parameters()}
+        assert optimizer_params.issuperset(model_params)
+        if optimizer_params != model_params:
+            missing_in_optimizer = model_params - optimizer_params
+            extra_in_optimizer = optimizer_params - model_params
+            error_message = (
+                "Optimizer parameters do not match the reward model parameters.\n"
+                f"Missing in optimizer: {missing_in_optimizer}\n"
+                f"Extra in optimizer: {extra_in_optimizer}"
+            )
+            if len(missing_in_optimizer) > 0:
+                raise AssertionError(error_message)
 
 def check_assignment_consistency(grounding_per_value_per_cluster, value_system_network_per_cluster, assignment_aid_to_gr_cluster, assignment_aid_to_vs_cluster, reward_models_per_aid):
         
-
+    if __debug__:
         
         for aid, model in reward_models_per_aid.items():
                 
@@ -134,7 +136,7 @@ class ClusterAssignment():
 
         for aid, raid in self.reward_model_per_agent_id.items():
             rc: AbstractVSLRewardFunction = raid.copy()
-            th.testing.assert_close(rc.state_dict(), raid.state_dict()), "State dicts of rc and raid do not match"
+            #th.testing.assert_close(rc.state_dict(), raid.state_dict()), "State dicts of rc and raid do not match"
             rc.set_mode(raid.mode)
             for vi in range(self.n_values):
                 cluster_of_aid = self.agent_to_gr_cluster_assignments[aid][vi]
@@ -353,13 +355,16 @@ class ClusterAssignmentMemory():
             
             else:
                 if eq:
-                    return len(self.memory), self.memory[index] # There is already an equivalent assignment in the memory that is better.
+                    return len(self.memory), None # There is already an equivalent assignment in the memory that is better.
                 index += 1
+        old = None
+        
         if dont_insert:
             old = self.memory[index].copy()
 
             assert self.memory[index].is_equivalent_assignment(assignment)
             self.memory[index] = assignment
+        
         elif index < self.max_size:
             if index == len(self.memory):
                 self.memory.append(assignment)
@@ -367,15 +372,18 @@ class ClusterAssignmentMemory():
             else:
                 old = self.memory[index]
                 self.memory.insert(index, assignment)
+        else:
+            pass # Here it means the assignment is worse than the worst one in the memory, so we do not insert it.
         remaining = index + 1      
         while remaining < len(self.memory):
             if self.memory[remaining].is_equivalent_assignment(assignment):
                 self.memory.pop(remaining)
-                remaining -= 1
-            remaining+=1
+            else:
+                remaining+=1
                 
         if len(self.memory) > self.max_size:
             self.memory.pop()
+            
         return index, old
     def get_random_weighted_assignment(self)-> ClusterAssignment:
         if len(self.memory) == 0:

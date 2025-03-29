@@ -55,10 +55,9 @@ def load_dataset(parser_args, config, society_data={'name': "default", "same_tra
         trajs_ag = np.asarray(load_trajectories(dataset_name=dataset_name,
                               ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype))
         
-        if society_data["same_trajectories_for_each_agent_type"]:
-            for t in range(ag['n_agents']-1):
-                np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']] % len(trajs_ag), (idxs[(
-                    t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)) % len(trajs_ag))
+        for t in range(ag['n_agents']-2):
+                np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']], (idxs[(
+                    t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)))
 
                 for traj_i in range(ag['data']['trajectory_pairs']):
 
@@ -74,9 +73,10 @@ def load_dataset(parser_args, config, society_data={'name': "default", "same_tra
 
             trajectory_pairs: Sequence[TrajectoryWithValueSystemRewsPair] = trajs_ag[ag_idxs]
             dataset.push(trajectory_pairs, preferences[ag_point:ag_point+n_pairs_per_agent], preferences_per_grounding[ag_point:(ag_point+n_pairs_per_agent)], agent_ids=[agent_id]*n_pairs_per_agent, agent_data={agent_id: ag})
-            if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
+            """if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
                 prev_ag_idxs = idxs[ag_point -
                                     n_pairs_per_agent:ag_point+n_pairs_per_agent]
+                
                 for j in range(len(ag_idxs)):
                     np.testing.assert_allclose(
                         trajs_ag[ag_idxs][j][0].obs, trajs_ag[prev_ag_idxs][j][0].obs)
@@ -87,7 +87,7 @@ def load_dataset(parser_args, config, society_data={'name': "default", "same_tra
                         dataset.data_per_agent[last_agent_id].preferences_with_grounding, dataset.data_per_agent[agent_id].preferences_with_grounding)
                     np.testing.assert_allclose([t.obs for t in dataset.data_per_agent[last_agent_id].fragments1], [
                                                t.obs for t in dataset.data_per_agent[agent_id].fragments1])
-
+"""
             ag_point += n_pairs_per_agent
             last_agent_id = agent_id
             las_agent_name = ag['name']

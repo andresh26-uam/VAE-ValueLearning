@@ -40,7 +40,9 @@ class PrefLossClasses(enum.Enum):
     CROSS_ENTROPY_CLUSTER_MODIFIED = 'cross_entropy_cluster_modified'
 
 
-def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None, gt_probs_vs: th.Tensor = None, gt_probs_gr: th.Tensor = None, indifference_tolerance=0.0, apply_indifference_in_gt=False):
+def discordance(probs: th.Tensor = None, gt_probs: th.Tensor = None, indifference_tolerance=0.0, apply_indifference_in_gt=False, reduce='mean'):
+    return 1.0 - calculate_accuracies(probs_vs=probs, gt_probs_vs=gt_probs, indifference_tolerance=indifference_tolerance, apply_indifference_in_gt=apply_indifference_in_gt, reduce=reduce)[0]
+def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None, gt_probs_vs: th.Tensor = None, gt_probs_gr: th.Tensor = None, indifference_tolerance=0.0, apply_indifference_in_gt=False, reduce='mean'):
     accuracy_vs = None
     accuracy_gr = None
     misclassified_vs = None
@@ -48,8 +50,10 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
     if probs_vs is not None:
         assert gt_probs_vs is not None
         if isinstance(probs_vs, th.Tensor):
+            assert isinstance(gt_probs_vs , th.Tensor)
             detached_probs_vs = probs_vs.detach()
         else:
+            assert isinstance(gt_probs_vs , np.ndarray)
             detached_probs_vs = probs_vs
 
         vs_predictions_positive = detached_probs_vs > 0.5
@@ -78,8 +82,10 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
         
         # Combine all misclassified examples
         misclassified_vs = misclassified_positive | misclassified_negative | misclassified_indifferent
-        
-        accuracy_vs = (1.0 - sum(misclassified_vs)/len(probs_vs)) 
+        if reduce == 'mean':
+            accuracy_vs = (1.0 - sum(misclassified_vs)/len(probs_vs)) 
+        else:
+            accuracy_vs = (1.0 - misclassified_vs)
 
     if probs_gr is not None:
         assert gt_probs_gr is not None
@@ -113,8 +119,13 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
 
             missclassified_vgrj = misclassified_positive | misclassified_negative | misclassified_indifferent
 
-            accuracy_gr.append(
-                (1.0 - sum(missclassified_vgrj)/len(detached_probs_vgrj)))
+
+            if reduce == 'mean':
+                acc_gr_vi = (1.0 - sum(missclassified_vgrj)/len(detached_probs_vgrj))
+            else:
+                acc_gr_vi = (1.0 - missclassified_vgrj)
+                
+            accuracy_gr.append(acc_gr_vi)
             misclassified_gr.append(missclassified_vgrj)
 
     return accuracy_vs, accuracy_gr, misclassified_vs, misclassified_gr
@@ -219,7 +230,10 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 only_for_alignment_function=self.algorithm.env.basic_profiles[value_idx])
         n = len(fragments)
         probs_with_cluster1, probs_with_cluster2 = probs[0:n], probs[n:2*n]
-        return difference_function(probs_with_cluster1, probs_with_cluster2), calculate_accuracies(probs_vs=probs_with_cluster1, gt_probs_vs= probs_with_cluster2, apply_indifference_in_gt=True, indifference_tolerance=indifference_tolerance)[0]
+        
+        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, apply_indifference_in_gt=False, indifference_tolerance=indifference_tolerance)
+        
+        return difference_function(probs_with_cluster1, probs_with_cluster2), disc
 
     def diversity_vs(self, 
         fragments: Dict[str, Sequence[TrajectoryWithValueSystemRewsPair]],
@@ -258,9 +272,9 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 custom_model_per_agent_id=reward_net_per_aid_2,
                                 only_for_alignment_function=al2)
         
-        missed_pairs = calculate_accuracies(probs_vs=probs_with_cluster1, gt_probs_vs= probs_with_cluster2, apply_indifference_in_gt=True, indifference_tolerance=indifference_tolerance)[2]
-        discordance = sum(missed_pairs)/len(probs_with_cluster1)
-        return difference_function(probs_with_cluster1, probs_with_cluster2), discordance
+        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, apply_indifference_in_gt=False, indifference_tolerance=indifference_tolerance)
+        #disc = sum(missed_pairs)/len(probs_with_cluster1)
+        return difference_function(probs_with_cluster1, probs_with_cluster2), disc
 
 
     def forward(
@@ -572,13 +586,14 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
 class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
     """Compute the cross entropy reward loss."""
 
-    def __init__(self, model_indifference_tolerance, apply_on_misclassified_pairs_only=False, confident_penalty=0.0) -> None:
+    def __init__(self, model_indifference_tolerance, apply_on_misclassified_pairs_only=False, confident_penalty=0.0, cluster_similarity_penalty=0.01) -> None:
         """Create cross entropy reward loss."""
         super().__init__()
         # This is the tolerance in the probability model when in the ground truth two trajectories are deemed equivalent (i.e. if two trajectories are equivalent, the ground truth target is 0.5. The model should output something in between (0.5 - indifference, 0.5 + indifference) to consider it has done a correct preference prediction.)
         self.model_indifference_tolerance = model_indifference_tolerance
         self.apply_on_misclassified_only = apply_on_misclassified_pairs_only
         self.confident_penalty = confident_penalty
+        self.cluster_similarity_penalty = cluster_similarity_penalty
 
 
     def loss_func(self, probs, target_probs, misclassified_pairs=None):
@@ -607,6 +622,9 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
                                           Sequence[TrajectoryPair]] = None,
         preferences_per_agent_id: np.ndarray = None,
         preferences_per_agent_id_with_grounding: np.ndarray = None,
+
+        value_system_network_per_cluster: List =None,
+        grounding_per_value_per_cluster: List =None
 
     ) -> preference_comparisons.LossAndMetrics:
         """Computes the loss. Same as Cross Entropy but does not overfit to class certainty, i.e. does not consider examples that are already correct."""
@@ -659,8 +677,21 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             loss_vs = th.tensor(
                 0.0, device=example_model.device, dtype=example_model.dtype)
         else:
-            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs)
-
+            value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
+            
+            # TODO. only take into account the clusters that are used in the current assignment.
+            avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
+            
+            vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )
+            """print(vs_penalty, )
+            vs_penalty.backward()
+            print("GRAD", value_system_network_per_cluster[0].weight.grad)
+            print("GRAD", value_system_network_per_cluster[1].weight.grad)
+            print("GRAD", value_system_network_per_cluster[2].weight.grad)
+            print("GRAD", value_system_network_per_cluster[3].weight.grad)
+            exit(0)"""
+            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs) - self.cluster_similarity_penalty*vs_penalty
+            metrics['loss_vs'] = loss_vs
         # LOSS GROUNDING.
         # start_time = time.time()
 
@@ -683,7 +714,7 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             metrics['loss_per_vi'][vi] = nl
             loss_gr += nl
             assert not loss_gr.isnan()
-
+        metrics['loss_gr'] = loss_gr
         # end_time = time.time()
         # print(f"Execution time for loss grounding: {end_time - start_time} seconds")
         return preference_comparisons.LossAndMetrics(

@@ -388,3 +388,7 @@ def get_demo_oms_from_trajectories(trajs: Iterable[types.Trajectory], state_dim,
         demo_state_om /= num_demos
 
     return demo_state_om
+
+import torch
+
+ 

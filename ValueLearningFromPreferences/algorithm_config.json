@@ -47,7 +47,8 @@
                 "loss_kwargs": {
                     "model_indifference_tolerance": 0.001,
                     "apply_on_misclassified_pairs_only": false, 
-                    "confident_penalty": 0.1},
+                    "confident_penalty": 0.5,
+                    "cluster_similarity_penalty": 0.02},
                 "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
                 "discount_factor_preferences": 1.0,
 
@@ -83,10 +84,10 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 5,
-                    "refining_steps_after_cluster_assignment": 1,
+                    "refining_steps_after_cluster_assignment": 2,
                     "qualitative_cluster_assignment": true,
-                    "initial_refining_steps": 1,
-                    "initial_exploration_rate": 0.2,
+                    "initial_refining_steps": 5,
+                    "initial_exploration_rate": 0.3,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": 1
                 }
@@ -142,9 +143,11 @@
                 "learn_stochastic_policy": true,
                 "loss_class": "cross_entropy_cluster",
                 "loss_kwargs": {
-                    "model_indifference_tolerance": 0.001,
-                    "apply_on_misclassified_pairs_only": false, 
-                    "confident_penalty": 0.1},
+                    "model_indifference_tolerance": 0.0000,
+                    "apply_on_misclassified_pairs_only": true, 
+                    "confident_penalty": 0.0,
+                    "cluster_similarity_penalty": 0.0
+                },
                 "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
                 "discount_factor_preferences": 1.0,
 
@@ -157,7 +160,7 @@
                 "query_schedule": "constant",
                 "train_kwargs": {
                     "max_iter": 100,
-                    "trajectory_batch_size": 1500,
+                    "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
 
                     "max_assignment_memory": 7
@@ -176,17 +179,17 @@
                     "vf_coef": 0.01,
                     "n_epochs": 5,
                     "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
+                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 1,
-                    "refining_steps_after_cluster_assignment": 10,
-                    "qualitative_cluster_assignment": true,
-                    "initial_refining_steps": 1,
-                    "initial_exploration_rate": 0.0,
+                    "epochs": 2,
+                    "refining_steps_after_cluster_assignment": 2,
+                    "qualitative_cluster_assignment": false,
+                    "initial_refining_steps": 15,
+                    "initial_exploration_rate": 0.2,
                     "batch_size": "full",
-                    "inner_k_fold_validation_divisions_per_epoch": 3
+                    "inner_k_fold_validation_divisions_per_epoch": 1
                 }
             }
         }
@@ -225,7 +228,7 @@
         "policy_state_feature_extractor": "OneHotFeatureExtractor",
         "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
         "default_optimizer_kwargs": {
-            "lr": 0.001,
+            "lr": 0.003,
             "weight_decay": 0.0000,
             "betas": [0.9, 0.999]
         },
@@ -240,7 +243,8 @@
                 "loss_kwargs": {
                     "model_indifference_tolerance": 0.001,
                     "apply_on_misclassified_pairs_only": false, 
-                    "confident_penalty": 0.1},
+                    "confident_penalty": 0.3,
+                    "cluster_similarity_penalty": 0.01},
                 "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
                 "discount_factor_preferences": 1.0,
 
@@ -255,7 +259,7 @@
                     "max_iter": 100,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
-                    "max_assignment_memory": 7
+                    "max_assignment_memory": 15
                 },
 
                 "learner_policy_class": "PPO",
@@ -275,11 +279,11 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 50,
-                    "refining_steps_after_cluster_assignment": 5,
+                    "epochs": 10,
+                    "refining_steps_after_cluster_assignment": 1,
                     "qualitative_cluster_assignment": true,
-                    "initial_refining_steps": 10,
-                    "initial_exploration_rate": 0.0,
+                    "initial_refining_steps": 5,
+                    "initial_exploration_rate": 0.2,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": 2
                 }

@@ -107,7 +107,7 @@ def parse_args():
                            default=False, help='Retrain experts')
     env_group.add_argument('-appr', '--approx_expert', action='store_true',
                            default=False, help='Approximate expert')
-    env_group.add_argument('-reps', '--reward_epsilon', default=1e-4, type=float,
+    env_group.add_argument('-reps', '--reward_epsilon', default=0.0, type=float,
                            help='Distance between the cummulative rewards of each pair of trajectories for them to be considered as equal in the comparisons')
 
     return parser.parse_args()
@@ -185,9 +185,9 @@ def save_preferences(idxs: np.ndarray, discounted_sums: np.ndarray, discounted_s
                     traj_i, traj_j, epsilon=epsilon)
                 if real_preference is not None:
                     comparison_flag_real = float(real_preference[(idxs[i], idxs[i+1])])
-                    print(idxs[i], idxs[i+1])
-                    print(real_preference)
-                    print(discounted_sums[idxs[i]], discounted_sums[idxs[i+1]])
+                    #print(idxs[i], idxs[i+1])
+                    #print(real_preference)
+                    #print(discounted_sums[idxs[i]], discounted_sums[idxs[i+1]])
                     assert comparison_flag_real == comparison_flag
                 writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
                     i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
@@ -495,15 +495,15 @@ if __name__ == "__main__":
                     list_ = []
 
                     environment.contextualize(all_trajs_ag[i].infos[0]['context'])
-                    print(all_trajs_ag[i].infos[0]['context'])
+                    
                     for o, no, a, info in zip(all_trajs_ag[i].obs[:-1], all_trajs_ag[i].obs[1:], all_trajs_ag[i].acts, all_trajs_ag[i].infos):
                         list_.append(environment.get_reward_per_align_func(align_func=tuple(
                             environment_data['basic_profiles'][vi]), action=a, info=info, obs=o, next_obs=no, custom_grounding=ag_grounding))
                     
-                    # TODO. contextualize again to check routes are ok. This is hard...
-                    print("LIST", list_)
+                    
+                    #print("LIST", list_)
                     #print("GR SIMPLE", grounding_simple)
-                    print("VREW", all_trajs_ag[i].v_rews[vi])
+                    #print("VREW", all_trajs_ag[i].v_rews[vi])
                     #np.testing.assert_almost_equal(np.asarray(list_, dtype=parser_args.dtype), grounding_simple, decimal = 5 if parser_args.dtype in [np.float32, np.float64] else 3)
                     
 

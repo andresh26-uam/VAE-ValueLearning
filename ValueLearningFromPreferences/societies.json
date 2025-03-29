@@ -151,7 +151,7 @@
                 }
             ,
         "default": {
-            "name": "s1",
+            "name": "default",
             "stochastic_expert": false,
             "same_trajectories_for_each_agent_type": true,
             "approx_expert": true,
@@ -176,9 +176,9 @@
                 "name": "100agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 
                 "value_system": [1.0, 0.0, 0.0],
-                "n_agents": 4,
+                "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 30,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             },
@@ -186,9 +186,9 @@
                 "name": "010agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 
                 "value_system": [0.0, 1.0, 0.0],
-                "n_agents": 4,
+                "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 30,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             },
@@ -196,9 +196,9 @@
                 "name": "001agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 
                 "value_system": [0.0, 0.0, 1.0],
-                "n_agents": 4,
+                "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 30,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             }]
