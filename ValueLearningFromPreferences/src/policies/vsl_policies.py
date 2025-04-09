@@ -374,8 +374,8 @@ def action_mask(valid_actions, action_shape, *va_args):
 class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
     def learn(self, alignment_function, total_timesteps, callback=None, log_interval=1, tb_log_name='', reset_num_timesteps=False, progress_bar=True):
         learner = self.get_learner_for_alignment_function(alignment_function)
-        learner.learn(total_timesteps=total_timesteps, tb_log_name=f'{tb_log_name}_{total_timesteps}_{
-                      alignment_function}', callback=callback, reset_num_timesteps=reset_num_timesteps, progress_bar=progress_bar)
+        learner.learn(total_timesteps=total_timesteps, 
+                      tb_log_name=f"{tb_log_name}_{total_timesteps}_{alignment_function}", callback=callback, reset_num_timesteps=reset_num_timesteps, progress_bar=progress_bar)
         self.learner_per_align_func[alignment_function] = learner
 
     def save(self, path='learner_dummy'):
@@ -750,10 +750,8 @@ class ContextualVAlignedDictSpaceActionPolicy(ContextualValueSystemLearningPolic
         self.contextual_policies = dict()
     def update_context(self):
         for va in self.policy_per_va_dict.keys():
-            if self.context is None:
-                new_context = self.get_environ(self.env.get_align_func()).unwrapped.context
-                #print("NEW CONTEXT", new_context)
-                
+            new_context = self.get_environ(self.env.get_align_func()).context
+            if self.context != new_context:
                 if self.context != new_context:
                     if new_context not in self.contextual_policies.keys():
                         self.contextual_policies[new_context] =  dict()

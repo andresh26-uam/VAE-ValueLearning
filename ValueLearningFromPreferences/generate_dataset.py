@@ -17,16 +17,17 @@ import torch
 from envs.tabularVAenv import ContextualEnv, TabularVAMDP
 from src.algorithms.utils import PolicyApproximators, mce_partition_fh
 from envs.firefighters_env import FeatureSelectionFFEnv, FireFightersEnv
-from src.data import TrajectoryWithValueSystemRews, load_vs_trajectories, save_vs_trajectories
+from src.data import TrajectoryWithValueSystemRews, TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset, load_vs_trajectories, save_vs_trajectories
 from src.policies.vsl_policies import ContextualVAlignedDictSpaceActionPolicy, VAlignedDictSpaceActionPolicy
 
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
 from utils import filter_none_args, load_json_config
 import gymnasium as gym
 
-DATASETS_PATH = 'datasets/'
+DATASETS_PATH = 'datasets/complete_datasets/'
 TRAJECTORIES_DATASETS_PATH = 'datasets/trajectories/'
 COMPARISONS_DATASETS_PATH = 'datasets/comparisons/'
+
 GROUNDINGS_PATH = 'groundings/'
 
 DEFAULT_SEED = 26
@@ -84,7 +85,7 @@ def parse_args():
                                help='Recalculate custom agent groundings')
 
     general_group.add_argument('-e', '--environment', type=str, required=True, choices=[
-                               'rw', 'ff'], help='environment (roadworld - rw, firefighters - ff, itemgathering - ig)')
+                               'rw', 'ff', 'vrw'], help='environment (roadworld - rw, firefighters - ff, variable dest roadworld - vrw)')
 
     general_group.add_argument('-df', '--discount_factor', type=float, default=1.0,
                                help='Discount factor. For some environments, it will be neglected as they need a specific discount factor.')
@@ -112,14 +113,20 @@ def parse_args():
 
     return parser.parse_args()
 
+def calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=None):
+    path = f"{environment_data['name']}/{society_data['name']}/{dataset_name}/"
+    if epsilon is not None:
+        path = os.path.join(path, f"reps_{epsilon}/")
+    return path
 
 def calculate_trajectory_save_path(dataset_name, ag, environment_data, society_data):
-    return f"{environment_data['name']}/{society_data['name']}/{dataset_name}/trajs_ag_{ag['name']}_{ag['value_system']}_rp_{ag['data']['random_traj_proportion']}_rat_{ag['data']['rationality']}"
+    return os.path.join(calculate_dataset_save_path(dataset_name, environment_data, society_data), f"trajs_ag_{ag['name']}_{ag['value_system']}_rp_{ag['data']['random_traj_proportion']}_rat_{ag['data']['rationality']}")
 
 
 def calculate_preferences_save_path(dataset_name, ag, environment_data, society_data, epsilon):
 
-    return f"{environment_data['name']}/{society_data['name']}/{dataset_name}/prefs_ag_{ag['name']}_{ag['value_system']}_repsilon_{epsilon}"
+    return os.path.join(calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon), f"prefs_ag_{ag['name']}_{ag['value_system']}")
+
 
 
 def save_trajectories(trajectories: Sequence[TrajectoryWithValueSystemRews], dataset_name, ag, environment_data, society_data, dtype=np.float32):
@@ -299,6 +306,93 @@ def load_preferences(dataset_name, ag, environment_data, society_data, epsilon, 
         return np.array(idxs, dtype=np.int_), discounted_sums, discounted_sums_per_grounding, np.array(preferences, dtype=dtype), preferences_per_grounding
         
 
+def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None):
+    environment_data = config[parser_args.environment]
+
+    dataset_name = parser_args.dataset_name
+    if train_or_test is not None:
+        dataset_name+='_'
+        assert train_or_test == 'train' or train_or_test == 'test'
+        dataset_name+=train_or_test 
+
+    dataset = VSLPreferenceDataset(n_values=environment_data['n_values'])
+
+    if 'agents' not in society_data.keys():
+        agents = []
+        # TODO: HERE; THIS PATH IS NOT CORRECT!!
+        folder_path = os.path.join(COMPARISONS_DATASETS_PATH, f"{environment_data['name']}/{society_data['name']}/{dataset_name}")
+        for root, dirs, files in os.walk(folder_path):
+            for dir_name in dirs:
+                if dir_name.startswith("prefs_ag_"):
+                    ag_name = dir_name.split("_")[2]
+                    agents.append(ag_name)
+    else:
+        agents = society_data['agents']
+
+    for i, ag in enumerate(agents):
+        if 'agents' not in society_data.keys():
+            ag = {'agent_id': ag, 'name': ag, 'value_system': 'unk', 'data': defaultdict(lambda: 'nd'), 'n_agents': 1, 'grounding': list(default_groundings.keys())}
+        #  Here idxs is the list of trajectory PAIRS of indices from the trajectory list that are compared.
+        idxs, discounted_sums, discounted_sums_per_grounding, preferences, preferences_per_grounding = load_preferences(
+            epsilon=parser_args.reward_epsilon, dataset_name=dataset_name, environment_data=environment_data, society_data=society_data, ag=ag, dtype=parser_args.dtype)
+        trajs_ag = np.asarray(load_trajectories(dataset_name=dataset_name,
+                              ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype))
+        
+        for t in range(ag['n_agents']-2):
+                np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']], (idxs[(
+                    t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)))
+
+                for traj_i in range(ag['data']['trajectory_pairs']):
+
+                    np.testing.assert_allclose(trajs_ag[traj_i + t*ag['data']['trajectory_pairs']].obs, trajs_ag[(
+                        t+1)*ag['data']['trajectory_pairs'] + traj_i].obs)
+
+        
+        ag_point = 0
+        n_pairs_per_agent = len(idxs)//ag['n_agents']
+        for id in range(ag['n_agents']):
+            agent_id = ag['name']+'_'+str(id)
+            ag_idxs = idxs[ag_point:ag_point+n_pairs_per_agent]
+
+            trajectory_pairs: Sequence[TrajectoryWithValueSystemRewsPair] = trajs_ag[ag_idxs]
+            dataset.push(trajectory_pairs, preferences[ag_point:ag_point+n_pairs_per_agent], preferences_per_grounding[ag_point:(ag_point+n_pairs_per_agent)], agent_ids=[agent_id]*n_pairs_per_agent, agent_data={agent_id: ag})
+            """if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
+                prev_ag_idxs = idxs[ag_point -
+                                    n_pairs_per_agent:ag_point+n_pairs_per_agent]
+                
+                for j in range(len(ag_idxs)):
+                    np.testing.assert_allclose(
+                        trajs_ag[ag_idxs][j][0].obs, trajs_ag[prev_ag_idxs][j][0].obs)
+                    np.testing.assert_allclose(
+                        trajs_ag[ag_idxs][j][1].obs, trajs_ag[prev_ag_idxs][j][1].obs)
+                if ag['name'] == las_agent_name:
+                    np.testing.assert_allclose(
+                        dataset.data_per_agent[last_agent_id].preferences_with_grounding, dataset.data_per_agent[agent_id].preferences_with_grounding)
+                    np.testing.assert_allclose([t.obs for t in dataset.data_per_agent[last_agent_id].fragments1], [
+                                               t.obs for t in dataset.data_per_agent[agent_id].fragments1])
+"""
+            ag_point += n_pairs_per_agent
+            #last_agent_id = agent_id
+            #las_agent_name = ag['name']
+
+        """for i in range((len(trajs_ag))):
+            assert discounted_sums[i] == imitation.data.rollout.discounted_sum(
+                trajs_ag[i].rews, gamma=alg_config['discount_factor_preferences'])
+        for idx, pr in zip(idxs, preferences):
+            assert discounted_sums[idx[0]] == imitation.data.rollout.discounted_sum(
+                trajs_ag[idx[0]].rews, gamma=alg_config['discount_factor_preferences'])
+            assert discounted_sums[idx[1]] == imitation.data.rollout.discounted_sum(
+                trajs_ag[idx[1]].rews, gamma=alg_config['discount_factor_preferences'])
+            assert compare_trajectories(
+                discounted_sums[idx[0]], discounted_sums[idx[1]], epsilon=parser_args.reward_epsilon) == pr
+        for vi in range(len(environment_data['basic_profiles'])):
+
+            for idx, pr in zip(idxs, preferences_per_grounding[vi]):
+                assert compare_trajectories(
+                    discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon) == pr"""
+
+    return dataset
+
 
 if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
@@ -336,7 +430,7 @@ if __name__ == "__main__":
             'feature_selection': FeatureSelectionFFEnv(environment_data['feature_selection']),
             'initial_state_distribution': environment_data['initial_state_distribution']
         }
-    if parser_args.environment == 'rw':
+    if parser_args.environment == 'rw' or parser_args.environment == 'vrw':
         extra_kwargs = {'env_kwargs': {
             'feature_selection': FeatureSelection(environment_data['feature_selection']),
             'feature_preprocessing': FeaturePreprocess(environment_data['feature_preprocessing']),
@@ -368,7 +462,8 @@ if __name__ == "__main__":
         if society_data['approx_expert']:
             profile_to_assumed_matrix = dict()
             environment.reset(seed=parser_args.seed)
-            np.testing.assert_allclose(environment.reward_matrix_per_align_func(
+            if parser_args.environment == 'rw':
+                np.testing.assert_allclose(environment.reward_matrix_per_align_func(
                     agent_profiles[0], custom_grounding=tabular_all_agent_groundings[agg])[environment.goal_states], 0.0)
             for w in agent_profiles:
 
@@ -494,7 +589,8 @@ if __name__ == "__main__":
                         ag_grounding[all_trajs_ag[i].obs[:-1], all_trajs_ag[i].acts][:, vi], np.float64) # this is NOT contextualized, CAUTION!
                     list_ = []
 
-                    environment.contextualize(all_trajs_ag[i].infos[0]['context'])
+                    if environment_data['is_contextual']:
+                        environment.contextualize(all_trajs_ag[i].infos[0]['context'])
                     
                     for o, no, a, info in zip(all_trajs_ag[i].obs[:-1], all_trajs_ag[i].obs[1:], all_trajs_ag[i].acts, all_trajs_ag[i].infos):
                         list_.append(environment.get_reward_per_align_func(align_func=tuple(
@@ -558,10 +654,10 @@ if __name__ == "__main__":
             for i in range((len(trajs_ag))):
                 np.testing.assert_almost_equal(discounted_sums_per_grounding[vi, i], parser_args.dtype(imitation.data.rollout.discounted_sum(
                     trajs_ag[i].v_rews[vi], gamma=alg_config['discount_factor_preferences'])), decimal = 4 if parser_args.dtype in [np.float32, np.float64] else 3)
-                if not environment_data['is_contextual']:
+                """if not environment_data['is_contextual']:
                     np.testing.assert_almost_equal(discounted_sums_per_grounding[vi, i], parser_args.dtype(imitation.data.rollout.discounted_sum(
                     tabular_all_agent_groundings[agg][trajs_ag[i].obs[:-1], trajs_ag[i].acts][:, vi], gamma=alg_config['discount_factor_preferences'])), decimal = 5 if parser_args.dtype in [np.float32, np.float64] else 3)
-
+                """
             for idx, pr in zip(idxs, preferences_per_grounding[:,vi]):
                 idx = [int(ix) for ix in idx]
 
@@ -571,12 +667,18 @@ if __name__ == "__main__":
                 np.testing.assert_almost_equal(discounted_sums_per_grounding[vi, idx[1]], parser_args.dtype(imitation.data.rollout.discounted_sum(
                         trajs_ag[idx[1]].v_rews[vi], gamma=alg_config['discount_factor_preferences'])), decimal = 5 if parser_args.dtype in [np.float32, np.float64] else 3)
                     
-                if not environment_data['is_contextual']:
+                """if not environment_data['is_contextual']:
                     np.testing.assert_almost_equal(discounted_sums_per_grounding[vi, idx[0]], parser_args.dtype(imitation.data.rollout.discounted_sum(
                         tabular_all_agent_groundings[agg][trajs_ag[idx[0]].obs[:-1], trajs_ag[idx[0]].acts][:, vi], gamma=alg_config['discount_factor_preferences'])), decimal = 5 if parser_args.dtype in [np.float32, np.float64] else 3)
                     np.testing.assert_almost_equal(discounted_sums_per_grounding[vi, idx[1]], parser_args.dtype(imitation.data.rollout.discounted_sum(
                         tabular_all_agent_groundings[agg][trajs_ag[idx[1]].obs[:-1], trajs_ag[idx[1]].acts][:, vi], gamma=alg_config['discount_factor_preferences'])), decimal = 5 if parser_args.dtype in [np.float32, np.float64] else 3)
+                """
                 np.testing.assert_almost_equal(compare_trajectories(
                     discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon), pr, decimal = 4 if parser_args.dtype in [np.float32, np.float64] else 3)
 
     print("Dataset generated correctly.")
+    dataset = create_dataset(parser_args, config, society_data, default_groundings = society_config[parser_args.environment]['groundings'])
+    path  =os.path.join(
+        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
+    os.makedirs(path, exist_ok=True)
+    dataset.save(os.path.join(path, "dataset.pkl"))

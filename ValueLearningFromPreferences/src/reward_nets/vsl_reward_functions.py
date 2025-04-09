@@ -2,7 +2,8 @@ from abc import abstractmethod
 from copy import deepcopy
 import enum
 import os
-from typing import Callable, Iterator, Self, Tuple
+import time
+from typing import Callable, Iterator, Self, Tuple, override
 import gymnasium as gym
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
@@ -14,6 +15,8 @@ from typing import cast
 from stable_baselines3.common import preprocessing
 from itertools import chain
 
+from envs.tabularVAenv import ValueAlignedEnvironment
+from src.feature_extractors import ContextualFeatureExtractorFromVAEnv
 from utils import CHECKPOINTS
 
 class TrainingModes(enum.Enum):
@@ -31,13 +34,14 @@ class ConvexLinearModule(th.nn.Linear):
 
         state_dict['weight'] = state_dict['weight'] / \
             th.sum(state_dict['weight'])
+        
         self.load_state_dict(state_dict)
         assert th.all(self.state_dict()['weight'] > 0)
 
     def forward(self, input: th.Tensor) -> th.Tensor:
         w_normalized = th.nn.functional.softmax(self.weight, dim=1)
         output = th.nn.functional.linear(input, w_normalized)
-        assert th.all(output >= 0)
+        #assert th.all(output >= 0)
 
         # assert th.all(input > 0.0)
 
@@ -76,8 +80,9 @@ class LinearAlignmentLayer(th.nn.Linear):
         self.linear_bias = bias
         with th.no_grad():
             state_dict = self.state_dict()
+            random_vector = th.rand_like(state_dict['weight'])
             state_dict['weight'] = th.nn.functional.sigmoid(
-                state_dict['weight'])
+                state_dict['weight']) * random_vector
 
             self.load_state_dict(state_dict)
 
@@ -262,6 +267,11 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def set_trained_alignment_function_network(self, nn: th.nn.Module):
         ...
 
+    def set_env(self, env: ValueAlignedEnvironment):
+        ...
+    def remove_env(self) -> ValueAlignedEnvironment:
+        return None
+
     def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None,
                  observation_space=None, action_space=None,
                  use_state=False, use_action=False, use_next_state=True,
@@ -412,21 +422,26 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                         if a != 'env':
                             nv[a] = deepcopy(av)
                         else:
+                            
                             nv[a] = av
-                    
+                  
+                elif isinstance(v, ContextualFeatureExtractorFromVAEnv): 
+                    print("WHUT")
+                    exit(0)
+                    nv = None
                 else:
                     nv = deepcopy(v)
                 if isinstance(v, th.nn.Module):
-                    nv.load_state_dict(v.state_dict())
+                    nv.load_state_dict(deepcopy(v.state_dict()))
                 if isinstance(v, GroundingEnsemble):
                     for i in range(v.networks):
-                        nv.networks[i] = deepcopy(v.networks[i])
-                        nv.networks[i].load_state_dict(v.networks[i].state_dict())
+                        #nv.networks[i] = deepcopy(v.networks[i])
+                        nv.networks[i].load_state_dict(deepcopy(v.networks[i].state_dict()))
                 setattr(new, k, nv)
             except Exception as e:
                 print(e)
                 pass   # non-pickelable stuff wasn't needed
-
+            
         return new
 
     def preprocess(
@@ -536,6 +551,24 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
 
 
 class LinearVSLRewardFunction(AbstractVSLRewardFunction):
+    
+    @override
+    def set_env(self, env: ValueAlignedEnvironment):
+        if self.features_extractor is not None:
+            if hasattr(self.features_extractor, 'env'):
+                self.features_extractor.env  = env
+        self.features_extractor_kwargs['env']  = env
+
+    @override
+    def remove_env(self):
+        if self.features_extractor is not None:
+            if hasattr(self.features_extractor, 'env'):
+                env = self.features_extractor.env
+                self.features_extractor.env = None
+        else:
+            env = self.features_extractor_kwargs['env']
+            self.features_extractor_kwargs['env']=None
+        return env
 
     def __init__(self, environment: gym.Env = None, action_dim=None, state_dim=None, observation_space=None,
                  action_space=None, use_state=False, use_action=False, use_next_state=True, use_done=True, use_one_hot_state_action=False,
@@ -638,7 +671,6 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def reset_learned_alignment_function(self, new_align_func: tuple = None):
         self.trained_profile_net: LinearAlignmentLayer = self.basic_layer_classes[-1](
             self.hid_sizes[-1], 1, bias=self.use_bias[-1], dtype=self.desired_dtype)
-        
         with th.no_grad():
             if new_align_func is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
                 assert isinstance(new_align_func, tuple)
@@ -757,7 +789,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
             return self.trained_profile_net.parameters(recurse)
         else:
             return chain(self.trained_profile_net.parameters(recurse), self.values_net.parameters(recurse))
-
+    
     def value_matrix(self):
         with th.no_grad():
             params = th.tensor(

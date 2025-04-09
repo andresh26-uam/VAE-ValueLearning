@@ -1,18 +1,18 @@
 import argparse
 from collections import defaultdict
-import pickle
+import dill
 import pprint
 import random
 from typing import Sequence, Union
 import numpy as np
 import torch
 from envs.tabularVAenv import TabularVAMDP
-from generate_dataset import DEFAULT_SEED, GROUNDINGS_PATH, parse_dtype_torch
+from generate_dataset import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, parse_dtype_torch
 from generate_dataset_one_shot_tasks import PICKLED_ENVS
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
 from src.feature_extractors import FeatureExtractorFromVAEnv
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes, parse_layer_name
-from train_vsl import  load_dataset, parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data
+from train_vsl import   parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data
 from src.data import TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset
 import os
 import gymnasium as gym
@@ -61,8 +61,8 @@ def parse_args():
     general_group.add_argument('-n', '--n_experiments', type=int,
                                default=1, help='Number of experiment repetitions')
     
-    general_group.add_argument('-tsize', '--test_size', type=float,
-                               default=0.2, help='Ratio_of_test_versus_train_preferences. It must coincide with that of a previously generated one.')
+    general_group.add_argument('-sp', '--split_ratio', type=float,
+                               default=0.2, help='Split ratio for train/test set. 0.2 means 80% train, 20% test')
     alg_group = parser.add_argument_group('Algorithm-specific Parameters')
     alg_group.add_argument('-k', '--k_clusters', type=Union[int, list], default=-1,
                            help="Number of clusters per value (overriging configuration file)")
@@ -73,7 +73,7 @@ def parse_args():
 
     env_group = parser.add_argument_group('environment-specific Parameters')
 
-    env_group.add_argument('-rt', '--retrain', action='store_true',
+    env_group.add_argument('-rte', '--retrain_experts', action='store_true',
                            default=False, help='Retrain experts (roadworld)')
     env_group.add_argument('-appr', '--approx_expert', action='store_true',
                            default=False, help='Approximate expert (roadworld)')
@@ -106,6 +106,8 @@ if __name__ == "__main__":
     dataset_name = parser_args.dataset_name
     experiment_name = parser_args.experiment_name
 
+    experiment_name = experiment_name + '_' + str(parser_args.split_ratio)
+
     """agent_profiles = [tuple(ag['value_system'])
                       for ag in society_data['agents']]
     agent_groundings = [tuple(ag['grounding'])
@@ -121,12 +123,12 @@ if __name__ == "__main__":
     if parser_args.environment == 'apollo':
         extra_kwargs = {
            'random_state': parser_args.seed,
-           'test_size': parser_args.test_size
+           'test_size': parser_args.split_ratio
         }
         
     try:
         f = open(os.path.join(os.path.join(PICKLED_ENVS, environment_data['name'], dataset_name), f"env_kw_{extra_kwargs}.pkl"), 'rb')
-        environment = pickle.load(f)
+        environment = dill.load(f)
     except FileNotFoundError as e:
         print(e)
         exit(1)
@@ -169,9 +171,11 @@ if __name__ == "__main__":
     )
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
 
-    dataset_train = load_dataset(parser_args, config, society_data, train_or_test='train', default_groundings = society_config[parser_args.environment]['groundings'])
-    dataset_test = load_dataset(parser_args, config, society_data, train_or_test='train', default_groundings = society_config[parser_args.environment]['groundings'])
-    
+    path  =os.path.join(
+        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
+    dataset_train = VSLPreferenceDataset.load(os.path.join(path, "dataset_train.pkl"))
+    dataset_test = VSLPreferenceDataset.load(os.path.join(path, "dataset_test.pkl"))
+
     if parser_args.algorithm == 'pc':
 
         # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
@@ -206,7 +210,8 @@ if __name__ == "__main__":
             assume_variable_horizon=environment_data['assume_variable_horizon']
 
         )
-    
+    if parser_args.algorithm == 'pc':
+        alg_config['train_kwargs']['experiment_name'] = experiment_name
     vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
                    assumed_grounding=None, **alg_config['train_kwargs'])
     # Now we need to train.

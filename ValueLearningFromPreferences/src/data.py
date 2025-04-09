@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-import pickle
+import dill
 from typing import List, Sequence, Tuple, TypeVar, overload
 
 import logging
@@ -9,6 +9,7 @@ import warnings
 from typing import Mapping, Sequence, cast
 
 import datasets
+import jsonpickle
 import numpy as np
 
 from imitation.data import huggingface_utils
@@ -69,7 +70,7 @@ class TrajectoryValueSystemDatasetSequence(huggingface_utils.TrajectoryDatasetSe
 from typing import Any, Dict, Iterable, Optional, Sequence, cast
 
 import datasets
-import jsonpickle
+
 import numpy as np
 
 from imitation.data import types
@@ -99,7 +100,7 @@ def vs_trajectories_to_dict(trajectories, use_infos=False, dtype=np.float32):
     if any(isinstance(traj.obs, types.DictObs) for traj in trajectories):
         raise ValueError("DictObs are not currently supported")
 
-    # Encode infos as jsonpickled strings
+    # Encode infos as jsondilld strings
     trajectory_dict["infos"] = [
         [jsonpickle.encode(info) for info in traj_infos]
         for traj_infos in cast(Iterable[Iterable[Dict]], trajectory_dict["infos"])
@@ -151,9 +152,9 @@ def save_vs_trajectories(path: AnyPath, trajectories: Sequence[TrajectoryWithVal
 
 def load_vs_trajectories(path: AnyPath) -> Sequence[Trajectory]:
     """Loads a sequence of trajectories saved by `save()` from `path`."""
-    # Interestingly, np.load will just silently load a normal pickle file when you
-    # set `allow_pickle=True`. So this call should succeed for both the new compressed
-    # .npz format and the old pickle based format. To tell the difference, we need to
+    # Interestingly, np.load will just silently load a normal dill file when you
+    # set `allow_dill=True`. So this call should succeed for both the new compressed
+    # .npz format and the old dill based format. To tell the difference, we need to
     # look at the type of the resulting object. If it's the new compressed format,
     # it should be a Mapping that we need to decode, whereas if it's the old format,
     # it's just the sequence of trajectories, and we can return it directly.
@@ -168,10 +169,10 @@ def load_vs_trajectories(path: AnyPath) -> Sequence[Trajectory]:
         return TrajectoryValueSystemDatasetSequence(dataset)
     raise NotImplementedError("Only huggingface datasets format is supported")
 
-    data = np.load(path, allow_pickle=True)  # works for both .npz and .pkl
+    data = np.load(path, allow_dill=True)  # works for both .npz and .pkl
 
-    if isinstance(data, Sequence):  # pickle format
-        warnings.warn("Loading old pickle version of Trajectories", DeprecationWarning)
+    if isinstance(data, Sequence):  # dill format
+        warnings.warn("Loading old dill version of Trajectories", DeprecationWarning)
         return data
     if isinstance(data, Mapping):  # .npz format
         warnings.warn("Loading old npz version of Trajectories", DeprecationWarning)
@@ -204,8 +205,8 @@ def load_vs_trajectories(path: AnyPath) -> Sequence[Trajectory]:
             return [Trajectory(*args) for args in zip(*fields)]  # pragma: no cover
     else:  # pragma: no cover
         raise ValueError(
-            f"Expected either an .npz file or a pickled sequence of trajectories; "
-            f"got a pickled object of type {type(data).__name__}",
+            f"Expected either an .npz file or a dilld sequence of trajectories; "
+            f"got a dilld object of type {type(data).__name__}",
         )
     
 
@@ -324,12 +325,12 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
 
     def save(self, path: AnyPath) -> None:
         with open(path, "wb") as file:
-            pickle.dump(self, file)
+            dill.dump(self, file)
 
     @staticmethod
     def load(path: AnyPath) -> "VSLPreferenceDataset":
         with open(path, "rb") as file:
-            return pickle.load(file)
+            return dill.load(file)
         
     def k_fold_split(self, k: int):
         """Generates k-fold train and validation datasets, ensuring equal agent representation.

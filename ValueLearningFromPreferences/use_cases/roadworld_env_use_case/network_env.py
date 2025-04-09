@@ -1160,7 +1160,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     def update_destination(self, new_des, prev_des):
         updated_state_actions = deepcopy(self.state_actions_with_known_reward)
        
-        updated_state_actions[new_des] = True
+        #updated_state_actions[new_des] = True
         updated_state_actions[prev_des, self.get_action_list(prev_des)] = False
         updated_state_actions[self.pre_acts_and_pre_states[prev_des][1], self.pre_acts_and_pre_states[prev_des][0]] = False
         updated_state_actions[self.pre_acts_and_pre_states[new_des][1], self.pre_acts_and_pre_states[new_des][0]] = True
@@ -1183,7 +1183,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
 
         
         """old_s_w_k_r = np.zeros_like(self.state_actions_with_known_reward)
-        trmat = deepcopy(np.zeros_like(self.transition_matrix))
+        trmat = np.zeros_like(self.transition_matrix)
         for s in range(self.n_states):
             
             if s not in self.valid_edges or s == self.cur_des:
@@ -1199,15 +1199,20 @@ class RoadWorldGymPOMDP(RoadWorldGym):
                     old_s_w_k_r[s,a] = True
                     trmat[s, a, s] = 1.0
         print(np.where(old_s_w_k_r != updated_state_actions))
-        np.testing.assert_allclose(old_s_w_k_r, updated_state_actions)
-        np.testing.assert_allclose(trmat, self.transition_matrix)"""
+        print("CUR DES" ,self.cur_des, new_des, prev_des)
+        print("pre", self.pre_acts_and_pre_states[self.cur_des][1], self.pre_acts_and_pre_states[self.cur_des][0])
+        print(old_s_w_k_r[126], updated_state_actions[126])
+        print(np.where(self.transition_matrix[126,4] == 1))
+        np.testing.assert_allclose(trmat, self.transition_matrix)
+        np.testing.assert_allclose(old_s_w_k_r, updated_state_actions)"""
         
 
 
     def reset(self,  seed=None,  options=None, st=None, des=None, profile=(1.0, 0.0,0.0), full_random=True):
-        prev_des = self.cur_des
-        
-        ret, info = super().reset(seed, options, st, des, profile=profile, full_random=full_random)
+        prev_des = self.cur_des        
+        if seed is not None:
+            np.random.seed(seed)
+        ret, info = super().reset(seed, options, st, des=np.random.choice(self.destination_list) if des is None else des, profile=profile, full_random=full_random)
         
         if des is None or self.cur_des != prev_des:
             self.update_destination(self.cur_des, prev_des)

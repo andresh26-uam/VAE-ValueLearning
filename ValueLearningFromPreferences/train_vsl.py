@@ -1,9 +1,10 @@
 import argparse
 from collections import defaultdict
 import os
+import dill as dill
 import pprint
 import random
-from typing import Sequence, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 import imitation
 import numpy as np
@@ -11,104 +12,56 @@ import torch
 
 from envs.firefighters_env import FeatureSelectionFFEnv
 from envs.tabularVAenv import TabularVAMDP
-from generate_dataset import COMPARISONS_DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, compare_trajectories, load_preferences, load_trajectories, parse_dtype_torch
-from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
+from generate_dataset import COMPARISONS_DATASETS_PATH, DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, compare_trajectories, load_preferences, load_trajectories, parse_dtype_torch
+from src.algorithms.clustering_utils import ClusterAssignment
+from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL, load_historic_assignments
+from src.algorithms.preference_based_vsl_lib import SobaOptimizer
 from src.data import TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
-from src.reward_nets.vsl_reward_functions import GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
+from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
-from utils import filter_none_args, load_json_config
+from utils import CHECKPOINTS, filter_none_args, load_json_config, TRAIN_RESULTS_PATH
 
 
 import gymnasium as gym
 
+def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics):
+    # Save the training results to a file
+    os.makedirs(TRAIN_RESULTS_PATH, exist_ok=True)
+    
+    with open(os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl"), 'wb') as f:
+        dill.dump({
+            "target_agent_and_vs_to_learned_ones": target_agent_and_vs_to_learned_ones,
+            "reward_net_pair_agent_and_vs": reward_net_pair_agent_and_vs,
+            "metrics": metrics
+        }, f)
 
-def load_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None):
-    environment_data = config[parser_args.environment]
+    print(f"Training results saved to {os.path.join(CHECKPOINTS, f'{experiment_name}.pkl')}")
 
-    dataset_name = parser_args.dataset_name
-    if train_or_test is not None:
-        dataset_name+='_'
-        assert train_or_test == 'train' or train_or_test == 'test'
-        dataset_name+=train_or_test 
+def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple], Tuple], Dict[Tuple[str, Tuple], AbstractVSLRewardFunction], Dict[str, Any]], List[ClusterAssignment]]:
+    # Load the training results from a file
+    file_path = os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl")
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Training results file not found: {file_path}")
+    with open(file_path, 'rb') as f:
+        data = dill.load(f)
+    print(f"Training results loaded from {file_path}")
 
-    dataset = VSLPreferenceDataset(n_values=environment_data['n_values'])
+    returned_tuple = [None, None, None]
+    for k in data.keys():
+        if k == "target_agent_and_vs_to_learned_ones":
+            returned_tuple[0] = data[k]
+        elif k == "reward_net_pair_agent_and_vs":
+            returned_tuple[1] = data[k]
+        elif k == "metrics":
+            returned_tuple[2] = data[k]
+    returned_tuple = tuple(returned_tuple)
+    # Get the saved best assignments per iteration
+    historic_assignments = load_historic_assignments(experiment_name)
+    return *returned_tuple, historic_assignments
 
-    if 'agents' not in society_data.keys():
-        agents = []
-        # TODO: HERE; THIS PATH IS NOT CORRECT!!
-        folder_path = os.path.join(COMPARISONS_DATASETS_PATH, f"{environment_data['name']}/{society_data['name']}/{dataset_name}")
-        for root, dirs, files in os.walk(folder_path):
-            for dir_name in dirs:
-                if dir_name.startswith("prefs_ag_"):
-                    ag_name = dir_name.split("_")[2]
-                    agents.append(ag_name)
-    else:
-        agents = society_data['agents']
 
-    for i, ag in enumerate(agents):
-        if 'agents' not in society_data.keys():
-            ag = {'agent_id': ag, 'name': ag, 'value_system': 'unk', 'data': defaultdict(lambda: 'nd'), 'n_agents': 1, 'grounding': list(default_groundings.keys())}
-        #  Here idxs is the list of trajectory PAIRS of indices from the trajectory list that are compared.
-        idxs, discounted_sums, discounted_sums_per_grounding, preferences, preferences_per_grounding = load_preferences(
-            epsilon=parser_args.reward_epsilon, dataset_name=dataset_name, environment_data=environment_data, society_data=society_data, ag=ag, dtype=parser_args.dtype)
-        trajs_ag = np.asarray(load_trajectories(dataset_name=dataset_name,
-                              ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype))
-        
-        for t in range(ag['n_agents']-2):
-                np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']], (idxs[(
-                    t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)))
 
-                for traj_i in range(ag['data']['trajectory_pairs']):
-
-                    np.testing.assert_allclose(trajs_ag[traj_i + t*ag['data']['trajectory_pairs']].obs, trajs_ag[(
-                        t+1)*ag['data']['trajectory_pairs'] + traj_i].obs)
-
-        
-        ag_point = 0
-        n_pairs_per_agent = len(idxs)//ag['n_agents']
-        for id in range(ag['n_agents']):
-            agent_id = ag['name']+'_'+str(id)
-            ag_idxs = idxs[ag_point:ag_point+n_pairs_per_agent]
-
-            trajectory_pairs: Sequence[TrajectoryWithValueSystemRewsPair] = trajs_ag[ag_idxs]
-            dataset.push(trajectory_pairs, preferences[ag_point:ag_point+n_pairs_per_agent], preferences_per_grounding[ag_point:(ag_point+n_pairs_per_agent)], agent_ids=[agent_id]*n_pairs_per_agent, agent_data={agent_id: ag})
-            """if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
-                prev_ag_idxs = idxs[ag_point -
-                                    n_pairs_per_agent:ag_point+n_pairs_per_agent]
-                
-                for j in range(len(ag_idxs)):
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][0].obs, trajs_ag[prev_ag_idxs][j][0].obs)
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][1].obs, trajs_ag[prev_ag_idxs][j][1].obs)
-                if ag['name'] == las_agent_name:
-                    np.testing.assert_allclose(
-                        dataset.data_per_agent[last_agent_id].preferences_with_grounding, dataset.data_per_agent[agent_id].preferences_with_grounding)
-                    np.testing.assert_allclose([t.obs for t in dataset.data_per_agent[last_agent_id].fragments1], [
-                                               t.obs for t in dataset.data_per_agent[agent_id].fragments1])
-"""
-            ag_point += n_pairs_per_agent
-            last_agent_id = agent_id
-            las_agent_name = ag['name']
-
-        """for i in range((len(trajs_ag))):
-            assert discounted_sums[i] == imitation.data.rollout.discounted_sum(
-                trajs_ag[i].rews, gamma=alg_config['discount_factor_preferences'])
-        for idx, pr in zip(idxs, preferences):
-            assert discounted_sums[idx[0]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[0]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert discounted_sums[idx[1]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[1]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert compare_trajectories(
-                discounted_sums[idx[0]], discounted_sums[idx[1]], epsilon=parser_args.reward_epsilon) == pr
-        for vi in range(len(environment_data['basic_profiles'])):
-
-            for idx, pr in zip(idxs, preferences_per_grounding[vi]):
-                assert compare_trajectories(
-                    discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon) == pr"""
-
-    return dataset
 
 
 def parse_args():
@@ -126,9 +79,12 @@ def parse_args():
     general_group.add_argument('-ename', '--experiment_name', type=str,
                                default='test_experiment', required=True, help='Experiment name')
     
+    general_group.add_argument('-sp', '--split_ratio', type=float, default=0.2,
+                               help='Test split ratio. If 0.0, no split is done. If 1.0, all data is used for testing.')
+
+
     general_group.add_argument('-dtype', '--dtype', type=parse_dtype_torch, default=torch.float32, choices=[torch.float32, torch.float64],
                                help='Society name in the society config file (overrides other defaults here, but not the command line arguments)')
-
 
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
@@ -145,7 +101,7 @@ def parse_args():
                                help='Show plots calculated before saving')
 
     general_group.add_argument('-e', '--environment', type=str, default='ff', choices=[
-                               'rw', 'ff'], help='environment (roadworld - rw, firefighters - ff, itemgathering - ig)')
+                               'rw', 'ff', 'vrw'], help='environment (roadworld - rw, firefighters - ff, variablerw - vrw)')
 
     general_group.add_argument('-df', '--discount_factor', type=float, default=1.0,
                                help='Discount factor. For some environments, it will be neglected as they need a specific discount factor.')
@@ -164,7 +120,7 @@ def parse_args():
 
     env_group = parser.add_argument_group('environment-specific Parameters')
 
-    env_group.add_argument('-rt', '--retrain', action='store_true',
+    env_group.add_argument('-rte', '--retrain_experts', action='store_true',
                            default=False, help='Retrain experts (roadworld)')
     env_group.add_argument('-appr', '--approx_expert', action='store_true',
                            default=False, help='Approximate expert (roadworld)')
@@ -223,6 +179,8 @@ def parse_optimizer_data(environment_data, alg_config):
 
     if opt_class == 'Adam':
         opt_class = torch.optim.Adam
+    elif opt_class == 'Soba':
+        opt_class = SobaOptimizer
     else:
         raise ValueError(f"Unknown optimizer class {opt_class}")
     return opt_kwargs, opt_class
@@ -248,6 +206,7 @@ if __name__ == "__main__":
         'envs', parser_args.environment, GROUNDINGS_PATH)
     dataset_name = parser_args.dataset_name
     experiment_name = parser_args.experiment_name
+    experiment_name = experiment_name + '_' + str(parser_args.split_ratio)
 
     agent_profiles = [tuple(ag['value_system'])
                       for ag in society_data['agents']]
@@ -265,7 +224,7 @@ if __name__ == "__main__":
             'feature_selection': FeatureSelectionFFEnv(environment_data['feature_selection']),
             'initial_state_distribution': environment_data['initial_state_distribution']
         }
-    if parser_args.environment == 'rw':
+    if parser_args.environment == 'rw' or parser_args.environment == 'vrw':
         extra_kwargs = {'env_kwargs': {
             'feature_selection': FeatureSelection(environment_data['feature_selection']),
             'feature_preprocessing': FeaturePreprocess(environment_data['feature_preprocessing']),
@@ -317,8 +276,26 @@ if __name__ == "__main__":
     
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
 
-    dataset = load_dataset(parser_args, config, society_data, default_groundings = society_config[parser_args.environment]['groundings'])
 
+
+    path  =os.path.join(
+        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
+    
+    dataset = VSLPreferenceDataset.load(os.path.join(path, "dataset.pkl"))
+
+    dataset_test = VSLPreferenceDataset(n_values=dataset.n_values, single_agent=False)
+    dataset_train = VSLPreferenceDataset(n_values=dataset.n_values, single_agent=False)
+    for aid, adata in dataset.data_per_agent.items():
+        selection = np.arange(int(parser_args.split_ratio * len(adata)))
+        train_selection = np.arange(int(parser_args.split_ratio * len(adata)), len(adata))
+        agent_dataset_batch = adata[selection]
+        dataset_test.push(fragments=agent_dataset_batch[0], preferences=agent_dataset_batch[1], preferences_with_grounding=agent_dataset_batch[2], agent_ids=[
+                            aid]*len(selection), agent_data={aid: dataset.agent_data[aid]})
+        agent_dataset_batch_t = adata[train_selection]
+        dataset_train.push(fragments=agent_dataset_batch_t[0], preferences=agent_dataset_batch_t[1], preferences_with_grounding=agent_dataset_batch_t[2], agent_ids=[
+                            aid]*len(train_selection), agent_data={aid: dataset.agent_data[aid]})
+    
+    
     if parser_args.algorithm == 'pc':
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
             env=environment,
@@ -327,7 +304,7 @@ if __name__ == "__main__":
             optimizer_kwargs=opt_kwargs,
             discount=environment_data['discount'],
             discount_factor_preferences=alg_config['discount_factor_preferences'],
-            dataset=dataset,
+            dataset=dataset_train,
             training_mode=TrainingModes.SIMULTANEOUS, 
             cluster_sizes=parse_cluster_sizes(
                 environment_data['K'] if parser_args.k_clusters == -1 else parser_args.k_clusters, n_values=environment_data['n_values']),
@@ -351,7 +328,18 @@ if __name__ == "__main__":
             assume_variable_horizon=environment_data['assume_variable_horizon']
 
         )
+    if parser_args.algorithm == 'pc':
+        alg_config['train_kwargs']['experiment_name'] = experiment_name
     
-    vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
-                   assumed_grounding=None, **alg_config['train_kwargs'])
-    # Now we need to train.
+    target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s, historic_assignments_s = vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
+                    assumed_grounding=None, **alg_config['train_kwargs'])
+    
+
+    save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s)
+    print(metrics_s['assignment'])
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(experiment_name)
+
+    
+    assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
+    assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(), "Mismatch in reward_net_pair_agent_and_vs"
+    assert metrics.keys() == metrics_s.keys(), "Mismatch in metrics"

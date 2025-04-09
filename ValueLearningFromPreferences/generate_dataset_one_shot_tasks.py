@@ -4,7 +4,7 @@ from collections import defaultdict
 import csv
 import itertools
 import os
-import pickle
+import dill
 import pprint
 import random
 from typing import Dict, Sequence, Tuple, Union
@@ -18,7 +18,7 @@ import torch
 
 from envs.routechoiceApollo import RouteChoiceEnvironmentApollo
 from envs.tabularVAenv import ContextualEnv, TabularVAMDP
-from generate_dataset import compare_trajectories, load_preferences, load_trajectories, save_preferences, save_trajectories
+from generate_dataset import calculate_dataset_save_path, compare_trajectories, create_dataset, load_preferences, load_trajectories, save_preferences, save_trajectories
 from src.algorithms.utils import PolicyApproximators, mce_partition_fh
 from envs.firefighters_env import FeatureSelectionFFEnv, FireFightersEnv
 from src.data import TrajectoryWithValueSystemRews, load_vs_trajectories, save_vs_trajectories
@@ -28,7 +28,7 @@ from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, Feat
 from utils import filter_none_args, load_json_config
 import gymnasium as gym
 
-DATASETS_PATH = 'datasets/'
+DATASETS_PATH = 'datasets/complete_datasets'
 TRAJECTORIES_DATASETS_PATH = 'datasets/trajectories/'
 COMPARISONS_DATASETS_PATH = 'datasets/comparisons/'
 GROUNDINGS_PATH = 'groundings/'
@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     os.makedirs(os.path.join(PICKLED_ENVS, environment_data['name'], dataset_name), exist_ok=True)
     with open(os.path.join(os.path.join(PICKLED_ENVS, environment_data['name'], dataset_name), f"env_kw_{extra_kwargs}.pkl"), 'wb') as f:
-        pickle.dump(environment, f)
+        dill.dump(environment, f)
         
     
     if parser_args.gen_trajs:
@@ -282,3 +282,11 @@ if __name__ == "__main__":
                     discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon), pr, decimal = 4 if parser_args.dtype in [np.float32, np.float64] else 3)
 
     print("Dataset generated correctly.")
+    dataset_train = create_dataset(parser_args, config, society_data, train_or_test='train', default_groundings = society_config[parser_args.environment]['groundings'])
+    dataset_test = create_dataset(parser_args, config, society_data, train_or_test='test', default_groundings = society_config[parser_args.environment]['groundings'])
+    
+    path  =os.path.join(
+        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
+    os.makedirs(path, exist_ok=True)
+    dataset_train.save(os.path.join(path, "dataset_train.pkl"))
+    dataset_test.save(os.path.join(path, "dataset_test.pkl"))

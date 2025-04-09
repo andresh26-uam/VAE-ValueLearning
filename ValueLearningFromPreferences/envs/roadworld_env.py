@@ -234,6 +234,7 @@ class VariableDestRoadWorldGymPOMDP(FixedDestRoadWorldGymPOMDP, ContextualEnv):
         return self.real_environ.cur_des
     
     def _set_destination(self, destination=None, seed = None, options = None):
+        #if destination is None or destination != self.real_environ.cur_des:
         self.cached_reward_by_context[ self.real_environ.cur_des] = self.reward_matrix_dict
         
         notused, notused2 = self.real_environ.reset(seed=seed, options=options, des=destination, profile=self.real_environ.last_profile, full_random=True)

@@ -204,7 +204,70 @@
             }]
         }
     },
-    "apollo": {
+"vrw": 
+    {
+        
+        "groundings": {
+                "default_sus": "rw_sustainability.npy",
+                "default_com": "rw_comfort.npy",
+                "default_eff": "rw_efficiency.npy"
+                }
+            ,
+        "default": {
+            "name": "default",
+            "stochastic_expert": false,
+            "same_trajectories_for_each_agent_type": true,
+            "approx_expert": true,
+            "policy_approximation_method": "new_value_iteration",
+            "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+            "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+            "expert_policy_class": "PPO",
+                "expert_kwargs" : {
+                    "batch_size": 32,
+                    "n_steps": 50,
+                    "ent_coef": 0.1,
+                    "learning_rate": 0.002,
+                    "gamma": 1.0,
+                    "gae_lambda": 0.999,
+                    "clip_range": 0.1,
+                    "vf_coef": 0.001,
+                    "n_epochs": 10,
+                    "normalize_advantage": true,
+                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
+                },
+            "agents": [{
+                "name": "100agent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [1.0, 0.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 30,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            },
+            {
+                "name": "010agent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [0.0, 1.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 30,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            },
+            {
+                "name": "001agent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [0.0, 0.0, 1.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 30,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }]
+        }
+    },
+"apollo": {
         "groundings": {
                 "default_eff": "ap_travel_time.npy",
                 "default_ach": "ap_travel_cost.npy",

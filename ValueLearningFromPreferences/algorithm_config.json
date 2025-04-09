@@ -33,23 +33,22 @@
         "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv", "OneHotFeatureExtractor", "ObservationMatrixFeatureExtractor"],
         "default_optimizer_kwargs": {
             "lr": 0.01,
-            "weight_decay": 0.0000,
-            "betas": [0.9, 0.999]
+            "weight_decay": 0.0000
         },
-        "default_optimizer_class": "Adam",
+        "default_optimizer_class": "Soba",
         "algorithm_config": {
             "pc": {
                 "reward_net": {},
                 "optimizer_kwargs": "default",
                 "optimizer_class": "default",
                 "learn_stochastic_policy": true,
-                "loss_class": "cross_entropy_cluster",
+                "loss_class": "soba",
                 "loss_kwargs": {
                     "model_indifference_tolerance": 0.001,
                     "apply_on_misclassified_pairs_only": false, 
                     "confident_penalty": 0.5,
                     "cluster_similarity_penalty": 0.02},
-                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
+                "_loss_class_options": ["cross_entropy_cluster", "soba"],
                 "discount_factor_preferences": 1.0,
 
                 "policy_approximation_method": "mce_original",
@@ -60,7 +59,7 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 100,
+                    "max_iter": 1,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "max_assignment_memory": 5
@@ -96,6 +95,104 @@
     }
     ,
 "rw": {
+        "name": "FixedDestRoadWorld-v0",
+        "n_values": 3,
+        "K": 1,
+        "L": 3,
+        "horizon": 50,
+
+        "is_contextual": false,
+
+        "assume_variable_horizon": false,
+        
+        "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
+        "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
+        
+        "feature_selection": "only_costs",
+        "feature_preprocessing": "norm",
+        "environment_is_stochastic": false,
+        "discount": 1.0,
+        
+        "default_reward_net": {
+            "use_state": false,
+            "use_action": false,
+            "use_next_state": true,
+            "use_done": false,
+            "basic_layer_classes": ["ConvexLinearModule", "ConvexAlignmentLayer"],
+            "activations": ["nn.Identity", "nn.Identity"],
+            "use_bias": false,
+            "hid_sizes": [3],
+            "negative_grounding_layer": true,
+            "clamp_rewards": false
+        },
+        "reward_feature_extractor": "FeatureExtractorFromVAEnv",
+        "policy_state_feature_extractor": "OneHotFeatureExtractor",
+        "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
+        "default_optimizer_kwargs": {
+            "lr": 0.001,
+            "weight_decay": 0.0000
+        },
+        "default_optimizer_class": "Soba",
+        "algorithm_config": {
+            "pc": {
+                "reward_net": {},
+                "optimizer_kwargs": "default",
+                "optimizer_class": "Soba",
+                "learn_stochastic_policy": true,
+                "loss_class": "soba",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 0.0000,
+                    "apply_on_misclassified_pairs_only": true, 
+                    "confident_penalty": 0.0,
+                    "cluster_similarity_penalty": 0.0
+                },
+                "_loss_class_options": ["cross_entropy_cluster", "soba"],
+                "discount_factor_preferences": 1.0,
+
+                "policy_approximation_method": "mce_original",
+                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+
+                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                "use_quantified_preference": false,
+                "preference_sampling_temperature": 0,
+                "query_schedule": "constant",
+                "train_kwargs": {
+                    "max_iter": 1,
+                    "trajectory_batch_size": "full",
+                    "fragment_length": "horizon",
+
+                    "max_assignment_memory": 7
+                },
+
+                "learner_policy_class": "PPO",
+                "learner_policy_kwargs" : 
+                {
+                    "batch_size": 25,
+                    "n_steps": 50,
+                    "ent_coef": 0.1,
+                    "learning_rate": 0.02,
+                    "gamma": 1.0,
+                    "gae_lambda": 0.999,
+                    "clip_range": 0.05,
+                    "vf_coef": 0.01,
+                    "n_epochs": 5,
+                    "normalize_advantage": true,
+                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
+                },
+                
+                "reward_trainer_kwargs": {
+                    "epochs": 2,
+                    "refining_steps_after_cluster_assignment": 2,
+                    "qualitative_cluster_assignment": true,
+                    "initial_refining_steps": 5,
+                    "initial_exploration_rate": 0.2,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": 1
+                }
+            }
+        }
+    },
+"vrw": {
         "name": "VariableDestRoadWorld-v0",
         "n_values": 3,
         "K": 1,
@@ -104,7 +201,7 @@
 
         "is_contextual": true,
 
-        "assume_variable_horizon": true,
+        "assume_variable_horizon": false,
         
         "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
         "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
@@ -131,24 +228,23 @@
         "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv", "ContextualFeatureExtractorFromVAEnv"],
         "default_optimizer_kwargs": {
             "lr": 0.001,
-            "weight_decay": 0.0000,
-            "betas": [0.9, 0.999]
+            "weight_decay": 0.0000
         },
-        "default_optimizer_class": "Adam",
+        "default_optimizer_class": "Soba",
         "algorithm_config": {
             "pc": {
                 "reward_net": {},
                 "optimizer_kwargs": "default",
                 "optimizer_class": "default",
                 "learn_stochastic_policy": true,
-                "loss_class": "cross_entropy_cluster",
+                "loss_class": "soba",
                 "loss_kwargs": {
                     "model_indifference_tolerance": 0.0000,
                     "apply_on_misclassified_pairs_only": true, 
                     "confident_penalty": 0.0,
                     "cluster_similarity_penalty": 0.0
                 },
-                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
+                "_loss_class_options": ["cross_entropy_cluster", "soba"],
                 "discount_factor_preferences": 1.0,
 
                 "policy_approximation_method": "mce_original",
@@ -194,7 +290,6 @@
             }
         }
     },
-
 "apollo": {
         "name": "RouteChoiceEnvironmentApollo-v0",
         "n_values": 4,
@@ -229,23 +324,22 @@
         "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
         "default_optimizer_kwargs": {
             "lr": 0.003,
-            "weight_decay": 0.0000,
-            "betas": [0.9, 0.999]
+            "weight_decay": 0.0000
         },
-        "default_optimizer_class": "Adam",
+        "default_optimizer_class": "Soba",
         "algorithm_config": {
             "pc": {
                 "reward_net": {},
                 "optimizer_kwargs": "default",
                 "optimizer_class": "default",
                 "learn_stochastic_policy": true,
-                "loss_class": "cross_entropy_cluster",
+                "loss_class": "soba",
                 "loss_kwargs": {
                     "model_indifference_tolerance": 0.001,
                     "apply_on_misclassified_pairs_only": false, 
                     "confident_penalty": 0.3,
                     "cluster_similarity_penalty": 0.01},
-                "_loss_class_options": ["cross_entropy_cluster", "cross_entropy_cluster_modified"],
+                "_loss_class_options": ["cross_entropy_cluster", "soba"],
                 "discount_factor_preferences": 1.0,
 
                 "policy_approximation_method": "mce_original",
@@ -256,7 +350,7 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 100,
+                    "max_iter": 2,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "max_assignment_memory": 15
@@ -279,13 +373,13 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 10,
+                    "epochs": 1,
                     "refining_steps_after_cluster_assignment": 1,
                     "qualitative_cluster_assignment": true,
-                    "initial_refining_steps": 5,
+                    "initial_refining_steps": 2,
                     "initial_exploration_rate": 0.2,
                     "batch_size": "full",
-                    "inner_k_fold_validation_divisions_per_epoch": 2
+                    "inner_k_fold_validation_divisions_per_epoch": 1
                 }
             }
         }

@@ -50,10 +50,6 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         vgl_expert_policy: Optional[ValueSystemLearningPolicy] = None,
         vsi_expert_policy: Optional[ValueSystemLearningPolicy] = None,
 
-        # A Society or other mechanism might return different alignment functions at different times.
-        target_align_func_sampler=lambda *args: args[0],
-
-
         vsi_target_align_funcs=[],
 
         vgl_target_align_funcs=[],
@@ -86,7 +82,6 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.vgl_expert_policy: VAlignedDiscreteSpaceActionPolicy = vgl_expert_policy
         self.vsi_expert_policy: VAlignedDiscreteSpaceActionPolicy = vsi_expert_policy
 
-        self.target_align_function_sampler = target_align_func_sampler
 
         super().__init__(
             demonstrations=None,
@@ -197,7 +192,8 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                 aid, al = aid_and_al
                 r_copy = self.reward_net_per_agent[aid].copy()
                 r_copy.set_alignment_function(al)
-                reward_nets_per_target_align_func[aid_and_al] =  r_copy  
+                reward_nets_per_target_align_func[aid_and_al] =  r_copy
+
 
         elif mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             optimizer_kwargs = self.vsi_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
@@ -237,8 +233,6 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             # TODO: Simultaneous learning?
             optimizer_kwargs = self.vsi_optimizer_kwargs if custom_optimizer_kwargs is None else custom_optimizer_kwargs
             self.vsi_optimizer_kwargs = optimizer_kwargs
-            self.vsi_optimizer = self.vsi_optimizer_cls(
-                self.current_net.parameters(), **optimizer_kwargs)
             self.target_agent_and_align_func_to_learned_ones = {
                 al: None for al in self.vsi_target_align_funcs}
             with networks.training(self.current_net):
@@ -246,7 +240,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
             for al in self.vsi_target_align_funcs:
                 self.target_agent_and_align_func_to_learned_ones[al] = (al[0], self.reward_net_per_agent[al[0]].get_learned_align_function())
-
+                learned_grounding = self.reward_net_per_agent[al[0]].get_learned_grounding()
             for aid_and_al in self.vgl_target_align_funcs:
                 aid, al = aid_and_al
                 r_copy = self.reward_net_per_agent[aid].copy()
@@ -270,9 +264,9 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         if mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
             return self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
         elif mode == TrainingModes.VALUE_GROUNDING_LEARNING:
-            return self.assumed_grounding, reward_nets_per_target_align_func, self.get_metrics()
+            return reward_nets_per_target_align_func, self.get_metrics()
         else:
-            return self.current_net.get_learned_grounding(), self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
+            return self.target_agent_and_align_func_to_learned_ones, reward_nets_per_target_align_func, self.get_metrics()
 
     def test_accuracy_for_align_funcs(self, learned_rewards_per_round: List[np.ndarray],
                                       testing_policy_per_round: List[ValueSystemLearningPolicy],
@@ -740,23 +734,8 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
         if custom_model is not None:
             self.current_net = prev_model
-        
-        
-        if requires_grad:
-            try:
-                """print(obs_mat)
-                l = th.sum(predicted_r_gr)
-                print("OSS", l)
-                l.backward()
-                print("Gradient:", obs_mat.grad)
-                exit(0)"""
-            except Exception as e:
-                print("nono", e)
-                pass
 
-        if predicted_r._version == 3 or predicted_r_gr._version == 3:
-            #            exit(0)
-            pass
+        
         return ret
 
     def calculation_rew(self, align_func, obs_mat, action_mat=None, obs_action_mat=None, next_state_obs=None, use_probabilistic_reward=False, forward_groundings=False, info=None):
@@ -820,7 +799,9 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         if state_action_with_predefined_reward_mask is not None:
 
             overridden_tensor_r = th.empty_like(predicted_r)
-            overridden_tensor_r_gr = th.empty_like(predicted_r_gr)
+            overridden_tensor_r_gr  = None
+            if forward_groundings:
+                overridden_tensor_r_gr = th.empty_like(predicted_r_gr)
             
             if len(predicted_r.size()) == 1:
                 with th.no_grad():
@@ -838,15 +819,16 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     indices = mask.nonzero()
                     nonindices = (~mask).nonzero()
                 # Use advanced indexing to update the predicted rewards
-                overridden_tensor_r[indices] = real_reward_th[lobs[indices],
-                                                      lacts[indices]]
+                    lobs_i = lobs[indices]
+                    lacts_i = lacts[indices]
+                    overridden_tensor_r[indices] = real_reward_th[lobs_i, lacts_i]
                 overridden_tensor_r[nonindices] = predicted_r[nonindices]
                 
                 if forward_groundings:
-                    for j in range(predicted_r_gr.shape[0]):
-                        overridden_tensor_r_gr[j, indices] = th.tensor(self.env.reward_matrix_per_align_func(self.env.basic_profiles[j]),
-                                            dtype=predicted_r.dtype, device=predicted_r.device, requires_grad=False)[lobs[indices],
-                                                      lacts[indices]]
+                    with th.no_grad():
+                        for j in range(predicted_r_gr.shape[0]):
+                            overridden_tensor_r_gr[j, indices] = th.tensor(self.env.reward_matrix_per_align_func(self.env.basic_profiles[j])[lobs_i,
+                                                        lacts_i], dtype=predicted_r.dtype, device=predicted_r.device, requires_grad=False)
                     overridden_tensor_r_gr[:, nonindices] = predicted_r_gr[:, nonindices]
 
                 """ DEBUG: for i, (s,a, ns) in enumerate(zip(lobs, lacts, next_state_observations)):

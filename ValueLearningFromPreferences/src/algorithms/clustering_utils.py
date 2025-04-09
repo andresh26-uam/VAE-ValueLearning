@@ -2,14 +2,21 @@
 
 from copy import deepcopy
 import itertools
+import os
 import random
+import sys
 from typing import Any, List, Mapping, Self, Tuple
+
+import dill
 
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, LinearAlignmentLayer
 
 import numpy as np
 import torch as th
 
+from utils import CHECKPOINTS
+
+ASSIGNMENT_CHECKPOINTS = os.path.join(CHECKPOINTS, "historic_assignments/")
 
 def check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, optimizer):
     if __debug__:
@@ -79,8 +86,31 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
         #assert network_params.issubset(model_params)
         #assert model_params == network_params, "reward model per aid has different parameters than the networks in the grounding and value system networks."
 
-
+from pympler import asizeof
 class ClusterAssignment():
+    def save(self, path: str, file_name: str = "cluster_assignment.pkl"):
+        os.makedirs(path, exist_ok=True)
+        save_path = os.path.join(path, file_name)
+
+        example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
+        env_state = example_model.remove_env()
+        
+        if env_state is not None:
+            env_path  = os.path.join(path, "env_state.pkl")
+            with open(env_path, 'wb') as fe:
+                dill.dump(env_state, fe)
+
+            for aid, rewid in self.reward_model_per_agent_id.items():
+                rewid.remove_env() # TODO might be needed to keep copies of the env?
+
+            with open(save_path, 'wb') as f:
+                dill.dump(self, f)
+
+            for aid, rewid in self.reward_model_per_agent_id.items():
+                rewid.set_env(env_state) # TODO above
+        else:
+            with open(save_path, 'wb') as f:
+                dill.dump(self, f)
 
     def _combined_cluster_score(inter_cluster_distances, intra_cluster_distances, n_actual_clusters):
         if n_actual_clusters <= 1:
@@ -99,7 +129,7 @@ class ClusterAssignment():
 
     def _representativity(intra_cluster_distances):
         return 1.0 - np.mean(np.asarray(intra_cluster_distances))  # TODO. Representativity is the average of the negated intra cluster distances, but these are distances from each agent to its cluster, change that at vs_score().
-
+    
     def __init__(self, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction] = {},
                  grounding_per_value_per_cluster: List[List[th.nn.Module]] = [],
                  value_system_per_cluster: List[Any] = [],
@@ -110,7 +140,7 @@ class ClusterAssignment():
                  assignment_gr: List[List[str]] = [], assignment_vs: List[str] = [],
                  agent_to_gr_cluster_assignments: Mapping[str, List] = {},
                  agent_to_vs_cluster_assignments: Mapping[str, int] = {},
-                 aggregation_on_gr_scores=lambda list_scores: np.mean(list_scores)):
+                 aggregation_on_gr_scores=None):
         self.grounding_per_value_per_cluster = grounding_per_value_per_cluster
         self.value_system_per_cluster = value_system_per_cluster
 
@@ -126,8 +156,16 @@ class ClusterAssignment():
         self.reward_model_per_agent_id = reward_model_per_agent_id
         self.assignment_gr = assignment_gr
         self.assignment_vs = assignment_vs
+
+        self.optimizer_state = None # This is useful when saving and loading cluster assignments.
+        if aggregation_on_gr_scores is None:
+            
+            aggregation_on_gr_scores = ClusterAssignment._default_aggr_on_gr_scores
         self.aggregation_on_gr_scores = aggregation_on_gr_scores
 
+        
+    def _default_aggr_on_gr_scores(x):
+                return np.mean(x, axis=0)
     def copy(self):
 
         new_models = {}
@@ -180,6 +218,9 @@ class ClusterAssignment():
                                      assignment_aid_to_gr_cluster=clust.agent_to_gr_cluster_assignments,
                                      assignment_aid_to_vs_cluster=clust.agent_to_vs_cluster_assignments,
                                      reward_models_per_aid=clust.reward_model_per_agent_id)
+        from pympler import asizeof
+        example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
+        
         return clust
 
     @property

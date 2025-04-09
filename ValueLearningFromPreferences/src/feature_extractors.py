@@ -84,10 +84,10 @@ class FeatureExtractorFromVAEnv(BaseFeaturesExtractor):
     def __init__(self, observation_space, **kwargs) -> None:
         super().__init__(observation_space, get_flattened_obs_dim(observation_space))
 
-        self.env = kwargs['env']
+        #self.env = kwargs['env']
         self.dtype = kwargs['dtype']
         self.torch_obs_mat = torch.tensor(
-            self.env.observation_matrix, dtype=self.dtype )
+            kwargs['env'].observation_matrix, dtype=self.dtype )
     def adapt_info(self, info: Dict):
         pass
 
@@ -99,6 +99,7 @@ class ContextualFeatureExtractorFromVAEnv(FeatureExtractorFromVAEnv):
     def __init__(self, observation_space, **kwargs):
         super().__init__(observation_space, **kwargs)
         self.env: ContextualEnv
+        self.env = kwargs['env']
         self.obs_per_context = dict()
         self.obs_per_context[self.env.context] = self.torch_obs_mat
         
@@ -107,7 +108,7 @@ class ContextualFeatureExtractorFromVAEnv(FeatureExtractorFromVAEnv):
     
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         a = self.obs_per_context.get(self.env.context, torch.tensor(
-            self.env.observation_matrix, dtype=self.dtype ))
+            self.env.observation_matrix, dtype=self.dtype, device=self.torch_obs_mat.device ))
         if self.env.context not in self.obs_per_context.keys():
             self.obs_per_context[self.env.context] = a
         return a[observations.long()]
