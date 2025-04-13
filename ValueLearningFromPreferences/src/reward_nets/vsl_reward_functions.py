@@ -426,17 +426,17 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                             nv[a] = av
                   
                 elif isinstance(v, ContextualFeatureExtractorFromVAEnv): 
-                    print("WHUT")
+                    print("This should not happen?")
                     exit(0)
                     nv = None
                 else:
                     nv = deepcopy(v)
-                if isinstance(v, th.nn.Module):
-                    nv.load_state_dict(deepcopy(v.state_dict()))
+                """if isinstance(v, th.nn.Module):
+                    nv.load_state_dict(v.state_dict())
                 if isinstance(v, GroundingEnsemble):
                     for i in range(v.networks):
                         #nv.networks[i] = deepcopy(v.networks[i])
-                        nv.networks[i].load_state_dict(deepcopy(v.networks[i].state_dict()))
+                        nv.networks[i].load_state_dict(v.networks[i].state_dict())"""
                 setattr(new, k, nv)
             except Exception as e:
                 print(e)
@@ -510,10 +510,10 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                     state = self.features_extractor(state)
                 inputs.append(th.flatten(state, 1))
             if self.use_action:
+                
                 if self.action_features_extractor is None:
                     self.action_features_extractor = self.action_features_extractor_class(self.action_space, **self.action_features_extractor_kwargs)
                 #self.action_features_extractor.adapt_info(info)
-                #print("NCA", self.features_extractor.env.context)
                 preprocessed_action = self.action_features_extractor(action)
                 inputs.append(preprocessed_action)
             if self.use_next_state:
@@ -521,7 +521,6 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                     if self.features_extractor is None:
                         self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
                     self.features_extractor.adapt_info(info)
-                    #print("NCNS", self.features_extractor.env.context)
                     next_state = self.features_extractor(next_state)
                     
                 inputs.append(th.flatten(next_state, 1))
@@ -554,6 +553,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     
     @override
     def set_env(self, env: ValueAlignedEnvironment):
+        if env is None:
+            return
         if self.features_extractor is not None:
             if hasattr(self.features_extractor, 'env'):
                 self.features_extractor.env  = env
@@ -561,6 +562,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
 
     @override
     def remove_env(self):
+        env = None
         if self.features_extractor is not None:
             if hasattr(self.features_extractor, 'env'):
                 env = self.features_extractor.env
@@ -1010,6 +1012,10 @@ def parse_layer_name(layer_name):
             return th.nn.LeakyReLU
         if layer_name == 'nn.Tanh':
             return th.nn.Tanh
+        if layer_name == 'nn.Softplus':
+            return th.nn.Softplus
+        if layer_name == 'nn.Sigmoid':
+            return th.nn.Sigmoid
         if layer_name == 'nn.Identity':
             return th.nn.Identity
         if layer_name == 'ConvexLinearModule':

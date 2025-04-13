@@ -16,11 +16,7 @@ def convert_nested_list_to_tuple(nested_list):
         return tuple(convert_nested_list_to_tuple(item) for item in nested_list)
     return nested_list
 
-def assign_colors(num_coordinates):
-    init()
-    colors = [Fore.RED, Fore.GREEN, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.YELLOW, Fore.WHITE, Fore.LIGHTRED_EX, Fore.LIGHTGREEN_EX, Fore.LIGHTBLUE_EX, Fore.LIGHTMAGENTA_EX, Fore.LIGHTCYAN_EX, Fore.LIGHTYELLOW_EX, Fore.LIGHTWHITE_EX]
-    assigned_colors = [colors[i % len(colors)] for i in range(num_coordinates)]
-    return assigned_colors
+
 
 class PolicyApproximators(enum.Enum):
     MCE_ORIGINAL = 'mce_original'

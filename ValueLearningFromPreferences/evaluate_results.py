@@ -5,6 +5,9 @@ import random
 import numpy as np
 import torch
 
+from generate_dataset import DEFAULT_SEED
+from src.algorithms.clustering_utils import ClusterAssignment
+from train_vsl import load_training_results
 from utils import filter_none_args, load_json_config
 
 
@@ -15,8 +18,6 @@ def parse_args():
         description="This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected. See the societies.json and algorithm_config.json files")
 
     general_group = parser.add_argument_group('General Parameters')
-    general_group.add_argument('-dname', '--dataset_name', type=str,
-                               default='test_dataset', required=True, help='Dataset name')
     general_group.add_argument('-sname', '--society_name', type=str, default='default',
                                help='Society name in the society config file (overrides other defaults here, but not the command line arguments)')
 
@@ -25,7 +26,20 @@ def parse_args():
     
     general_group.add_argument('-sp', '--split_ratio', type=float, default=0.2,
                                help='Test split ratio. If 0.0, no split is done. If 1.0, all data is used for testing.')
+    general_group.add_argument('-cf', '--config_file', type=str, default='algorithm_config.json',
+                               help='Path to JSON general configuration file (overrides other defaults here, but not the command line arguments)')
+    general_group.add_argument('-sf', '--society_file', type=str, default='societies.json',
+                               help='Path to JSON society configuration file (overrides other defaults here, but not the command line arguments)')
 
+    general_group.add_argument('-sh', '--show', action='store_true', default=False,
+                               help='Show plots calculated before saving')
+    general_group.add_argument(
+        '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
+
+    general_group.add_argument('-e', '--environment', type=str, default='ff', choices=[
+                               'rw', 'ff', 'vrw', 'apollo'], help='environment (roadworld - rw, firefighters - ff, variablerw - vrw)')
+
+    return parser.parse_args()
 
 if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
@@ -44,9 +58,16 @@ if __name__ == "__main__":
     environment_data = config[parser_args.environment]
     society_data = society_config[parser_args.environment][parser_args.society_name]
     
-    dataset_name = parser_args.dataset_name
+    
     experiment_name = parser_args.experiment_name
     experiment_name = experiment_name + '_' + str(parser_args.split_ratio)
-
+    
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(
+        experiment_name)
 
     
+    assignment: ClusterAssignment = historic_assignments[0]
+    
+
+    assignment.plot_vs_assignments("demo.png")
+    print(assignment)

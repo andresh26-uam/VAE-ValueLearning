@@ -7,7 +7,10 @@ import random
 import sys
 from typing import Any, List, Mapping, Self, Tuple
 
+from colorama import Fore, init
 import dill
+from matplotlib import pyplot as plt
+from sklearn.manifold import MDS
 
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, LinearAlignmentLayer
 
@@ -16,8 +19,20 @@ import torch as th
 
 from utils import CHECKPOINTS
 
+
+from scipy.spatial.distance import euclidean
+
 ASSIGNMENT_CHECKPOINTS = os.path.join(CHECKPOINTS, "historic_assignments/")
 
+def assign_colors_matplotlib(num_coordinates):
+    colors = plt.cm.tab10.colors  # Use the 'tab10' colormap from matplotlib
+    assigned_colors = [colors[i % len(colors)] for i in range(num_coordinates)]
+    return assigned_colors
+def assign_colors(num_coordinates):
+    init()
+    colors = [Fore.RED, Fore.GREEN, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.YELLOW, Fore.WHITE, Fore.LIGHTRED_EX, Fore.LIGHTGREEN_EX, Fore.LIGHTBLUE_EX, Fore.LIGHTMAGENTA_EX, Fore.LIGHTCYAN_EX, Fore.LIGHTYELLOW_EX, Fore.LIGHTWHITE_EX]
+    assigned_colors = [colors[i % len(colors)] for i in range(num_coordinates)]
+    return assigned_colors
 def check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, optimizer):
     if __debug__:
         """Checks if the optimizer parameters match the networks' parameters."""
@@ -86,28 +101,113 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
         #assert network_params.issubset(model_params)
         #assert model_params == network_params, "reward model per aid has different parameters than the networks in the grounding and value system networks."
 
-from pympler import asizeof
+def extract_cluster_coordinates(inter_cluster_dists, used_clusters):
+
+    # Step 1: Extract all unique node IDs
+    nodes = sorted(set(i for pair in inter_cluster_dists for i in pair))
+    index_map = {node: idx for idx, node in enumerate(nodes)}
+    n = len(nodes)
+
+    D = np.zeros((n, n))
+    for (i, j), dij in inter_cluster_dists.items():
+        idx_i, idx_j = index_map[i], index_map[j]
+        D[idx_i][idx_j] = dij
+        D[idx_j][idx_i] = dij  # Make it symmetric
+
+    if n > 0:
+        # MDS to compute positions most likely to be sort of the same separations...
+        embedding = MDS(n_components=2, max_iter=10000,dissimilarity='precomputed', random_state=42, eps=1e-12)
+        coords = embedding.fit_transform(D)
+
+        print("Computed distances between embedded points:\n")
+        calculated_distances = dict()
+        for (i, j), target_dist in inter_cluster_dists.items():
+            idx_i, idx_j = index_map[i], index_map[j]
+            point_i, point_j = coords[idx_i], coords[idx_j]
+            dist = euclidean(point_i, point_j)
+            print(f"Nodes ({i}, {j}): Target = {target_dist:.4f}, Actual = {dist:.4f}")
+            calculated_distances[(i,j)] = dist
+    else:
+        # Case 1 cluster
+        nodes = used_clusters
+        coords = [[0,0]]
+        calculated_distances = []
+    return nodes,coords, calculated_distances
+
 class ClusterAssignment():
+    def __init__(self, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction] = {},
+                 grounding_per_value_per_cluster: List[List[th.nn.Module]] = [],
+                 value_system_per_cluster: List[Any] = [],
+                 intra_discordances_vs=None,
+                 inter_discordances_vs=None,
+                 intra_discordances_gr=None,
+                 inter_discordances_gr=None,
+                 intra_discordances_gr_per_agent = None,
+                    intra_discordances_vs_per_agent = None,
+                    inter_discordances_gr_per_cluster_pair = None,
+                    inter_discordances_vs_per_cluster_pair = None,
+                 assignment_gr: List[List[str]] = [], assignment_vs: List[str] = [],
+                 agent_to_gr_cluster_assignments: Mapping[str, List] = {},
+                 agent_to_vs_cluster_assignments: Mapping[str, int] = {},
+                 aggregation_on_gr_scores=None):
+        self.grounding_per_value_per_cluster = grounding_per_value_per_cluster
+        self.value_system_per_cluster = value_system_per_cluster
+
+        self.intra_discordances_vs = intra_discordances_vs
+        self.inter_discordances_vs = inter_discordances_vs
+
+        self.agent_to_gr_cluster_assignments = agent_to_gr_cluster_assignments
+        self.agent_to_vs_cluster_assignments = agent_to_vs_cluster_assignments
+
+        self.intra_discordances_gr = intra_discordances_gr
+        self.inter_discordances_gr = inter_discordances_gr
+
+        self.intra_discordances_gr_per_agent = intra_discordances_gr_per_agent
+        self.intra_discordances_vs_per_agent = intra_discordances_vs_per_agent
+
+        self.inter_discordances_gr_per_cluster_pair = inter_discordances_gr_per_cluster_pair
+        self.inter_discordances_vs_per_cluster_pair = inter_discordances_vs_per_cluster_pair
+        self.reward_model_per_agent_id = reward_model_per_agent_id
+        self.assignment_gr = assignment_gr
+        self.assignment_vs = assignment_vs
+
+        self.optimizer_state = None # This is useful when saving and loading cluster assignments.
+        if aggregation_on_gr_scores is None:
+            
+            aggregation_on_gr_scores = ClusterAssignment._default_aggr_on_gr_scores
+        self.aggregation_on_gr_scores = aggregation_on_gr_scores
+
+
+    def get_remove_env(self):
+        example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
+        env_state = example_model.remove_env()
+
+        for aid, rewid in self.reward_model_per_agent_id.items():
+                rewid.remove_env() # TODO might be needed to keep copies of the env?
+
+        return env_state
+    
+    def set_env(self, env):
+        for aid, rewid in self.reward_model_per_agent_id.items():
+            rewid.set_env(env) # TODO above
+            
+        
     def save(self, path: str, file_name: str = "cluster_assignment.pkl"):
         os.makedirs(path, exist_ok=True)
         save_path = os.path.join(path, file_name)
 
-        example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
-        env_state = example_model.remove_env()
+        env_state = self.get_remove_env()
         
         if env_state is not None:
             env_path  = os.path.join(path, "env_state.pkl")
             with open(env_path, 'wb') as fe:
                 dill.dump(env_state, fe)
 
-            for aid, rewid in self.reward_model_per_agent_id.items():
-                rewid.remove_env() # TODO might be needed to keep copies of the env?
-
+            
             with open(save_path, 'wb') as f:
                 dill.dump(self, f)
 
-            for aid, rewid in self.reward_model_per_agent_id.items():
-                rewid.set_env(env_state) # TODO above
+            self.set_env(env_state)
         else:
             with open(save_path, 'wb') as f:
                 dill.dump(self, f)
@@ -130,39 +230,71 @@ class ClusterAssignment():
     def _representativity(intra_cluster_distances):
         return 1.0 - np.mean(np.asarray(intra_cluster_distances))  # TODO. Representativity is the average of the negated intra cluster distances, but these are distances from each agent to its cluster, change that at vs_score().
     
-    def __init__(self, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction] = {},
-                 grounding_per_value_per_cluster: List[List[th.nn.Module]] = [],
-                 value_system_per_cluster: List[Any] = [],
-                 intra_discordances_vs=None,
-                 inter_discordances_vs=None,
-                 intra_discordances_gr=None,
-                 inter_discordances_gr=None,
-                 assignment_gr: List[List[str]] = [], assignment_vs: List[str] = [],
-                 agent_to_gr_cluster_assignments: Mapping[str, List] = {},
-                 agent_to_vs_cluster_assignments: Mapping[str, int] = {},
-                 aggregation_on_gr_scores=None):
-        self.grounding_per_value_per_cluster = grounding_per_value_per_cluster
-        self.value_system_per_cluster = value_system_per_cluster
+    
+    def plot_vs_assignments(self, save_path=None):
+        """
+        Plots the agents-to-value-system (VS) assignments in 2D space.
+        Each cluster is represented as a point, and agents are plotted around the cluster center
+        based on their intra-cluster distances. Clusters are separated by their inter-cluster distances.
 
-        self.intra_discordances_vs = intra_discordances_vs
-        self.inter_discordances_vs = inter_discordances_vs
+        Args:
+            save_path (str, optional): Path to save the plot. If None, the plot is shown interactively.
+        """
+        if self.inter_discordances_vs is None or self.intra_discordances_vs is None:
+            raise ValueError("Inter-cluster and intra-cluster distances must be defined to plot VS assignments.")
 
-        self.agent_to_gr_cluster_assignments = agent_to_gr_cluster_assignments
-        self.agent_to_vs_cluster_assignments = agent_to_vs_cluster_assignments
+        # Normalize inter-cluster distances for visualization
+        
+        # Create a 2D space for clusters
+        # Define a function to calculate the total error in distances
+        cluster_idx_to_label, cluster_positions, calculated_distances = extract_cluster_coordinates(self.inter_discordances_vs_per_cluster_pair, [cid for (cid,_) in self.active_vs_clusters()])
+        # Plot clusters and agents
+        
+        cluster_colors_vs = assign_colors_matplotlib(self.L)
+        
+        fig, ax = plt.subplots(figsize=(10, 10))
+        max_intra_dist = max(max(self.intra_discordances_vs ), 1.0)
+        for idx,(x, y)  in enumerate(cluster_positions):
+            cluster_idx = cluster_idx_to_label[idx]
+            # Plot cluster center
+            ax.scatter(x, y, color=cluster_colors_vs[idx], label=f"Cluster {cluster_idx}", s=100, zorder=3, marker='x')
 
-        self.intra_discordances_gr = intra_discordances_gr
-        self.inter_discordances_gr = inter_discordances_gr
+            # Plot agents around the cluster center
+            agents = self.assignment_vs[cluster_idx]
+            intra_distances = self.intra_discordances_vs_per_agent
+            if len (calculated_distances) > 0:
+                min_inter_dist = min(d for (i,j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
+            else:
+                min_inter_dist = 1.0
+            # Plot a circumference around the cluster center
+            radius =  min_inter_dist / 2.0
+            circle = plt.Circle((x, y), radius, color=cluster_colors_vs[idx], fill=False, linestyle='--', alpha=0.5)
+            ax.add_artist(circle)
 
-        self.reward_model_per_agent_id = reward_model_per_agent_id
-        self.assignment_gr = assignment_gr
-        self.assignment_vs = assignment_vs
+            for agent_idx, agent in enumerate(agents):
+                # Place agents around the cluster center based on intra-cluster distances
+                agent_angle = 2 * np.pi * agent_idx / len(agents) 
+                
+                agent_x = x + ((intra_distances[agent]/max_intra_dist)*min_inter_dist/2 )* np.cos(agent_angle)
+                agent_y = y + ((intra_distances[agent]/max_intra_dist)*min_inter_dist/2) * np.sin(agent_angle)
+                ax.scatter(agent_x, agent_y, color=cluster_colors_vs[idx], s=50, zorder=2)
+                #ax.text(agent_x, agent_y, agent, fontsize=8, ha="center", va="center", zorder=4)
 
-        self.optimizer_state = None # This is useful when saving and loading cluster assignments.
-        if aggregation_on_gr_scores is None:
-            
-            aggregation_on_gr_scores = ClusterAssignment._default_aggr_on_gr_scores
-        self.aggregation_on_gr_scores = aggregation_on_gr_scores
+        # Add labels and legend
+        ax.set_title("Agents-to-VS Assignments")
+        ax.set_xlabel("X-axis")
+        ax.set_ylabel("Y-axis")
+        ax.set_aspect('equal', adjustable='datalim')  
+        ax.set_xlim(min(-0.5, ax.get_xlim()[0]), max(0.5, ax.get_xlim()[1]))
+        ax.set_ylim(min(-0.5, ax.get_ylim()[0]), max(0.5, ax.get_ylim()[1]))  
+        ax.legend()
+        ax.grid(True)
 
+        # Save or show the plot
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        else:
+            plt.show()
         
     def _default_aggr_on_gr_scores(x):
                 return np.mean(x, axis=0)
@@ -207,19 +339,23 @@ class ClusterAssignment():
                           inter_discordances_vs=deepcopy(self.inter_discordances_vs),
                           intra_discordances_gr=deepcopy(self.intra_discordances_gr),
                           inter_discordances_gr=deepcopy(self.inter_discordances_gr),
+
+                          intra_discordances_vs_per_agent=deepcopy(self.intra_discordances_vs_per_agent),
+                          inter_discordances_vs_per_cluster_pair=deepcopy(self.inter_discordances_vs_per_cluster_pair),
+                          intra_discordances_gr_per_agent=deepcopy(self.intra_discordances_gr_per_agent),
+                          inter_discordances_gr_per_cluster_pair=deepcopy(self.inter_discordances_gr_per_cluster_pair),
                           assignment_gr=deepcopy(self.assignment_gr),
                           assignment_vs=deepcopy(self.assignment_vs),
                           agent_to_gr_cluster_assignments=deepcopy(self.agent_to_gr_cluster_assignments),
                           agent_to_vs_cluster_assignments=deepcopy(self.agent_to_vs_cluster_assignments),
                           aggregation_on_gr_scores=self.aggregation_on_gr_scores)
-
+        clust.optimizer_state = deepcopy(self.optimizer_state)
         check_assignment_consistency(grounding_per_value_per_cluster=clust.grounding_per_value_per_cluster,
                                      value_system_network_per_cluster=clust.value_system_per_cluster,
                                      assignment_aid_to_gr_cluster=clust.agent_to_gr_cluster_assignments,
                                      assignment_aid_to_vs_cluster=clust.agent_to_vs_cluster_assignments,
                                      reward_models_per_aid=clust.reward_model_per_agent_id)
-        from pympler import asizeof
-        example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
+        
         
         return clust
 
@@ -326,11 +462,27 @@ class ClusterAssignment():
 
 class ClusterAssignmentMemory():
 
+    # TODO: Cambiar a lista de soluciones no dominadas (que sea más grande que antes...)
+    # TODO: Escoger y ordenar por mejor ratio, que sea mejorable (ver abajo) teniendo en cuenta que
+        # TODO: La conciseness de los de 1 es la mejor conciseness hasta ahora (DE TODOS LOS QUE SE HAN INTENTADO INSERTAR > 1).
+        # TODO: si no hay un referente, se escoje representativity, no queda otra. 
+        # Asi ya son directamente comparables sin la movida del if, que no es un orden.
+    # TODO: Cuando coges uno para mejorar:
+        # TODO: si mejora a sí mismo, se borra el anterior.
+        # TODO: si no mejora tras un ciclo de epochs, se marca como no mejorable.
+        # TODO: Si todos son no mejorables, se escoge con mutaciones.
+        # Hasta end de iteraciones.
+    # Cuando insertas, borrar a todos los que la solución domine. Si hay dos assignment iguales no dominados, no pasa nada.
+    # Si domina a algunas pero no a todas...?
+    def __init__(self, max_size):
+        self.max_size = max_size
+        self.memory: List[ClusterAssignment] = []
+        self.common_env = None
     def __str__(self):
         result = "Cluster Assignment Memory:\n"
         for i, assignment in enumerate(self.memory):
             result += f"Assignment {i}:"
-            result += f" {assignment.combined_cluster_score_vs(), assignment.combined_cluster_score_gr_aggr()}, K: {assignment.K}, L: {assignment.L} \n"
+            result += f" VS: {assignment.combined_cluster_score_vs()}|{assignment.representativity_vs()}, GR: {assignment.combined_cluster_score_gr_aggr()}, K: {assignment.K}, L: {assignment.L} \n"
             result += f" GR Clusters: {assignment.active_gr_clusters()} VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
         return result
@@ -338,10 +490,8 @@ class ClusterAssignmentMemory():
     
     def __len__(self):
         return len(self.memory)
-    def __init__(self, max_size):
-        self.max_size = max_size
-        self.memory: List[ClusterAssignment] = []
-    def compare_assignments(x: ClusterAssignment, y: ClusterAssignment) -> float:
+    
+    def compare_assignments(x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False, priotitize_representativity=False) -> float:
 
         # first on different grounding scores... then on value system scores.
         assert x.n_values == y.n_values
@@ -370,38 +520,62 @@ class ClusterAssignmentMemory():
             #TODO: how to aggregate if there are cases where K(i) == 1 and K(j) > 1...
             assert not (has1 and hasmorethan1) # we need to come up with something here. For ECAI we have 1 grounding always, so no problem yet
         gr_score_dif = x.aggregation_on_gr_scores(difs) # TODO... maybe aggregation on scores should be modelled outside these two?
-        if gr_score_dif != 0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
-            return gr_score_dif
-        else:
-            if x.L == 1 or y.L == 1:
-                return x.representativity_vs() - y.representativity_vs()
-            else:
-                return x.combined_cluster_score_vs() - y.combined_cluster_score_vs()
+        #pareto
+        vs_score_dif = 0
+        repr_dif = x.representativity_vs() - y.representativity_vs()
+        vs_score_dif = x.combined_cluster_score_vs() - y.combined_cluster_score_vs()
+        vs_score_dif = repr_dif if x.L == 1 or y.L == 1 else vs_score_dif
 
+        if lexicographic_vs_first:
+            if priotitize_representativity:
+                if repr_dif != 0.0:
+                    return repr_dif
+            
+            if vs_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
+                    return vs_score_dif
+            else:
+                    
+                    return gr_score_dif
+        else:
+            if gr_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
+                    return gr_score_dif
+            else:
+                    if priotitize_representativity:
+                        if repr_dif != 0.0:
+                            return repr_dif
+                    return vs_score_dif
+        """elif lexicographic_or_pareto == 'pareto':
+            if (gr_score_dif < 0 and vs_score_dif <= 0) or (gr_score_dif <= 0 and vs_score_dif < 0):
+                return -1
+            elif (gr_score_dif > 0 and vs_score_dif >= 0) or (gr_score_dif >= 0 and vs_score_dif > 0):
+                return 1
+            else:
+                return 0"""
     def insert_assignment(self, assignment: ClusterAssignment) -> Tuple[int, ClusterAssignment]:
         index = 0
         dont_insert = False
 
-        for a,b in itertools.combinations(range(len(self.memory)), 2):
-            assert not self.memory[a].is_equivalent_assignment(self.memory[b]), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
+        if __debug__:
+            for a,b in itertools.combinations(range(len(self.memory)), 2):
+                assert not self.memory[a].is_equivalent_assignment(self.memory[b]), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
         
         dont_insert = False
         while index < len(self.memory):
             cmp = ClusterAssignmentMemory.compare_assignments(self.memory[index], assignment) 
             eq = self.memory[index].is_equivalent_assignment(assignment)
             if cmp <= 0:
-                if eq:
+                if eq: # If is a single cluster, you need to go down until the representativity is low enough.
                     dont_insert = True # The assignment is equivalent to the one in the memory, but it is better.
                 break
-            
             else:
                 if eq:
                     return len(self.memory), None # There is already an equivalent assignment in the memory that is better.
                 index += 1
+        
         old = None
         
         if dont_insert:
-            old = self.memory[index].copy()
+            old = self.memory[index]
 
             assert self.memory[index].is_equivalent_assignment(assignment)
             self.memory[index] = assignment
@@ -417,6 +591,8 @@ class ClusterAssignmentMemory():
             pass # Here it means the assignment is worse than the worst one in the memory, so we do not insert it.
         remaining = index + 1      
         while remaining < len(self.memory):
+            #cmp = ClusterAssignmentMemory.compare_assignments(self.memory[remaining], assignment) 
+            
             if self.memory[remaining].is_equivalent_assignment(assignment):
                 self.memory.pop(remaining)
             else:
@@ -424,14 +600,29 @@ class ClusterAssignmentMemory():
                 
         if len(self.memory) > self.max_size:
             self.memory.pop()
-            
+        
+    
+        if assignment.L == 1:
+            from functools import cmp_to_key
+            self.memory = sorted(self.memory, key=cmp_to_key(lambda x, y: ClusterAssignmentMemory.compare_assignments(x,y,priotitize_representativity=True)), reverse=True)
+        
+        
         return index, old
     def get_random_weighted_assignment(self)-> ClusterAssignment:
         if len(self.memory) == 0:
             return None
         weights = [i + 1 for i in range(len(self.memory))] # TODO: do something w.r.t. scores? But again K = 1...
-        return random.choices(self.memory, weights=weights, k=1)[0]
+        assignment =  random.choices(self.memory, weights=weights, k=1)[0]
+        return self.assignment_with_env(assignment)
+
     def get_best_assignment(self) -> ClusterAssignment:
         if len(self.memory) == 0:
             return None
-        return self.memory[0]
+        assignment = self.memory[0]
+        return self.assignment_with_env(assignment)
+    
+    def assignment_with_env(self, assignment: ClusterAssignment) -> ClusterAssignment:
+        if self.common_env is not None:
+            assignment.set_env(self.common_env)
+        
+        return assignment

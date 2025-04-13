@@ -1,21 +1,18 @@
 import argparse
-from collections import defaultdict
 import dill
 import pprint
 import random
-from typing import Sequence, Union
+from typing import Union
 import numpy as np
 import torch
-from envs.tabularVAenv import TabularVAMDP
 from generate_dataset import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, parse_dtype_torch
 from generate_dataset_one_shot_tasks import PICKLED_ENVS
+from src.algorithms.clustering_utils import ClusterAssignment
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
-from src.feature_extractors import FeatureExtractorFromVAEnv
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes, parse_layer_name
-from train_vsl import   parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data
-from src.data import TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset
+from train_vsl import load_training_results, parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data, save_training_results
+from src.data import VSLPreferenceDataset
 import os
-import gymnasium as gym
 from utils import filter_none_args, load_json_config
 
 
@@ -33,10 +30,9 @@ def parse_args():
 """
     general_group.add_argument('-ename', '--experiment_name', type=str,
                                default='test_experiment', required=True, help='Experiment name')
-    
+
     general_group.add_argument('-dtype', '--dtype', type=parse_dtype_torch, default=torch.float32, choices=[torch.float32, torch.float64],
                                help='Society name in the society config file (overrides other defaults here, but not the command line arguments)')
-
 
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
@@ -60,13 +56,13 @@ def parse_args():
 
     general_group.add_argument('-n', '--n_experiments', type=int,
                                default=1, help='Number of experiment repetitions')
-    
+
     general_group.add_argument('-sp', '--split_ratio', type=float,
                                default=0.2, help='Split ratio for train/test set. 0.2 means 80% train, 20% test')
     alg_group = parser.add_argument_group('Algorithm-specific Parameters')
     alg_group.add_argument('-k', '--k_clusters', type=Union[int, list], default=-1,
                            help="Number of clusters per value (overriging configuration file)")
-    
+
     debug_params = parser.add_argument_group('Debug Parameters')
     debug_params.add_argument('-db', '--check_rewards', action='store_true',
                               default=False, help='Check rewards before learning for debugging')
@@ -91,7 +87,6 @@ if __name__ == "__main__":
     config = load_json_config(parser_args.config_file)
     society_config = load_json_config('societies.json')
 
-
     pprint.pprint(parser_args)
     np.random.seed(parser_args.seed)
     torch.manual_seed(parser_args.seed)
@@ -100,7 +95,7 @@ if __name__ == "__main__":
 
     environment_data = config[parser_args.environment]
     society_data = society_config[parser_args.environment]['default']
-    
+
     grounding_path = os.path.join(
         'envs', parser_args.environment, GROUNDINGS_PATH)
     dataset_name = parser_args.dataset_name
@@ -119,22 +114,21 @@ if __name__ == "__main__":
         {agg: [grounding_files[agg[i]] for i in range(len(agg))] for agg in set(agent_groundings)})"""
 
     extra_kwargs = {}
-    
+
     if parser_args.environment == 'apollo':
         extra_kwargs = {
-           'random_state': parser_args.seed,
-           'test_size': parser_args.split_ratio
+            'random_state': parser_args.seed,
+            'test_size': parser_args.split_ratio
         }
-        
+
     try:
-        f = open(os.path.join(os.path.join(PICKLED_ENVS, environment_data['name'], dataset_name), f"env_kw_{extra_kwargs}.pkl"), 'rb')
+        f = open(os.path.join(os.path.join(
+            PICKLED_ENVS, environment_data['name'], dataset_name), f"env_kw_{extra_kwargs}.pkl"), 'rb')
         environment = dill.load(f)
     except FileNotFoundError as e:
         print(e)
         exit(1)
-        
 
-    
     print("TESTING DATA COHERENCE. It is safe to stop this program now...")
 
     rewward_net_features_extractor_class, policy_features_extractor_class, features_extractor_kwargs, policy_features_extractor_kwargs = parse_feature_extractors(
@@ -144,7 +138,7 @@ if __name__ == "__main__":
 
     data_reward_net = environment_data['default_reward_net']
     data_reward_net.update(alg_config['reward_net'])
-    
+
     reward_net = LinearVSLRewardFunction(
         environment=environment,
         use_state=data_reward_net['use_state'],
@@ -171,10 +165,12 @@ if __name__ == "__main__":
     )
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
 
-    path  =os.path.join(
+    path = os.path.join(
         DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
-    dataset_train = VSLPreferenceDataset.load(os.path.join(path, "dataset_train.pkl"))
-    dataset_test = VSLPreferenceDataset.load(os.path.join(path, "dataset_test.pkl"))
+    dataset_train = VSLPreferenceDataset.load(
+        os.path.join(path, "dataset_train.pkl"))
+    dataset_test = VSLPreferenceDataset.load(
+        os.path.join(path, "dataset_test.pkl"))
 
     if parser_args.algorithm == 'pc':
 
@@ -187,10 +183,11 @@ if __name__ == "__main__":
             discount=environment_data['discount'],
             discount_factor_preferences=alg_config['discount_factor_preferences'],
             dataset=dataset_train,
-            training_mode=TrainingModes.SIMULTANEOUS, 
+            training_mode=TrainingModes.SIMULTANEOUS,
             cluster_sizes=parse_cluster_sizes(
                 environment_data['K'] if parser_args.k_clusters == -1 else parser_args.k_clusters, n_values=environment_data['n_values']),
-                vs_cluster_sizes=environment_data['L'] if isinstance(environment_data['L'], int) else None,
+            vs_cluster_sizes=environment_data['L'] if isinstance(
+                environment_data['L'], int) else None,
 
             learn_stochastic_policy=alg_config['learn_stochastic_policy'],
             use_quantified_preference=alg_config['use_quantified_preference'],
@@ -212,6 +209,21 @@ if __name__ == "__main__":
         )
     if parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
-    vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
+    target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s, historic_assignments_s  =vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
                    assumed_grounding=None, **alg_config['train_kwargs'])
     # Now we need to train.
+    save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
+                          reward_net_pair_agent_and_vs_s, metrics_s)
+    print(metrics_s['assignment'])
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(
+        experiment_name)
+    
+    assignment: ClusterAssignment = historic_assignments[-1]
+    
+
+    assignment.plot_vs_assignments("demo.png")
+
+    assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
+    assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
+    ), "Mismatch in reward_net_pair_agent_and_vs"
+    assert metrics.keys() == metrics_s.keys(), "Mismatch in metrics"

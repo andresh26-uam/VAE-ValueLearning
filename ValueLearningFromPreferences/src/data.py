@@ -158,7 +158,7 @@ def load_vs_trajectories(path: AnyPath) -> Sequence[Trajectory]:
     # look at the type of the resulting object. If it's the new compressed format,
     # it should be a Mapping that we need to decode, whereas if it's the old format,
     # it's just the sequence of trajectories, and we can return it directly.
-    print(path)
+    
     if os.path.isdir(path):  # huggingface datasets format
         dataset = datasets.load_from_disk(str(path))
         if not isinstance(dataset, datasets.Dataset):  # pragma: no cover

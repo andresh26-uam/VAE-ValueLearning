@@ -1,22 +1,20 @@
 import argparse
-from collections import defaultdict
 import os
 import dill as dill
 import pprint
 import random
-from typing import Any, Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
-import imitation
 import numpy as np
 import torch
 
 from envs.firefighters_env import FeatureSelectionFFEnv
 from envs.tabularVAenv import TabularVAMDP
-from generate_dataset import COMPARISONS_DATASETS_PATH, DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, compare_trajectories, load_preferences, load_trajectories, parse_dtype_torch
+from generate_dataset import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, parse_dtype_torch
 from src.algorithms.clustering_utils import ClusterAssignment
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL, load_historic_assignments
 from src.algorithms.preference_based_vsl_lib import SobaOptimizer
-from src.data import TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset
+from src.data import VSLPreferenceDataset
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
@@ -25,10 +23,11 @@ from utils import CHECKPOINTS, filter_none_args, load_json_config, TRAIN_RESULTS
 
 import gymnasium as gym
 
+
 def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics):
     # Save the training results to a file
     os.makedirs(TRAIN_RESULTS_PATH, exist_ok=True)
-    
+
     with open(os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl"), 'wb') as f:
         dill.dump({
             "target_agent_and_vs_to_learned_ones": target_agent_and_vs_to_learned_ones,
@@ -36,13 +35,16 @@ def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, 
             "metrics": metrics
         }, f)
 
-    print(f"Training results saved to {os.path.join(CHECKPOINTS, f'{experiment_name}.pkl')}")
+    print(
+        f"Training results saved to {os.path.join(CHECKPOINTS, f'{experiment_name}.pkl')}")
+
 
 def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple], Tuple], Dict[Tuple[str, Tuple], AbstractVSLRewardFunction], Dict[str, Any]], List[ClusterAssignment]]:
     # Load the training results from a file
     file_path = os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl")
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Training results file not found: {file_path}")
+        raise FileNotFoundError(
+            f"Training results file not found: {file_path}")
     with open(file_path, 'rb') as f:
         data = dill.load(f)
     print(f"Training results loaded from {file_path}")
@@ -57,11 +59,8 @@ def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple]
             returned_tuple[2] = data[k]
     returned_tuple = tuple(returned_tuple)
     # Get the saved best assignments per iteration
-    historic_assignments = load_historic_assignments(experiment_name)
+    historic_assignments = load_historic_assignments(experiment_name, limit=20)
     return *returned_tuple, historic_assignments
-
-
-
 
 
 def parse_args():
@@ -78,10 +77,9 @@ def parse_args():
 
     general_group.add_argument('-ename', '--experiment_name', type=str,
                                default='test_experiment', required=True, help='Experiment name')
-    
+
     general_group.add_argument('-sp', '--split_ratio', type=float, default=0.2,
                                help='Test split ratio. If 0.0, no split is done. If 1.0, all data is used for testing.')
-
 
     general_group.add_argument('-dtype', '--dtype', type=parse_dtype_torch, default=torch.float32, choices=[torch.float32, torch.float64],
                                help='Society name in the society config file (overrides other defaults here, but not the command line arguments)')
@@ -96,9 +94,6 @@ def parse_args():
                                help='Path to JSON general configuration file (overrides other defaults here, but not the command line arguments)')
     general_group.add_argument('-sf', '--society_file', type=str, default='societies.json',
                                help='Path to JSON society configuration file (overrides other defaults here, but not the command line arguments)')
-
-    general_group.add_argument('-sh', '--show', action='store_true', default=False,
-                               help='Show plots calculated before saving')
 
     general_group.add_argument('-e', '--environment', type=str, default='ff', choices=[
                                'rw', 'ff', 'vrw'], help='environment (roadworld - rw, firefighters - ff, variablerw - vrw)')
@@ -129,6 +124,7 @@ def parse_args():
 
     return parser.parse_args()
 
+
 def parse_cluster_sizes(k, n_values):
     if isinstance(k, int):
         return [k]*n_values
@@ -153,7 +149,7 @@ def parse_feature_extractors(environment, environment_data, dtype=torch.float32)
             env=environment,
             dtype=dtype,
         )
-    
+
     else:
         raise ValueError(
             f"Unknown reward feature extractor {environment_data['reward_feature_extractor']}")
@@ -228,17 +224,16 @@ if __name__ == "__main__":
         extra_kwargs = {'env_kwargs': {
             'feature_selection': FeatureSelection(environment_data['feature_selection']),
             'feature_preprocessing': FeaturePreprocess(environment_data['feature_preprocessing']),
-            
+
         }}
-        if 'Fixed' in environment_data['name'] :
+        if 'Fixed' in environment_data['name']:
             extra_kwargs['with_destination'] = 64
-            
+
     environment: TabularVAMDP = gym.make(
         environment_data['name'],
         horizon=environment_data['horizon'], **extra_kwargs)
     environment.reset(seed=parser_args.seed)
 
-    
     print("TESTING DATA COHERENCE. It is safe to stop this program now...")
 
     rewward_net_features_extractor_class, policy_features_extractor_class, features_extractor_kwargs, policy_features_extractor_kwargs = parse_feature_extractors(
@@ -273,29 +268,29 @@ if __name__ == "__main__":
         dtype=parser_args.dtype
 
     )
-    
+
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
 
-
-
-    path  =os.path.join(
+    path = os.path.join(
         DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
-    
+
     dataset = VSLPreferenceDataset.load(os.path.join(path, "dataset.pkl"))
 
-    dataset_test = VSLPreferenceDataset(n_values=dataset.n_values, single_agent=False)
-    dataset_train = VSLPreferenceDataset(n_values=dataset.n_values, single_agent=False)
+    dataset_test = VSLPreferenceDataset(
+        n_values=dataset.n_values, single_agent=False)
+    dataset_train = VSLPreferenceDataset(
+        n_values=dataset.n_values, single_agent=False)
     for aid, adata in dataset.data_per_agent.items():
         selection = np.arange(int(parser_args.split_ratio * len(adata)))
-        train_selection = np.arange(int(parser_args.split_ratio * len(adata)), len(adata))
+        train_selection = np.arange(
+            int(parser_args.split_ratio * len(adata)), len(adata))
         agent_dataset_batch = adata[selection]
         dataset_test.push(fragments=agent_dataset_batch[0], preferences=agent_dataset_batch[1], preferences_with_grounding=agent_dataset_batch[2], agent_ids=[
-                            aid]*len(selection), agent_data={aid: dataset.agent_data[aid]})
+            aid]*len(selection), agent_data={aid: dataset.agent_data[aid]})
         agent_dataset_batch_t = adata[train_selection]
         dataset_train.push(fragments=agent_dataset_batch_t[0], preferences=agent_dataset_batch_t[1], preferences_with_grounding=agent_dataset_batch_t[2], agent_ids=[
-                            aid]*len(train_selection), agent_data={aid: dataset.agent_data[aid]})
-    
-    
+            aid]*len(train_selection), agent_data={aid: dataset.agent_data[aid]})
+
     if parser_args.algorithm == 'pc':
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
             env=environment,
@@ -305,10 +300,11 @@ if __name__ == "__main__":
             discount=environment_data['discount'],
             discount_factor_preferences=alg_config['discount_factor_preferences'],
             dataset=dataset_train,
-            training_mode=TrainingModes.SIMULTANEOUS, 
+            training_mode=TrainingModes.SIMULTANEOUS,
             cluster_sizes=parse_cluster_sizes(
                 environment_data['K'] if parser_args.k_clusters == -1 else parser_args.k_clusters, n_values=environment_data['n_values']),
-                vs_cluster_sizes=environment_data['L'] if isinstance(environment_data['L'], int) else None,
+            vs_cluster_sizes=environment_data['L'] if isinstance(
+                environment_data['L'], int) else None,
 
             learn_stochastic_policy=alg_config['learn_stochastic_policy'],
             use_quantified_preference=alg_config['use_quantified_preference'],
@@ -330,16 +326,22 @@ if __name__ == "__main__":
         )
     if parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
-    
+
     target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s, historic_assignments_s = vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
-                    assumed_grounding=None, **alg_config['train_kwargs'])
-    
+                                                                                                                              assumed_grounding=None, **alg_config['train_kwargs'])
 
-    save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s)
+    save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
+                          reward_net_pair_agent_and_vs_s, metrics_s)
     print(metrics_s['assignment'])
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(experiment_name)
-
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(
+        experiment_name)
     
+    assignment: ClusterAssignment = historic_assignments[-1]
+    
+
+    assignment.plot_vs_assignments("demo.png")
+
     assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
-    assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(), "Mismatch in reward_net_pair_agent_and_vs"
+    assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
+    ), "Mismatch in reward_net_pair_agent_and_vs"
     assert metrics.keys() == metrics_s.keys(), "Mismatch in metrics"

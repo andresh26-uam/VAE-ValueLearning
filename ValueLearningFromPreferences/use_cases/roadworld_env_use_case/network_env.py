@@ -192,22 +192,10 @@ class RoadWorld(object):
     
     
     def get_reward(self, state, action, des, profile=None):
-        #print("GET_REWARD AT ", state, self.netconfig[state])
         return self._get_reward(state, self.get_state_des_transition((int(state), des), action)[0], des, profile)
     
     
     def step(self, action, reward_function=None):
-        """
-        Step function for the agent to interact with gridworld
-        inputs:
-          action        action taken by the agent
-        returns
-          current_state current state
-          action        input action
-          next_state    next_state
-          reward        reward on the next state
-          is_done       True/False - if the agent is already on the terminal states
-        """
         prev_state = self.cur_state
         try:
             next_state, self.cur_des = self.get_state_des_transition((self.cur_state,self.cur_des), action)

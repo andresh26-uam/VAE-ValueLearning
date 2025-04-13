@@ -1,4 +1,5 @@
 import itertools
+import time
 import numpy as np
 from envs.tabularVAenv import TabularVAMDP
 from typing import Any, List
@@ -58,7 +59,7 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
 
         self.basic_profiles = [tuple(pr) for pr in np.eye(self.n_values, dtype=np.float32)]
         
-        self.routes_train, self.routes_test, observation_matrix, self._reward_matrix_per_va, agent_context_matrix, self.preferences_per_agent_id = self._parse_trajectory_data_from_pd_dataset(self.train_val_data, self.test_data)
+        self.routes_train, self.routes_test, observation_matrix, self._reward_matrix_per_va, agent_context_matrix, self.preferences_per_agent_id, self.preferences_grounding_per_agent_id = self._parse_trajectory_data_from_pd_dataset(self.train_val_data, self.test_data)
         self.all_routes = self.routes_train + self.routes_test
         self.agent_context_matrix = agent_context_matrix
 
@@ -70,7 +71,7 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
         n_trajs = len(self.routes_train) + len( self.routes_test)
         n_states = len(observation_matrix)
         transition_matrix = np.eye(n_states).reshape((n_states, 1, n_states))
-        print(n_states)
+        
         assert n_states >= len(observation_matrix)
         # Create an observation matrix (identity matrix)
         #observation_matrix = np.delete(dataset, value_columns, axis=1)
@@ -79,7 +80,7 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
 
         # Initialize the environment with the given matrices
         super().__init__(
-            n_values=4,
+            n_values=self.n_values,
             transition_matrix=transition_matrix,
             observation_matrix=observation_matrix,
             reward_matrix_per_va=self._get_reward_matrix_per_va,
@@ -113,11 +114,17 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
         i.update({'agent_context': self.agent_context_matrix[self.state]})
         return ns,r,done,done, i
     
+    def _reward_ground_truth(self, obs_preprocessed, value_idx):
+        return -obs_preprocessed[value_idx] # 4 values.
+    
+    def compare_groundings(self, first_obs, second_obs, vi):
+        return 1.0 if -first_obs[vi] + second_obs[vi] > 0 else 0.0 # This is the default rule: smaller cost/time/headway/interchanges the better
     def _parse_trajectory_data_from_pd_dataset(self, train_dataset: np.ndarray, test_dataset: np.ndarray) -> List[TrajectoryWithValueSystemRews]:
         trajectories_train = []
         trajectories_test = []
 
         preferences_per_agent_id = {}
+        preferences_grounding_per_agent_id = {vi: {} for vi in range(self.n_values)}
         unique_observations = {}
         new_id = 0
 
@@ -127,6 +134,9 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
                 choice = int(row[1])
                 if agent_id not in preferences_per_agent_id:
                     preferences_per_agent_id[agent_id] = {}
+                    for vi in range(self.n_values):
+                            preferences_grounding_per_agent_id[vi][agent_id] = {}
+                    
                 observations_of_both = np.delete(row, (0,1))
                 observations1 = tuple(observations_of_both[0:4])
                 observations2 = tuple(observations_of_both[4:8])
@@ -137,23 +147,29 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
 
                 second_pair_id = None
                 first_pair_id = None
+
+                first_obs = None
+                second_obs = None
                 for first_or_second, obs in enumerate([observations1, observations2]):
                     cur_id = new_id
                     new_id+=1
                     
                     if first_or_second == 0:
+                        first_obs = obs
                         first_pair_id = cur_id
                     else:
+                        second_obs = obs
                         second_pair_id = cur_id
                         preferences_per_agent_id[agent_id][(first_pair_id, second_pair_id)] = 1.0-(choice-1)
+                        for vi in range(self.n_values):
+                            preferences_grounding_per_agent_id[vi][agent_id][(first_pair_id,second_pair_id)] = self.compare_groundings(first_obs, second_obs, vi)
                     trajectory = TrajectoryWithValueSystemRews(
-                            obs=[obs,[0.0]*self.n_values],
+                            obs=[obs,[0.0]*len(obs)],
                             acts=[0],
                             infos=[{'agent_context': context_info, 'state': cur_id}],
                             terminal=True,
                             n_vals=self.n_values,
-                            # The rewards are always lower the better, the 4 values are costs-like 
-                            v_rews=-np.array([obs]).transpose(),
+                            v_rews=np.array([[self._reward_ground_truth(obs, ipr) for ipr in range(self.n_values)]]).transpose(),
                             rews=np.array([1.0 if (choice == 1 and first_or_second == 0) or (choice == 2 and first_or_second == 1) else 0.0]),
                             agent=str(int(agent_id))
                         )
@@ -184,7 +200,32 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
             observation_matrix[traj.infos[0]['state']] = traj.obs[0]
             for ipr, prof in enumerate(self.basic_profiles):
                 # The rewards are always lower the better, the 4 values are costs-like 
-                _reward_matrix_per_va[prof][traj.infos[0]['state'], 0] = -traj.obs[0][ipr]
+                _reward_matrix_per_va[prof][traj.infos[0]['state'], 0] = self._reward_ground_truth(traj.obs[0], ipr)
             agent_context_matrix[traj.infos[0]['state']] = traj.infos[0]['agent_context']
-            
-        return trajectories_train, trajectories_test, observation_matrix, _reward_matrix_per_va, agent_context_matrix, preferences_per_agent_id
+        
+        
+        return trajectories_train, trajectories_test, observation_matrix, _reward_matrix_per_va, agent_context_matrix, preferences_per_agent_id, preferences_grounding_per_agent_id
+    
+
+
+
+class RouteChoiceEnvironmentApolloComfort(RouteChoiceEnvironmentApollo):
+    def __init__(self, value_columns: List[int] = (2,3,4), test_size = 0.2, random_state=42):
+        super().__init__(value_columns=value_columns, test_size=test_size, random_state=random_state)
+    
+    def compare_groundings(self,first_obs, second_obs, vi):
+        if vi < 2:
+            ret = 1.0 if -first_obs[vi] + second_obs[vi] > 0 else 0.0 # This is the default rule: smaller cost/time/headway/interchanges the better
+        else:
+            case1better = -first_obs[2] + second_obs[2] > 0 and -first_obs[3] + second_obs[3] >= 0.0 
+            case1better2 = -first_obs[2] + second_obs[2] >= 0 and -first_obs[3] + second_obs[3] > 0.0
+            caseworse1 = -first_obs[2] + second_obs[2] < 0 and -first_obs[3] + second_obs[3] <= 0
+            caseworse2= -first_obs[2] + second_obs[2] <= 0 and -first_obs[3] + second_obs[3] < 0
+            ret = 1.0 if case1better or case1better2 else 0.0 if caseworse1 or caseworse2 else 0.5
+        
+        return ret   
+    
+    
+    def _reward_ground_truth(self, obs_preprocessed, value_idx):
+        return -obs_preprocessed[value_idx] if value_idx < 2 else -abs(obs_preprocessed[2]*(obs_preprocessed[3] + 1)) # this is confort
+    

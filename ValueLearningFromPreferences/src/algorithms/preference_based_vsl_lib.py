@@ -42,9 +42,9 @@ class PrefLossClasses(enum.Enum):
 
 
 
-def discordance(probs: th.Tensor = None, gt_probs: th.Tensor = None, indifference_tolerance=0.0, apply_indifference_in_gt=False, reduce='mean'):
-    return 1.0 - calculate_accuracies(probs_vs=probs, gt_probs_vs=gt_probs, indifference_tolerance=indifference_tolerance, apply_indifference_in_gt=apply_indifference_in_gt, reduce=reduce)[0]
-def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None, gt_probs_vs: th.Tensor = None, gt_probs_gr: th.Tensor = None, indifference_tolerance=0.0, apply_indifference_in_gt=False, reduce='mean'):
+def discordance(probs: th.Tensor = None, gt_probs: th.Tensor = None, indifference_tolerance=0.0, reduce='mean'):
+    return 1.0 - calculate_accuracies(probs_vs=probs, gt_probs_vs=gt_probs, indifference_tolerance=indifference_tolerance, reduce=reduce)[0]
+def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None, gt_probs_vs: th.Tensor = None, gt_probs_gr: th.Tensor = None, indifference_tolerance=0.0, reduce='mean'):
     accuracy_vs = None
     accuracy_gr = None
     misclassified_vs = None
@@ -61,7 +61,7 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
         vs_predictions_positive = detached_probs_vs > 0.5
         vs_predictions_negative = detached_probs_vs < 0.5
         vs_predictions_indifferent = abs(
-            detached_probs_vs - 0.5) < indifference_tolerance
+            detached_probs_vs - 0.5) <= indifference_tolerance
 
         if isinstance(gt_probs_gr, th.Tensor):
             gt_detached_probs_vs = gt_probs_vs.detach()
@@ -71,19 +71,19 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
         
         gt_predictions_positive = gt_detached_probs_vs > 0.5
         gt_predictions_negative = gt_detached_probs_vs < 0.5
-        gt_predictions_indifferent = gt_detached_probs_vs == 0.5 if not apply_indifference_in_gt else abs(
-            gt_detached_probs_vs - 0.5) <= indifference_tolerance
+        gt_predictions_indifferent = gt_detached_probs_vs == 0.5
         
         
-        misclassified_positive = (
-            gt_predictions_positive != vs_predictions_positive)
-        misclassified_negative = (
-            gt_predictions_negative != vs_predictions_negative)
-        misclassified_indifferent = (
-            gt_predictions_indifferent != vs_predictions_indifferent)
+        wellclassified_positive = (
+            gt_predictions_positive & vs_predictions_positive)
+        wellclassified_negative = (
+            gt_predictions_negative & vs_predictions_negative)
+        wellclassified_indifferent = (
+            gt_predictions_indifferent & vs_predictions_indifferent)
         
         # Combine all misclassified examples
-        misclassified_vs = misclassified_positive | misclassified_negative | misclassified_indifferent
+        misclassified_vs = ~ (wellclassified_positive | wellclassified_negative | wellclassified_indifferent)
+        
         if reduce == 'mean':
             accuracy_vs = (1.0 - sum(misclassified_vs)/len(probs_vs)) 
         else:
@@ -109,18 +109,17 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
                 gt_detached_probs_vgrj = gt_probs_gr[:, j]
             gt_predictions_positive = gt_detached_probs_vgrj > 0.5
             gt_predictions_negative = gt_detached_probs_vgrj < 0.5
-            gt_predictions_indifferent = gt_detached_probs_vgrj == 0.5 if not apply_indifference_in_gt else abs(
-            gt_detached_probs_vgrj - 0.5) <= indifference_tolerance
+            gt_predictions_indifferent = gt_detached_probs_vgrj == 0.5
 
-            misclassified_positive = (
-                gt_predictions_positive != vgrj_predictions_positive)
-            misclassified_negative = (
-                gt_predictions_negative != vgrj_predictions_negative)
-            misclassified_indifferent = (
-                gt_predictions_indifferent != vgrj_predictions_indifferent)
+            wellclassified_positive = (
+                gt_predictions_positive & vgrj_predictions_positive)
+            wellclassified_negative = (
+                gt_predictions_negative & vgrj_predictions_negative)
+            wellclassified_indifferent = (
+                gt_predictions_indifferent & vgrj_predictions_indifferent)
 
-            missclassified_vgrj = misclassified_positive | misclassified_negative | misclassified_indifferent
-
+            missclassified_vgrj = ~(wellclassified_positive | wellclassified_negative | wellclassified_indifferent)
+            
 
             if reduce == 'mean':
                 acc_gr_vi = (1.0 - sum(missclassified_vgrj)/len(detached_probs_vgrj))
@@ -162,7 +161,7 @@ def likelihood_x_is_target(pred_probs, target_probs, mode='numpy', slope=1, adap
 
         probs [(probs < 0.5) & (target_probs < 0.5)] = 1.0
         
-        probs[(abs(probs - indifference_tolerance) <= indifference_tolerance) & (abs(target_probs - 0.5) <= indifference_tolerance)] = 1.0
+        probs[(abs(probs - target_probs) <= indifference_tolerance) & (abs(target_probs - 0.5) <= indifference_tolerance)] = 1.0
         
     return productfun(probs)
 
@@ -233,7 +232,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         n = len(fragments)
         probs_with_cluster1, probs_with_cluster2 = probs[0:n], probs[n:2*n]
         
-        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, apply_indifference_in_gt=False, indifference_tolerance=indifference_tolerance)
+        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
         
         return difference_function(probs_with_cluster1, probs_with_cluster2), disc
 
@@ -274,7 +273,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 custom_model_per_agent_id=reward_net_per_aid_2,
                                 only_for_alignment_function=al2)
         
-        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, apply_indifference_in_gt=False, indifference_tolerance=indifference_tolerance)
+        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
         #disc = sum(missed_pairs)/len(probs_with_cluster1)
         return difference_function(probs_with_cluster1, probs_with_cluster2), disc
 
@@ -417,13 +416,13 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         state = None
         action = None
         next_state = None
-        state = deepcopy(util.safe_to_tensor(types.assert_not_dictobs(
-                transitions.obs), device=self.model.device, dtype=self.model.dtype))
-        action = deepcopy(util.safe_to_tensor(
-            transitions.acts, device=self.model.device, dtype=self.model.dtype))
+        state = util.safe_to_tensor(types.assert_not_dictobs(
+                transitions.obs), device=self.model.device, dtype=self.model.dtype)
+        action = util.safe_to_tensor(
+            transitions.acts, device=self.model.device, dtype=self.model.dtype)
         if self.model.use_next_state:
-            next_state = deepcopy(util.safe_to_tensor(types.assert_not_dictobs(
-            transitions.next_obs), device=self.model.device, dtype=self.model.dtype))
+            next_state = util.safe_to_tensor(types.assert_not_dictobs(
+            transitions.next_obs), device=self.model.device, dtype=self.model.dtype)
         
         info = transitions.infos[0] 
 
@@ -507,8 +506,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                                                             recover_previous_config_after_calculation=False,
                                                                             use_probabilistic_reward=False, requires_grad=True, info=info, forward_groundings=True)
 
-                # th.testing.assert_close(rews_gr, th_rewards_gr)
-                #print("NC??", self.algorithm.env.context, info['context'])
                 
 
         
@@ -610,11 +607,10 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
         else:
             probs_l = probs
             target_probs_l = target_probs
-        
         if self.confident_penalty > 0.0:
-            return th.mean(th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduce=False) - self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
+            return th.mean(th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='none') - self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
         else:
-            return th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduce='mean')
+            return th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='mean')
         
 
     def forward(
@@ -690,13 +686,7 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
             
             vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )
-            """print(vs_penalty, )
-            vs_penalty.backward()
-            print("GRAD", value_system_network_per_cluster[0].weight.grad)
-            print("GRAD", value_system_network_per_cluster[1].weight.grad)
-            print("GRAD", value_system_network_per_cluster[2].weight.grad)
-            print("GRAD", value_system_network_per_cluster[3].weight.grad)
-            exit(0)"""
+            
             loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs) - self.cluster_similarity_penalty*vs_penalty
             metrics['loss_vs'] = loss_vs
         # LOSS GROUNDING.
@@ -812,12 +802,12 @@ def gradients_soba(wx, wy, vt, goal1_x, goal2_xy):
         Dlambda = grad_F_wrt_wy
     else:
         Dlambda = []
-        cum_sum = sum(th.sum(gryx.mul(vt_i.T)) for gryx, vt_i in zip(grad_G_wrt_wywx, vt))
+        cum_sum = sum(th.sum(gryx.mul(vt_i)) for gryx, vt_i in zip(grad_G_wrt_wywx, vt))
         for p in grad_F_wrt_wy:
             Dlambda.append(cum_sum + p) 
 
     Dv = []
-    cum_sum2 = sum(th.sum(grx2.matmul(vt_i.T)) for grx2, vt_i in zip(grad_G_wrt_wx2, vt))
+    cum_sum2 = sum(th.sum(grx2.mul(vt_i)) for grx2, vt_i in zip(grad_G_wrt_wx2, vt))
     for p in grad_F_wrt_wx:
         Dv.append(cum_sum2 + p) 
 
@@ -835,6 +825,9 @@ class SobaOptimizer(th.optim.Optimizer):
         defaults = dict(lr_grounding=lr_grounding, lr_value_system=lr_value_system, lr_vt=lr_value_system)
         self.use_lr_decay = use_lr_decay
         self.optimizer_kwargs = optimizer_kwargs
+
+        params_gr = set(params_gr)
+        params_vs = set(params_vs)
 
         self.optimx = th.optim.SGD(params_gr, lr=lr_grounding, **self.optimizer_kwargs)
         self.optimy = th.optim.SGD(params_vs, lr=lr_value_system, **self.optimizer_kwargs)
@@ -857,6 +850,7 @@ class SobaOptimizer(th.optim.Optimizer):
         self.optimv.zero_grad(set_to_none)
 
     def get_state(self):
+        
         return {'time': self.time, 'vt': self.vt}
     
     def set_state(self, state):
@@ -869,13 +863,14 @@ class SobaOptimizer(th.optim.Optimizer):
                 self.optimx_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimx)
                 self.optimy_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimy)
                 self.optimv_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimv)
-
+        if state is None:
+            self.set_state({'time': 0, 'vt': [th.zeros_like(p) for p in self.wx]}) 
     def step(self, closure=None):
         self.optimx.step()
         self.optimy.step()
         
         self.optimv.step()
-
+        self.time+=1
         if self.use_lr_decay:
             self.optimx_scheduler.step()
             self.optimy_scheduler.step()
@@ -884,6 +879,7 @@ class SobaOptimizer(th.optim.Optimizer):
 
 
 class SobaLoss(CrossEntropyRewardLossCluster):
+    # TODO: Use efficient version when it is known the grounding does not depend on VS
 
     def __init__(self, model_indifference_tolerance, apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00, max_grad_norm_gr=1000.0, max_grad_norm_vs=1000.0):
         super().__init__(model_indifference_tolerance, apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty)
@@ -914,7 +910,6 @@ class SobaLoss(CrossEntropyRewardLossCluster):
         Dtheta, Dv, Dlambda = gradients_soba(
             self.wx, self.wy, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
         )
-        print(len(Dtheta), len(self.wx))
         assert len(Dtheta) == len(self.wx)
         assert len(Dlambda) == len(self.wy)
         assert len(self.vt) == len(Dv)
