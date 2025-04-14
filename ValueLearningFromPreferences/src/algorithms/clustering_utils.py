@@ -1,6 +1,7 @@
 
 
 from copy import deepcopy
+from functools import cmp_to_key
 import itertools
 import os
 import random
@@ -171,6 +172,8 @@ class ClusterAssignment():
         self.assignment_gr = assignment_gr
         self.assignment_vs = assignment_vs
 
+        self.explored = False
+
         self.optimizer_state = None # This is useful when saving and loading cluster assignments.
         if aggregation_on_gr_scores is None:
             
@@ -212,9 +215,12 @@ class ClusterAssignment():
             with open(save_path, 'wb') as f:
                 dill.dump(self, f)
 
-    def _combined_cluster_score(inter_cluster_distances, intra_cluster_distances, n_actual_clusters):
+    def _combined_cluster_score(inter_cluster_distances, intra_cluster_distances, n_actual_clusters, conciseness_if_1_cluster=None):
         if n_actual_clusters <= 1:
-            return ClusterAssignment._representativity(intra_cluster_distances)
+            if (conciseness_if_1_cluster is None) or (conciseness_if_1_cluster == float('-inf')):
+                return ClusterAssignment._representativity(intra_cluster_distances)
+            else:
+                return conciseness_if_1_cluster/ ClusterAssignment._representativity(intra_cluster_distances)
         return ClusterAssignment._conciseness(inter_cluster_distances, n_actual_clusters) / ClusterAssignment._representativity(intra_cluster_distances)
 
     def _conciseness(inter_cluster_distances, n_actual_clusters):
@@ -228,6 +234,7 @@ class ClusterAssignment():
         return conciseness
 
     def _representativity(intra_cluster_distances):
+        
         return 1.0 - np.mean(np.asarray(intra_cluster_distances))  # TODO. Representativity is the average of the negated intra cluster distances, but these are distances from each agent to its cluster, change that at vs_score().
     
     
@@ -349,6 +356,7 @@ class ClusterAssignment():
                           agent_to_gr_cluster_assignments=deepcopy(self.agent_to_gr_cluster_assignments),
                           agent_to_vs_cluster_assignments=deepcopy(self.agent_to_vs_cluster_assignments),
                           aggregation_on_gr_scores=self.aggregation_on_gr_scores)
+        clust.explored = self.explored
         clust.optimizer_state = deepcopy(self.optimizer_state)
         check_assignment_consistency(grounding_per_value_per_cluster=clust.grounding_per_value_per_cluster,
                                      value_system_network_per_cluster=clust.value_system_per_cluster,
@@ -402,14 +410,14 @@ class ClusterAssignment():
     def conciseness_vs(self):
         return ClusterAssignment._conciseness(self.inter_discordances_vs, self.L)
 
-    def combined_cluster_score_gr(self):
-        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr[i], self.K[i]) for i in range(self.n_values)]
+    def combined_cluster_score_gr(self, conciseness_if_K_is_1=None):
+        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr[i], self.K[i], conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else [1.0]*self.n_values) for i in range(self.n_values)]
 
-    def combined_cluster_score_vs(self):
-        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs, self.L)
+    def combined_cluster_score_vs(self,conciseness_if_L_is_1=None):
+        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs, self.L, conciseness_if_1_cluster=conciseness_if_L_is_1 if conciseness_if_L_is_1 is not None else 1.0)
 
-    def combined_cluster_score_gr_aggr(self):
-        return self.combined_cluster_score_gr() # TODO FUTURE WORK aggregation of combined scores is this, or dividing the aggregation?
+    def combined_cluster_score_gr_aggr(self, conciseness_if_K_is_1=None):
+        return self.combined_cluster_score_gr(conciseness_if_K_is_1) # TODO FUTURE WORK aggregation of combined scores is this, or dividing the aggregation?
 
 
     def __str__(self):
@@ -474,15 +482,41 @@ class ClusterAssignmentMemory():
         # Hasta end de iteraciones.
     # Cuando insertas, borrar a todos los que la solución domine. Si hay dos assignment iguales no dominados, no pasa nada.
     # Si domina a algunas pero no a todas...?
-    def __init__(self, max_size):
+    pass
+    
+
+
+class ClusterAssignmentMemory():
+
+    # TODO: Cambiar a lista de soluciones no dominadas (que sea más grande que antes...) CHECK
+    # TODO: Escoger y ordenar por mejor ratio, que sea mejorable (ver abajo) teniendo en cuenta que
+        # TODO: La conciseness de los de 1 es la mejor conciseness hasta ahora (DE TODOS LOS QUE SE HAN INTENTADO INSERTAR > 1).
+        # TODO: si no hay un referente, se escoje representativity, no queda otra. 
+        # Asi ya son directamente comparables sin la movida del if, que no es un orden.
+    # TODO: Cuando coges uno para mejorar:
+        # TODO: si mejora a sí mismo, se borra el anterior.
+        # TODO: si no mejora tras un ciclo de epochs, se marca como no mejorable.
+        # TODO: Si todos son no mejorables, se escoge con mutaciones.
+        # Hasta end de iteraciones.
+    # Cuando insertas, borrar a todos los que la solución domine. Si hay dos assignment iguales no dominados, no pasa nada.
+    # Si domina a algunas pero no a todas...?
+    def __init__(self, max_size, n_values):
         self.max_size = max_size
         self.memory: List[ClusterAssignment] = []
         self.common_env = None
+        self.maximum_conciseness_vs = float('-inf')
+        self.maximum_conciseness_gr = [float('-inf') for _ in range(n_values)]
+
+        self.non_improvable_assignments = []
+
     def __str__(self):
         result = "Cluster Assignment Memory:\n"
+        mgr = self.maximum_conciseness_vs 
+        mgr_gr = self.maximum_conciseness_gr
+
         for i, assignment in enumerate(self.memory):
-            result += f"Assignment {i}:"
-            result += f" VS: {assignment.combined_cluster_score_vs()}|{assignment.representativity_vs()}, GR: {assignment.combined_cluster_score_gr_aggr()}, K: {assignment.K}, L: {assignment.L} \n"
+            result += f"Assignment {i} (Explored: {assignment.explored}):"
+            result += f" VS: {assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr)}|{assignment.representativity_vs()}, GR: {assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)}, K: {assignment.K}, L: {assignment.L} \n"
             result += f" GR Clusters: {assignment.active_gr_clusters()} VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
         return result
@@ -490,12 +524,17 @@ class ClusterAssignmentMemory():
     
     def __len__(self):
         return len(self.memory)
+
     
-    def compare_assignments(x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False, priotitize_representativity=False) -> float:
+    
+    def compare_assignments(self, x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False) -> float:
 
         # first on different grounding scores... then on value system scores.
         assert x.n_values == y.n_values
         assert x.n_values > 0
+
+        mcvs = self.maximum_conciseness_vs
+        mcgr = self.maximum_conciseness_gr
 
         difs = []
         has1 = False
@@ -503,125 +542,128 @@ class ClusterAssignmentMemory():
         xK = x.K
         yK = y.K
 
-        xrepr_per_value = x.representativities_gr()
-        yrepr_per_value = y.representativities_gr()
-
-        x_combined_per_value, y_combined_per_value = x.combined_cluster_score_gr(), y.combined_cluster_score_gr()
+        x_combined_per_value, y_combined_per_value = x.combined_cluster_score_gr(conciseness_if_K_is_1=mcgr), y.combined_cluster_score_gr(conciseness_if_K_is_1=mcgr)
 
         for i in range(x.n_values):
             if xK[i] == 1 and yK[i] == 1:
-                dif_gr_i = xrepr_per_value[i] - yrepr_per_value[i]
-                assert x_combined_per_value[i] == xrepr_per_value[i] # this should be the same if the functions are correct because conciseness is 1 when K[i] = 1
                 has1 = True
             else:
                 hasmorethan1 = True
-                dif_gr_i = x_combined_per_value[i] - y_combined_per_value[i]
+            dif_gr_i = x_combined_per_value[i] - y_combined_per_value[i]
             difs.append(dif_gr_i)
-            #TODO: how to aggregate if there are cases where K(i) == 1 and K(j) > 1...
             assert not (has1 and hasmorethan1) # we need to come up with something here. For ECAI we have 1 grounding always, so no problem yet
         gr_score_dif = x.aggregation_on_gr_scores(difs) # TODO... maybe aggregation on scores should be modelled outside these two?
         #pareto
-        vs_score_dif = 0
-        repr_dif = x.representativity_vs() - y.representativity_vs()
-        vs_score_dif = x.combined_cluster_score_vs() - y.combined_cluster_score_vs()
-        vs_score_dif = repr_dif if x.L == 1 or y.L == 1 else vs_score_dif
+        vs_score_dif = x.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs) - y.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs)
+       
+        pareto_score = 0.0
+        lexic_diff = 0.0
+        if (gr_score_dif > 0.0 and vs_score_dif >= 0.0) or (gr_score_dif >= 0.0 and vs_score_dif > 0.0):
+                pareto_score = 1.0
+        elif (gr_score_dif <= 0.0 and vs_score_dif < 0.0) or (gr_score_dif < 0.0 and vs_score_dif <= 0.0):
+            pareto_score    = -1.0
+        else:
+            pareto_score = 0.0
 
         if lexicographic_vs_first:
-            if priotitize_representativity:
-                if repr_dif != 0.0:
-                    return repr_dif
-            
-            if vs_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
-                    return vs_score_dif
-            else:
-                    
-                    return gr_score_dif
+                
+                if vs_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
+                        lexic_diff = vs_score_dif
+                else:
+                        
+                        lexic_diff = gr_score_dif
         else:
             if gr_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
-                    return gr_score_dif
+                    lexic_diff = gr_score_dif
             else:
-                    if priotitize_representativity:
-                        if repr_dif != 0.0:
-                            return repr_dif
-                    return vs_score_dif
-        """elif lexicographic_or_pareto == 'pareto':
-            if (gr_score_dif < 0 and vs_score_dif <= 0) or (gr_score_dif <= 0 and vs_score_dif < 0):
-                return -1
-            elif (gr_score_dif > 0 and vs_score_dif >= 0) or (gr_score_dif >= 0 and vs_score_dif > 0):
-                return 1
-            else:
-                return 0"""
+                    lexic_diff = vs_score_dif
+        return lexic_diff, pareto_score
+       
     def insert_assignment(self, assignment: ClusterAssignment) -> Tuple[int, ClusterAssignment]:
-        index = 0
-        dont_insert = False
 
+        if assignment.L > 1:
+            new_max_c = max(self.maximum_conciseness_vs, assignment.conciseness_vs()) 
+            if new_max_c != self.maximum_conciseness_vs:
+                changes_made = True
+            self.maximum_conciseness_vs = new_max_c
+        
+        for vi in range(len(assignment.K)):
+            if assignment.K[vi] > 1:
+                new_max_c = max(assignment.concisenesses_gr()[vi], self.maximum_conciseness_gr[i])
+                if new_max_c != self.maximum_conciseness_gr[i]:
+                    changes_made = True
+                self.maximum_conciseness_gr[i] = new_max_c
+            
         if __debug__:
             for a,b in itertools.combinations(range(len(self.memory)), 2):
                 assert not self.memory[a].is_equivalent_assignment(self.memory[b]), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
         
-        dont_insert = False
-        while index < len(self.memory):
-            cmp = ClusterAssignmentMemory.compare_assignments(self.memory[index], assignment) 
-            eq = self.memory[index].is_equivalent_assignment(assignment)
-            if cmp <= 0:
-                if eq: # If is a single cluster, you need to go down until the representativity is low enough.
-                    dont_insert = True # The assignment is equivalent to the one in the memory, but it is better.
-                break
-            else:
-                if eq:
-                    return len(self.memory), None # There is already an equivalent assignment in the memory that is better.
-                index += 1
         
-        old = None
-        
-        if dont_insert:
-            old = self.memory[index]
+        #lexico_diffs = []
+        #equivalent_assignments = []
+        pareto_diffs = []
 
-            assert self.memory[index].is_equivalent_assignment(assignment)
-            self.memory[index] = assignment
+        dominated_indices = []
+        changes_made = False
+
         
-        elif index < self.max_size:
-            if index == len(self.memory):
-                self.memory.append(assignment)
-                old = self.memory[index-1]
-            else:
-                old = self.memory[index]
-                self.memory.insert(index, assignment)
-        else:
-            pass # Here it means the assignment is worse than the worst one in the memory, so we do not insert it.
-        remaining = index + 1      
-        while remaining < len(self.memory):
-            #cmp = ClusterAssignmentMemory.compare_assignments(self.memory[remaining], assignment) 
-            
-            if self.memory[remaining].is_equivalent_assignment(assignment):
-                self.memory.pop(remaining)
-            else:
-                remaining+=1
+        for i in range(len(self.memory)):
+            cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=True,) 
+            #eq = self.memory[index].is_equivalent_assignment(assignment)
+            print("comparing assignments")
+            print(self.memory[i])
+            print("VS---------------")
+            print(assignment)
+            print(cmp_lexico, cmp_pareto)
+            #equivalent_assignments.append(eq)
+            #lexico_diffs.append(cmp_lexico)
+            pareto_diffs.append(cmp_pareto)
+
+            if cmp_pareto < 0:
+                changes_made= True
                 
-        if len(self.memory) > self.max_size:
-            self.memory.pop()
-        
-    
-        if assignment.L == 1:
-            from functools import cmp_to_key
-            self.memory = sorted(self.memory, key=cmp_to_key(lambda x, y: ClusterAssignmentMemory.compare_assignments(x,y,priotitize_representativity=True)), reverse=True)
-        
-        
-        return index, old
-    def get_random_weighted_assignment(self)-> ClusterAssignment:
-        if len(self.memory) == 0:
-            return None
-        weights = [i + 1 for i in range(len(self.memory))] # TODO: do something w.r.t. scores? But again K = 1...
-        assignment =  random.choices(self.memory, weights=weights, k=1)[0]
-        return self.assignment_with_env(assignment)
+                dominated_indices.append(i)
+            elif cmp_pareto > 0:
+                assignment.explored = True
+                return 
 
-    def get_best_assignment(self) -> ClusterAssignment:
-        if len(self.memory) == 0:
+        # Insert the new one if all the pareto diffs are less than or equal than 0 (pareto dominates someone or is non dominated).
+        pareto_diffs = np.array(pareto_diffs)
+        if all(pareto_diffs <= 0):
+            changes_made = True
+            self.memory.append(assignment)  
+        
+        # Eliminate the assignments in the dominated_indices
+        for idx in sorted(dominated_indices, reverse=True):
+                self.memory.pop(idx)  
+        if changes_made:
+            self.memory = sorted(self.memory, key=cmp_to_key(lambda x, y: self.compare_assignments(x,y,lexicographic_vs_first=True)[0]), reverse=True)
+            if len(self.memory) > self.max_size:
+                e = self.memory.pop()
+        assignment.explored = not changes_made
+        return
+    def get_random_weighted_assignment(self, override_explore=True)-> ClusterAssignment:
+        non_explored_assignments = [assignment for assignment in self.memory if not assignment.explored]
+        if len(non_explored_assignments) == 0:
             return None
-        assignment = self.memory[0]
-        return self.assignment_with_env(assignment)
+        weights = list(reversed([i+1 for i in range(len(non_explored_assignments))])) # TODO: do something w.r.t. scores? But again K = 1...
+        assignment_index =  random.choices(list(range(len(non_explored_assignments))), weights=weights, k=1)[0]
+        assignment = non_explored_assignments[assignment_index]
+        return self.assignment_with_env(assignment, override_explore)
+
+    def get_best_assignment(self, override_explore=False) -> ClusterAssignment:
+        if not override_explore:
+            return self.assignment_with_env(assignment=self.memory[0], override_explore=False)
+        non_explored_assignments = [assignment for assignment in self.memory if not assignment.explored]
+        if len(non_explored_assignments) == 0:
+            return None
+        
+        assignment = non_explored_assignments[0]
+        return self.assignment_with_env(assignment, override_explore)
     
-    def assignment_with_env(self, assignment: ClusterAssignment) -> ClusterAssignment:
+    def assignment_with_env(self, assignment: ClusterAssignment, override_explore) -> ClusterAssignment:
+        if override_explore:
+            assignment.explored = True
         if self.common_env is not None:
             assignment.set_env(self.common_env)
         

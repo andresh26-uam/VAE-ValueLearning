@@ -653,11 +653,11 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             probs_vs, probs_gr, preferences, preferences_with_grounding, indifference_tolerance=self.model_indifference_tolerance)
 
         accuracy_vs_per_agent, accuracy_gr_per_agent, missclassified_vs_per_agent, missclassified_gr_per_agent = {}, {}, {}, {}
-        for aid in preferences_per_agent_id.keys():
+        """for aid in preferences_per_agent_id.keys():
             accuracy_vs_per_agent[aid], accuracy_gr_per_agent[aid], missclassified_vs_per_agent[aid], missclassified_gr_per_agent[aid] = calculate_accuracies(
                 probs_vs_per_agent[aid], probs_gr_per_agent[aid], preferences_per_agent_id[aid], preferences_per_agent_id_with_grounding[aid], indifference_tolerance=self.model_indifference_tolerance)
             accuracy_gr_per_agent[aid] = np.array(accuracy_gr_per_agent[aid])
-            accuracy_vs_per_agent[aid] = float(accuracy_vs_per_agent[aid])
+            accuracy_vs_per_agent[aid] = float(accuracy_vs_per_agent[aid])"""
 
         self.last_accuracy_gr = np.array(accuracy_gr)
 
@@ -665,8 +665,8 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
         metrics["global_accvs"] = accuracy_vs
         metrics["global_accgr"] = np.array(accuracy_gr)
 
-        metrics["accvs"] = accuracy_vs_per_agent
-        metrics["accgr"] = accuracy_gr_per_agent
+        #metrics["accvs"] = accuracy_vs_per_agent
+        #metrics["accgr"] = accuracy_gr_per_agent
         metrics['loss_per_vi'] = {}
         # misclassified_pairs = predictions != ground_truth
 
@@ -789,6 +789,30 @@ def derivative21(f, wrt1, wrt2, dw2 = None, retain_last = True):
     grads2 = th.autograd.grad(f, wrt1, retain_graph=True, create_graph=True, allow_unused=True, materialize_grads=True)
     
     return grads, grads2
+
+def gradients_soba_eff(wx, wy, vt, goal1_x, goal2_xy):
+    
+    grads_G_wrt_wx = th.autograd.grad(goal1_x, wx, create_graph=True, retain_graph=True, allow_unused=True, materialize_grads=True)
+    f = th.sum(th.cat(tuple(g.flatten() for g in grads_G_wrt_wx)))
+    
+    grads_G_wrt_wx2 = th.autograd.grad(f, wx, create_graph=False, retain_graph=True, allow_unused=True, materialize_grads=True)
+
+    grads_F_wrt_wx = th.autograd.grad(goal2_xy, wx, retain_graph=True, create_graph=True,allow_unused=True, materialize_grads=True)
+    grads_F_wrt_wy = th.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=True, allow_unused=True, materialize_grads=True)
+
+    Dtheta = grads_G_wrt_wx
+    Dlambda = grads_F_wrt_wy
+    
+    Dv = []
+    
+    for fwx, qwxwx, vt_i in zip(grads_F_wrt_wx,grads_G_wrt_wx2, vt):
+        Dv.append(fwx + qwxwx*vt_i)
+#grad_F_wrt_wy = torch.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=False)[0]
+
+    #torch.testing.assert_close(grad_G_wrt_wywx, torch.zeros_like(grad_G_wrt_wywx))
+    #torch.testing.assert_close(grad_G_wrt_wy, torch.zeros_like(grad_G_wrt_wy))
+    return Dtheta,Dv, Dlambda
+
 def gradients_soba(wx, wy, vt, goal1_x, goal2_xy):
     
     grad_G_wrt_wx, grad_G_wrt_wx2 = nth_derivative(goal1_x, wx, 2)
@@ -905,9 +929,12 @@ class SobaLoss(CrossEntropyRewardLossCluster):
         self.gr_loss = lossMetrics.loss[1]
         self.vs_loss = lossMetrics.loss[0]
         return lossMetrics
-
+    
     def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
-        Dtheta, Dv, Dlambda = gradients_soba(
+        """Dtheta, Dv, Dlambda = gradients_soba(
+            self.wx, self.wy, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
+        )"""
+        Dtheta, Dv, Dlambda = gradients_soba_eff(
             self.wx, self.wy, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
         )
         assert len(Dtheta) == len(self.wx)
