@@ -348,7 +348,7 @@
             "use_done": false,
             "basic_layer_classes": ["nn.Linear", "nn.Linear",  "nn.Linear", "nn.Linear", "ConvexAlignmentLayer"],
             "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Softplus", "nn.Identity"],
-            "use_bias": [true, true, true, true, false],
+            "use_bias": [true, true, true, false, false],
             "hid_sizes": [16,24,16,3],
             "negative_grounding_layer": true,
             "clamp_rewards": false
