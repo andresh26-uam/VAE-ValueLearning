@@ -4,7 +4,7 @@ import numpy as np
 from envs.tabularVAenv import TabularVAMDP
 from typing import Any, List
 
-from src.data import TrajectoryWithValueSystemRews
+from src.dataset_processing.data import TrajectoryWithValueSystemRews
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, Normalizer

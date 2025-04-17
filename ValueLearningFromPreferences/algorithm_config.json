@@ -2,6 +2,9 @@
 "ff": {
         "name": "FireFighters-v0",
         "n_values": 2,
+        "values_names": ["Proximity", "Professionalism"],
+        "values_short_names": ["Prox", "Prof"],
+
         "K": 1,
         "L": 4,
         "horizon": 50,
@@ -116,7 +119,8 @@
         
         "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
         "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
-        
+        "values_names": ["Sustainability", "Comfort", "Efficiency"],
+        "values_short_names": ["Sus", "Comf", "Eff"],
         "feature_selection": "only_costs",
         "feature_preprocessing": "norm",
         "environment_is_stochastic": false,
@@ -215,7 +219,8 @@
         
         "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
         "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
-        
+        "values_names": ["Sustainability", "Comfort", "Efficiency"],
+        "values_short_names": ["Sus", "Comf", "Eff"],
         "feature_selection": "only_costs",
         "feature_preprocessing": "norm",
         "environment_is_stochastic": false,
@@ -305,7 +310,7 @@
         "name": "RouteChoiceEnvironmentApolloComfort-v0",
         "n_values": 3,
         "K": 1,
-        "L": 1,
+        "L": 3,
         "horizon": 2,
 
         "is_contextual": false,
@@ -314,7 +319,8 @@
         
         "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
         "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
-        
+        "values_names": ["Cost", "Efficiency", "Comfort"],
+        "values_short_names": ["Cost", "Eff", "Comf"],
         "environment_is_stochastic": false,
         "discount": 1.0,
         
@@ -325,7 +331,7 @@
             "use_done": false,
             "basic_layer_classes": ["nn.Linear", "nn.Linear",  "nn.Linear", "nn.Linear", "ConvexAlignmentLayer"],
             "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Softplus", "nn.Identity"],
-            "use_bias": [true, true, true, false],
+            "use_bias": [true, true, true, true, false],
             "hid_sizes": [16,24,16,3],
             "negative_grounding_layer": true,
             "clamp_rewards": false
@@ -342,23 +348,24 @@
             "pc": {
                 "reward_net": {},
                 "optimizer_kwargs": {
-                    "lr": 0.1,
-                    "lr_grounding": 0.9,
-                    "lr_value_system": 0.9,
-                    "use_lr_decay": false,
+                    "lr": 0.01,
+                    "lr_grounding": 0.015,
+                    "lr_value_system": 0.01,
+                    "lr_lambda": 0.005,
+                    "initial_lambda": 0.5,
                     "weight_decay": 0.0000
                 },
-                "optimizer_class": "Soba",
+                "optimizer_class": "lagrange",
                 "learn_stochastic_policy": true,
-                "loss_class": "soba",
+                "loss_class": "lagrange",
                 "loss_kwargs": {
-                    "model_indifference_tolerance": 0.49,
-                    "apply_on_misclassified_pairs_only": false, 
+                    "model_indifference_tolerance": 1.0,
+                    "gr_apply_on_misclassified_pairs_only": false, 
+                    "vs_apply_on_misclassified_pairs_only": false, 
                     "confident_penalty": 0.5,
-                    "cluster_similarity_penalty": 0.5,
-                    "max_grad_norm_vs": 100.0,
-                    "max_grad_norm_gr": 100.0},
-                "_loss_class_options": ["cross_entropy_cluster", "soba"],
+                    "cluster_similarity_penalty": 0.0,
+                    "lambda_decay": 5e-9},
+                "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
 
                 "policy_approximation_method": "mce_original",
@@ -369,11 +376,11 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 30,
+                    "max_iter": 200,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
-                    "max_assignment_memory": 20
+                    "max_assignment_memory": 10
                 },
 
                 "learner_policy_class": "PPO",
@@ -393,11 +400,11 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 10,
-                    "refining_steps_after_cluster_assignment": 2,
+                    "epochs": 2,
+                    "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 5,
-                    "initial_exploration_rate": 0.1,
+                    "initial_refining_steps": 10,
+                    "initial_exploration_rate": 0.8,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": 1
                 }

@@ -1,7 +1,9 @@
+from abc import abstractmethod
 from collections import defaultdict
 from copy import deepcopy
 import enum
 import itertools
+import time
 from typing import Dict, Iterable, List, Sequence, Union
 import imitation
 import imitation.algorithms
@@ -11,12 +13,15 @@ import imitation.regularization
 import imitation.regularization.regularizers
 
 from imitation.util import util
+from ordered_set import OrderedSet
 
 
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
-from src.data import TrajectoryWithValueSystemRewsPair
+from src.dataset_processing.data import TrajectoryWithValueSystemRewsPair
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, TrainingModes
 import torch as th
+
+from imitation.algorithms.preference_comparisons import LossAndMetrics
 
 from typing import (
     Optional,
@@ -38,6 +43,7 @@ from imitation.algorithms import preference_comparisons
 class PrefLossClasses(enum.Enum):
     CROSS_ENTROPY_CLUSTER = 'cross_entropy_cluster'
     SOBA = 'soba'
+    LAGRANGE = 'lagrange'
 
 
 
@@ -102,7 +108,9 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
             vgrj_predictions_positive = detached_probs_vgrj > 0.5
             vgrj_predictions_negative = detached_probs_vgrj < 0.5
             vgrj_predictions_indifferent = abs(
-                detached_probs_vgrj - 0.5) < indifference_tolerance
+                detached_probs_vgrj - 0.5) <= indifference_tolerance
+            
+            
             if isinstance(gt_probs_gr, th.Tensor):
                 gt_detached_probs_vgrj = gt_probs_gr[:, j].detach()
             else:
@@ -110,14 +118,14 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
             gt_predictions_positive = gt_detached_probs_vgrj > 0.5
             gt_predictions_negative = gt_detached_probs_vgrj < 0.5
             gt_predictions_indifferent = gt_detached_probs_vgrj == 0.5
-
+            
             wellclassified_positive = (
                 gt_predictions_positive & vgrj_predictions_positive)
             wellclassified_negative = (
                 gt_predictions_negative & vgrj_predictions_negative)
             wellclassified_indifferent = (
                 gt_predictions_indifferent & vgrj_predictions_indifferent)
-
+            
             missclassified_vgrj = ~(wellclassified_positive | wellclassified_negative | wellclassified_indifferent)
             
 
@@ -205,12 +213,12 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
 
         self.dummy_models = []
 
-    def diversity_grounding(self, 
+    def conciseness_pairwise_gr(self, 
         fragments: Sequence[TrajectoryWithValueSystemRewsPair],
         grounding1: th.nn.Module, grounding2: th.nn.Module,
         value_idx,
         indifference_tolerance=0.0,
-        difference_function = total_variation_distance
+        #difference_function = total_variation_distance
         ) -> Tuple[th.Tensor, th.Tensor]:
 
         
@@ -234,18 +242,17 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         
         disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
         
-        return difference_function(probs_with_cluster1, probs_with_cluster2), disc
-
-    def diversity_vs(self, 
+        #return difference_function(probs_with_cluster1, probs_with_cluster2), disc
+        return disc
+    def conciseness_pairwise_vs(self, 
         fragments: Dict[str, Sequence[TrajectoryWithValueSystemRewsPair]],
         reward_net_per_aid: Dict[str, AbstractVSLRewardFunction],
         vs1: th.nn.Module, vs2: th.nn.Module,
         indifference_tolerance=0.0,
-        difference_function = total_variation_distance
+        #difference_function = total_variation_distance
         ) -> Tuple[th.Tensor, th.Tensor]:
 
-        # TODO: Implement the conciseness score here. 
-        previous_vs = {}
+        # TODO: Optimize this further?. number of agents may be big.  
         reward_net_per_aid_1 = dict.fromkeys(reward_net_per_aid.keys(), None)
         reward_net_per_aid_2 = dict.fromkeys(reward_net_per_aid.keys(), None)
 
@@ -273,10 +280,10 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 custom_model_per_agent_id=reward_net_per_aid_2,
                                 only_for_alignment_function=al2)
         
-        disc = discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
+        return discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
         #disc = sum(missed_pairs)/len(probs_with_cluster1)
-        return difference_function(probs_with_cluster1, probs_with_cluster2), disc
-
+        #return difference_function(probs_with_cluster1, probs_with_cluster2), disc
+        
 
     def forward(
         self,
@@ -337,9 +344,9 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
 
             all_transitions_aid = rollout.flatten_trajectories(
                 [frag for fragment in fragment_pairs_aid for frag in fragment])
-
+            
             all_rews_vs_aid, all_rews_gr_aid = self.rewards(
-                all_transitions_aid, only_with_alignment=False, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
+                all_transitions_aid, only_with_alignment=only_for_alignment_function is not None, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
 
             idx = 0
 
@@ -476,7 +483,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                                                             recover_previous_config_after_calculation=False,
                                                                             use_probabilistic_reward=False, requires_grad=True, forward_groundings=False,
                                                                             info=info)
-                
 
                 if real:
                     _, rews[indexes] = self.algorithm.calculate_rewards(alignment,
@@ -582,35 +588,163 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         return probability
 
 
-class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
-    """Compute the cross entropy reward loss."""
+class BasicRewardTrainerVSL(preference_comparisons.BasicRewardTrainer):
+    """Train a basic reward model."""
+
+    def __init__(
+        self,
+        preference_model: preference_comparisons.PreferenceModel,
+        n_values: int,
+        loss: preference_comparisons.RewardLoss,
+        rng: np.random.Generator,
+        batch_size: int = 32,
+        minibatch_size: Optional[int] = None,
+        epochs: int = 1,
+        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
+        regularizer_factory: Optional[imitation.regularization.regularizers.RegularizerFactory] = None,
+        optim_cls=th.optim.AdamW,
+        optim_kwargs=dict(lr=1e-3, weight_decay=0.0)
+    ) -> None:
+        lr = optim_kwargs['lr']
+        
+        super().__init__(preference_model, loss, rng, batch_size,
+                         minibatch_size, epochs, lr, custom_logger, regularizer_factory)
+        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
+        optim_kwargs['weight_decay'] = 0.0
+        self.optim_kwargs = optim_kwargs
+        self.optim_cls = optim_cls
+        self.n_values= n_values
+
+        # Default. This should be overriden.
+        if not issubclass(self.optim_cls, VSLOptimizer):
+            self.reset_optimizer_with_params(
+                parameters=self._preference_model.parameters())
+        else:
+            self.reset_optimizer_with_params(
+                parameters={'params_gr': OrderedSet(self._preference_model.parameters()), 'params_vs': OrderedSet(self._preference_model.parameters())})
+            
+
+        self.regularizer = (
+            regularizer_factory(optimizer=self.optim, logger=self.logger)
+            if regularizer_factory is not None
+            else None
+        )
+
+    def reset_optimizer_with_params(self, parameters):
+        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
+        assert self.optim_kwargs['weight_decay'] == 0.0
+        if isinstance(parameters, dict):
+            self.optim = self.optim_cls(params_gr=OrderedSet(parameters['params_gr']), params_vs=OrderedSet(parameters['params_vs']), n_values=self.n_values, **self.optim_kwargs)
+        else:
+            self.optim = self.optim_cls(parameters, **self.optim_kwargs)
+
+
+def nth_derivative(f, wrt, n):
+    all_grads = []
+    for i in range(n):
+
+        grads = th.autograd.grad(f, wrt, create_graph=i <n-1, retain_graph=True)
+        all_grads.append(grads)
+        f = th.sum(th.cat(tuple(g.flatten() for g in grads)))
+
+    return all_grads
+def derivative21(f, wrt1, wrt2, dw2 = None, retain_last = True):
+    if dw2 is None:
+        grads = th.autograd.grad(f, wrt2, create_graph=True, retain_graph=True, allow_unused=True, materialize_grads=True)
+        if grads is None:
+            return None, None
+    else:
+        grads = dw2
+    f = th.sum(th.cat(tuple(g.flatten() for g in grads)))
+    grads2 = th.autograd.grad(f, wrt1, retain_graph=True, create_graph=True, allow_unused=True, materialize_grads=True)
+    
+    return grads, grads2
+
+def gradients_soba_eff(wx, wy, vt, goal1_x, goal2_xy):
+    
+    grads_G_wrt_wx = th.autograd.grad(goal1_x, wx, create_graph=True, retain_graph=True, allow_unused=True, materialize_grads=True)
+    #f = th.sum(th.cat(tuple(g.flatten() for g in grads_G_wrt_wx)))
+    
+    #grads_G_wrt_wx2 = th.autograd.grad(f, wx, create_graph=False, retain_graph=True, allow_unused=True, materialize_grads=True)
+
+    #grads_F_wrt_wx = th.autograd.grad(goal2_xy, wx, retain_graph=True, create_graph=True,allow_unused=True, materialize_grads=True)
+    grads_F_wrt_wy = th.autograd.grad(goal2_xy, wy, retain_graph=False, allow_unused=True, materialize_grads=True)
+
+    Dtheta = grads_G_wrt_wx
+    Dlambda = grads_F_wrt_wy
+    
+    """for fwx, qwxwx, vt_i in zip(grads_F_wrt_wx,grads_G_wrt_wx2, vt):
+        Dv.append(fwx + qwxwx*vt_i)"""
+#grad_F_wrt_wy = torch.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=False)[0]
+
+    #torch.testing.assert_close(grad_G_wrt_wywx, torch.zeros_like(grad_G_wrt_wywx))
+    #torch.testing.assert_close(grad_G_wrt_wy, torch.zeros_like(grad_G_wrt_wy))
+    return Dtheta,None, Dlambda
+
+def gradients_soba(wx, wy, vt, goal1_x, goal2_xy):
+    
+    grad_G_wrt_wx, grad_G_wrt_wx2 = nth_derivative(goal1_x, wx, 2)
+    grad_G_wrt_wy, grad_G_wrt_wywx  = derivative21(goal1_x, wx, wy, retain_last = False)
+    
+    grad_F_wrt_wx = th.autograd.grad(goal2_xy, wx, retain_graph=True, create_graph=True,allow_unused=True, materialize_grads=True)
+    grad_F_wrt_wy = th.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=True, allow_unused=True, materialize_grads=True)
+
+    
+    if grad_G_wrt_wywx is None:
+        Dlambda = grad_F_wrt_wy
+    else:
+        Dlambda = []
+        cum_sum = sum(th.sum(gryx.mul(vt_i)) for gryx, vt_i in zip(grad_G_wrt_wywx, vt))
+        for p in grad_F_wrt_wy:
+            Dlambda.append(cum_sum + p) 
+
+    Dv = []
+    cum_sum2 = sum(th.sum(grx2.mul(vt_i)) for grx2, vt_i in zip(grad_G_wrt_wx2, vt))
+    for p in grad_F_wrt_wx:
+        Dv.append(cum_sum2 + p) 
+
+    Dtheta = grad_G_wrt_wx
+    
+    return Dtheta,Dv, Dlambda
+
+
+class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
+    
     def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
         scalar_loss *= renormalization
         return scalar_loss.backward()
+    
     def set_parameters(self, *params) -> None:
         pass
 
-    def __init__(self, model_indifference_tolerance, apply_on_misclassified_pairs_only=False, confident_penalty=0.0, cluster_similarity_penalty=0.01) -> None:
+    def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
+                 
+                         vs_apply_on_misclassified_pairs_only=False, confident_penalty=0.0, cluster_similarity_penalty=0.00) -> None:
         """Create cross entropy reward loss."""
         super().__init__()
         # This is the tolerance in the probability model when in the ground truth two trajectories are deemed equivalent (i.e. if two trajectories are equivalent, the ground truth target is 0.5. The model should output something in between (0.5 - indifference, 0.5 + indifference) to consider it has done a correct preference prediction.)
         self.model_indifference_tolerance = model_indifference_tolerance
-        self.apply_on_misclassified_only = apply_on_misclassified_pairs_only
+        self.gr_apply_on_misclassified_only = gr_apply_on_misclassified_pairs_only
+        self.vs_apply_on_misclassified_only = vs_apply_on_misclassified_pairs_only
         self.confident_penalty = confident_penalty
         self.cluster_similarity_penalty = cluster_similarity_penalty
 
 
-    def loss_func(self, probs, target_probs, misclassified_pairs=None):
-        if misclassified_pairs is not None and self.apply_on_misclassified_only:
+    def loss_func(self, probs, target_probs, misclassified_pairs=None, apply_on_misclassified_only=False):
+        if misclassified_pairs is not None and apply_on_misclassified_only:
             probs_l = probs[misclassified_pairs == True]
             target_probs_l = target_probs[misclassified_pairs == True]
         else:
             probs_l = probs
             target_probs_l = target_probs
+        if len(probs_l) == 0:
+            return th.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        
         if self.confident_penalty > 0.0:
-            return th.mean(th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='none') - self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
+            s = th.sum(th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='none') - self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
         else:
-            return th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='mean')
+            s = th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='sum')
+        return s / len(probs)
         
 
     def forward(
@@ -652,7 +786,7 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
         accuracy_vs, accuracy_gr, missclassified_vs, missclassified_gr = calculate_accuracies(
             probs_vs, probs_gr, preferences, preferences_with_grounding, indifference_tolerance=self.model_indifference_tolerance)
 
-        accuracy_vs_per_agent, accuracy_gr_per_agent, missclassified_vs_per_agent, missclassified_gr_per_agent = {}, {}, {}, {}
+        #accuracy_vs_per_agent, accuracy_gr_per_agent, missclassified_vs_per_agent, missclassified_gr_per_agent = {}, {}, {}, {}
         """for aid in preferences_per_agent_id.keys():
             accuracy_vs_per_agent[aid], accuracy_gr_per_agent[aid], missclassified_vs_per_agent[aid], missclassified_gr_per_agent[aid] = calculate_accuracies(
                 probs_vs_per_agent[aid], probs_gr_per_agent[aid], preferences_per_agent_id[aid], preferences_per_agent_id_with_grounding[aid], indifference_tolerance=self.model_indifference_tolerance)
@@ -680,20 +814,24 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             loss_vs = th.tensor(
                 0.0, device=example_model.device, dtype=example_model.dtype)
         else:
-            value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
+            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+            if self.cluster_similarity_penalty > 0.0:
+                value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
+                
+                # TODO. only take into account the clusters that are used in the current assignment.
+                avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
+                
+                vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )
             
-            # TODO. only take into account the clusters that are used in the current assignment.
-            avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
-            
-            vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )
-            
-            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs) - self.cluster_similarity_penalty*vs_penalty
+                loss_vs -= self.cluster_similarity_penalty*vs_penalty
             metrics['loss_vs'] = loss_vs
         # LOSS GROUNDING.
         # start_time = time.time()
 
         loss_gr = th.tensor(0.0, device=example_model.device,
                             dtype=example_model.dtype)
+        
+        
         for vi in range(probs_gr.shape[1]):
             # TODO: This is the modified loss...
             """
@@ -707,163 +845,187 @@ class CrossEntropyRewardLossCluster(preference_comparisons.RewardLoss):
             """
             # loss_gr += th.mean(th.nn.functional.binary_cross_entropy(prgvi, preferences_with_grounding[:, vi], reduce=False) -th.multiply(prgvi, self.beta*th.log(prgvi)))
             
-            nl = self.loss_func(probs_gr[:, vi], preferences_with_grounding[:, vi], misclassified_pairs=missclassified_gr[vi])
+            nl = self.loss_func(probs_gr[:, vi], preferences_with_grounding[:, vi], misclassified_pairs=missclassified_gr[vi], apply_on_misclassified_only=self.gr_apply_on_misclassified_only)
             metrics['loss_per_vi'][vi] = nl
             loss_gr += nl
             assert not loss_gr.isnan()
+        
         metrics['loss_gr'] = loss_gr
         # end_time = time.time()
         # print(f"Execution time for loss grounding: {end_time - start_time} seconds")
         return preference_comparisons.LossAndMetrics(
-            loss=(loss_vs, loss_gr),
+            loss=(loss_vs, loss_gr, metrics['loss_per_vi']),
             metrics=metrics,
         )
-
-
-class BasicRewardTrainerVSL(preference_comparisons.BasicRewardTrainer):
-    """Train a basic reward model."""
-
-    def __init__(
-        self,
-        preference_model: preference_comparisons.PreferenceModel,
-        loss: preference_comparisons.RewardLoss,
-        rng: np.random.Generator,
-        batch_size: int = 32,
-        minibatch_size: Optional[int] = None,
-        epochs: int = 1,
-        custom_logger: Optional[imit_logger.HierarchicalLogger] = None,
-        regularizer_factory: Optional[imitation.regularization.regularizers.RegularizerFactory] = None,
-        optim_cls=th.optim.AdamW,
-        optim_kwargs=dict(lr=1e-3, weight_decay=0.0)
-    ) -> None:
-        lr = optim_kwargs['lr']
-        
-        super().__init__(preference_model, loss, rng, batch_size,
-                         minibatch_size, epochs, lr, custom_logger, regularizer_factory)
-        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
-        optim_kwargs['weight_decay'] = 0.0
-        self.optim_kwargs = optim_kwargs
-        self.optim_cls = optim_cls
-
-        # Default. This should be overriden.
-        if self.optim_cls != SobaOptimizer:
-            self.reset_optimizer_with_params(
-                parameters=self._preference_model.parameters())
-        else:
-            self.reset_optimizer_with_params(
-                parameters={'params_gr': list(self._preference_model.parameters()), 'params_vs': list(self._preference_model.parameters())})
-            
-
-        self.regularizer = (
-            regularizer_factory(optimizer=self.optim, logger=self.logger)
-            if regularizer_factory is not None
-            else None
-        )
-
-    def reset_optimizer_with_params(self, parameters):
-        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
-        assert self.optim_kwargs['weight_decay'] == 0.0
-        if isinstance(parameters, dict):
-            self.optim = self.optim_cls(params_gr=parameters['params_gr'], params_vs=parameters['params_vs'], **self.optim_kwargs)
-        else:
-            self.optim = self.optim_cls(parameters, **self.optim_kwargs)
-
-
-def nth_derivative(f, wrt, n):
-    all_grads = []
-    for i in range(n):
-
-        grads = th.autograd.grad(f, wrt, create_graph=i <n-1, retain_graph=True)
-        all_grads.append(grads)
-        f = th.sum(th.cat(tuple(g.flatten() for g in grads)))
-
-    return all_grads
-def derivative21(f, wrt1, wrt2, dw2 = None, retain_last = True):
-    if dw2 is None:
-        grads = th.autograd.grad(f, wrt2, create_graph=True, retain_graph=True, allow_unused=True, materialize_grads=True)
-        if grads is None:
-            return None, None
-    else:
-        grads = dw2
-    f = th.sum(th.cat(tuple(g.flatten() for g in grads)))
-    grads2 = th.autograd.grad(f, wrt1, retain_graph=True, create_graph=True, allow_unused=True, materialize_grads=True)
     
-    return grads, grads2
-
-def gradients_soba_eff(wx, wy, vt, goal1_x, goal2_xy):
-    
-    grads_G_wrt_wx = th.autograd.grad(goal1_x, wx, create_graph=True, retain_graph=True, allow_unused=True, materialize_grads=True)
-    f = th.sum(th.cat(tuple(g.flatten() for g in grads_G_wrt_wx)))
-    
-    grads_G_wrt_wx2 = th.autograd.grad(f, wx, create_graph=False, retain_graph=True, allow_unused=True, materialize_grads=True)
-
-    grads_F_wrt_wx = th.autograd.grad(goal2_xy, wx, retain_graph=True, create_graph=True,allow_unused=True, materialize_grads=True)
-    grads_F_wrt_wy = th.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=True, allow_unused=True, materialize_grads=True)
-
-    Dtheta = grads_G_wrt_wx
-    Dlambda = grads_F_wrt_wy
-    
-    Dv = []
-    
-    for fwx, qwxwx, vt_i in zip(grads_F_wrt_wx,grads_G_wrt_wx2, vt):
-        Dv.append(fwx + qwxwx*vt_i)
-#grad_F_wrt_wy = torch.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=False)[0]
-
-    #torch.testing.assert_close(grad_G_wrt_wywx, torch.zeros_like(grad_G_wrt_wywx))
-    #torch.testing.assert_close(grad_G_wrt_wy, torch.zeros_like(grad_G_wrt_wy))
-    return Dtheta,Dv, Dlambda
-
-def gradients_soba(wx, wy, vt, goal1_x, goal2_xy):
-    
-    grad_G_wrt_wx, grad_G_wrt_wx2 = nth_derivative(goal1_x, wx, 2)
-    grad_G_wrt_wy, grad_G_wrt_wywx  = derivative21(goal1_x, wx, wy, retain_last = False)
-    
-    grad_F_wrt_wx = th.autograd.grad(goal2_xy, wx, retain_graph=True, create_graph=True,allow_unused=True, materialize_grads=True)
-    grad_F_wrt_wy = th.autograd.grad(goal2_xy, wy, retain_graph=False, create_graph=True, allow_unused=True, materialize_grads=True)
-
-    
-    if grad_G_wrt_wywx is None:
-        Dlambda = grad_F_wrt_wy
-    else:
-        Dlambda = []
-        cum_sum = sum(th.sum(gryx.mul(vt_i)) for gryx, vt_i in zip(grad_G_wrt_wywx, vt))
-        for p in grad_F_wrt_wy:
-            Dlambda.append(cum_sum + p) 
-
-    Dv = []
-    cum_sum2 = sum(th.sum(grx2.mul(vt_i)) for grx2, vt_i in zip(grad_G_wrt_wx2, vt))
-    for p in grad_F_wrt_wx:
-        Dv.append(cum_sum2 + p) 
-
-    Dtheta = grad_G_wrt_wx
-    
-    return Dtheta,Dv, Dlambda
-
-
-class SobaOptimizer(th.optim.Optimizer):
-    def __init__(self, params_gr, params_vs, lr=0.001, lr_grounding=None, lr_value_system=None, use_lr_decay=True, **optimizer_kwargs):
-
+class VSLOptimizer(th.optim.Optimizer):
+    def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, lr_value_system=None,sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
         lr_grounding = lr if lr_grounding is None else lr_grounding
         lr_value_system = lr if lr_value_system is None else lr_value_system
-
-        defaults = dict(lr_grounding=lr_grounding, lr_value_system=lr_value_system, lr_vt=lr_value_system)
-        self.use_lr_decay = use_lr_decay
-        self.optimizer_kwargs = optimizer_kwargs
-
-        params_gr = set(params_gr)
-        params_vs = set(params_vs)
-
-        self.optimx = th.optim.SGD(params_gr, lr=lr_grounding, **self.optimizer_kwargs)
-        self.optimy = th.optim.SGD(params_vs, lr=lr_value_system, **self.optimizer_kwargs)
-
-        self.vt = [th.zeros_like(p) for p in params_gr]
-        self.wx = params_gr
-        self.wy = params_vs
-
-        super(SobaOptimizer, self).__init__([*params_gr, *params_vs], defaults)
-
+        self.lr_grounding = lr_grounding
         self.lr_value_system = lr_value_system
+        defaults = dict(lr_grounding=lr_grounding, lr_value_system=lr_value_system, lr_vt=lr_value_system)
+        
+        self.optimizer_kwargs = optimizer_kwargs
+        self.n_values = n_values
 
+        params_gr = OrderedSet(params_gr)
+        params_vs = OrderedSet(params_vs)
+        self.params_gr = params_gr
+        self.params_vs = params_vs
+        self.sub_optimizer_class = sub_optimizer_class
+        self.optimx = sub_optimizer_class(params_gr, lr=lr_grounding, **self.optimizer_kwargs)
+        self.optimy = sub_optimizer_class(params_vs, lr=lr_value_system, **self.optimizer_kwargs)
+
+        
+        super(VSLOptimizer, self).__init__([*params_gr, *params_vs], defaults)
+       
+    def get_state(self,copy=False):
+        return {}
+    def set_state(self, state):
+        return
+    
+    @abstractmethod
+    def zero_grad(self, set_to_none = True):
+        super().zero_grad(set_to_none)
+        self.optimx.zero_grad(set_to_none)
+        self.optimy.zero_grad(set_to_none)
+        return None
+    
+    @abstractmethod
+    def step(self, closure=None):
+        self.optimx.step()
+        self.optimy.step()
+        return None
+
+class VSLCustomLoss(BaseVSLClusterRewardLoss):
+    # TODO: Use efficient version when it is known the grounding does not depend on VS
+
+    def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, vs_apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00):
+        super().__init__(model_indifference_tolerance, 
+                         gr_apply_on_misclassified_pairs_only, 
+                         vs_apply_on_misclassified_pairs_only, 
+                         confident_penalty, cluster_similarity_penalty)
+        
+
+    @abstractmethod
+    def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
+        pass
+
+    def set_parameters(self, params_gr, params_vs, optim_state={}):
+        self.params_gr = params_gr
+        self.params_vs = params_vs
+    
+    def parameters(self, recurse = True):
+        return self.params_gr + self.params_vs
+    def forward(self, preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, 
+                fragment_pairs_per_agent_id = None, preferences_per_agent_id = None, 
+                preferences_per_agent_id_with_grounding = None, value_system_network_per_cluster = None, 
+                grounding_per_value_per_cluster = None) -> LossAndMetrics:
+        lossMetrics = super().forward(preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, fragment_pairs_per_agent_id, preferences_per_agent_id, preferences_per_agent_id_with_grounding, value_system_network_per_cluster, grounding_per_value_per_cluster)
+        self.gr_loss_per_vi = lossMetrics.loss[2]
+        self.gr_loss = lossMetrics.loss[1]
+        self.vs_loss = lossMetrics.loss[0]
+        return lossMetrics
+
+
+        #th.nn.utils.clip_grad_norm_(self.params_gr, self.max_grad_norm_gr)
+        #th.nn.utils.clip_grad_norm_(self.params_vs, self.max_grad_norm_vs)
+class ConstrainedOptimizer(VSLOptimizer):
+    def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, lr_value_system=None, lr_lambda=None, initial_lambda=1.0,sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
+        super(ConstrainedOptimizer, self).__init__(params_gr=params_gr, params_vs=params_vs, n_values=n_values, lr=lr, lr_grounding=lr_grounding, lr_value_system=lr_value_system, sub_optimizer_class=sub_optimizer_class, **optimizer_kwargs)
+        self.lr_lambda = lr_lambda if lr_lambda is not None else lr_value_system / 10.0
+        self.initial_lambda = initial_lambda
+        
+        self.set_state({'time': 0, 'lambdas': [th.tensor(initial_lambda, requires_grad=True) for _ in range(n_values)]})
+        
+
+    def get_state(self, copy=False):
+        return {'time': self.time, 'lambdas': [l.clone().detach() if copy else l for l in self.lambdas]}
+
+    def set_state(self, state):
+        if state is not None:
+            self.time = state['time']
+            self.lambdas = state['lambdas']
+        else:
+            self.time = 0
+            self.lambdas = [th.tensor(self.initial_lambda, requires_grad=True)  for vi in range(self.n_values)]
+        print("LAGRANGE MULTIPLIERS AT SET STATE:", self.lambdas)
+        self.optim_lambdas = th.optim.Adam(self.lambdas, lr=self.lr_lambda, betas=(0.5,0.9))
+
+    def zero_grad(self, set_to_none = True):
+        super().zero_grad(set_to_none)
+        self.optim_lambdas.zero_grad(set_to_none)
+        
+    def step(self, closure=None):
+        self.time += 1
+        self.optimx.step()
+        self.optimy.step()
+        self.optim_lambdas.step()
+        return None
+
+
+class ConstrainedLoss(VSLCustomLoss):
+    def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
+                         vs_apply_on_misclassified_pairs_only=False, lambda_decay=1e-9, minimal_lambda=0.1, confident_penalty=0, cluster_similarity_penalty=0.00):
+        super().__init__(model_indifference_tolerance, gr_apply_on_misclassified_pairs_only, 
+                         vs_apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty)
+        
+        self.lagrange_multipliers = None
+        self.best_gr_losses = None
+        self.best_accuracies = None
+        self.minimal_lambda = minimal_lambda
+
+        self.lambda_decay = lambda_decay
+    def set_parameters(self, params_gr, params_vs, optim_state):
+        super().set_parameters(params_gr, params_vs)
+        self.lagrange_multipliers = optim_state['lambdas']
+        for lm in self.lagrange_multipliers:
+            lm.requires_grad = True
+    
+    def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
+        
+        with th.no_grad():
+            if self.best_gr_losses is None:
+                self.best_gr_losses = [float('inf')]*len(self.gr_loss_per_vi)
+                self.best_accuracies = [0.0]*len(self.last_accuracy_gr)
+            for vi in range(len(self.gr_loss_per_vi)):
+                gr_loss_vi = float(self.gr_loss_per_vi[vi].detach().numpy())* renormalization
+                gr_acc_vi = float(self.last_accuracy_gr[vi])
+
+                if gr_acc_vi > self.best_accuracies[vi]:
+                    """if self.lambdas_when_best is None:
+                        self.lambdas_when_best = [float(self.lagrange_multipliers[vi].detach().numpy())]*len(self.gr_loss_per_vi)
+                    else:
+                        if gr_loss_vi == self.best_gr_losses[vi]:
+                            self.lambdas_when_best[vi] = min(float(self.lagrange_multipliers[vi].detach().numpy()), self.lambdas_when_best[vi])
+                        else:
+                            self.lambdas_when_best[vi] = float(self.lagrange_multipliers[vi].detach().numpy())"""
+                    self.best_accuracies[vi] = gr_acc_vi
+                    self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
+                    
+        real_loss = self.vs_loss * renormalization + sum(self.lagrange_multipliers[vi] * self.gr_loss_per_vi[vi] * renormalization for vi in range(len(self.gr_loss_per_vi)))
+        
+        b = real_loss.backward()
+        with th.no_grad():
+            for vi,l in enumerate(self.lagrange_multipliers):
+                l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization - self.best_gr_losses[vi]), min=0.0).detach() + ((self.lagrange_multipliers[vi].detach()*self.lambda_decay) if self.lagrange_multipliers[vi] > self.minimal_lambda and self.last_accuracy_gr[vi] >= self.best_accuracies[vi] else 0.0)
+            
+        
+        return b
+class SobaOptimizer(VSLOptimizer):
+    def __init__(self, params_gr, params_vs, n_values, lr=0.001, lr_grounding=None, lr_value_system=None, use_lr_decay = True, max_grad_norm_gr=1000.0, max_grad_norm_vs=1000.0, **optimizer_kwargs):
+
+        
+        super(SobaOptimizer, self).__init__(params_gr=params_gr,params_vs=params_vs,lr=lr, n_values=n_values, lr_grounding=lr_grounding, lr_value_system=lr_value_system,
+                                         sub_optimizer_class=th.optim.Adam, **optimizer_kwargs)
+        
+        self.vt = [th.zeros_like(p) for p in params_gr]
+        self.use_lr_decay = use_lr_decay
+        self.lr_value_system = lr_value_system
+        self.lr_grounding = lr_grounding
+        self.max_grad_norm_gr = max_grad_norm_gr
+        self.max_grad_norm_vs = max_grad_norm_vs
         self.time = 0
         self.set_state({'time': self.time, 'vt': self.vt})
 
@@ -873,7 +1035,7 @@ class SobaOptimizer(th.optim.Optimizer):
         self.optimy.zero_grad(set_to_none)
         self.optimv.zero_grad(set_to_none)
 
-    def get_state(self):
+    def get_state(self,copy=False):
         
         return {'time': self.time, 'vt': self.vt}
     
@@ -884,11 +1046,11 @@ class SobaOptimizer(th.optim.Optimizer):
             self.optimv = th.optim.SGD(state['vt'], lr=self.lr_value_system)
 
             if self.use_lr_decay:
-                self.optimx_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimx)
-                self.optimy_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimy)
-                self.optimv_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(epoch+self.time+1), optimizer=self.optimv)
+                self.optimx_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(self.time+1), optimizer=self.optimx)
+                self.optimy_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(self.time+1), optimizer=self.optimy)
+                self.optimv_scheduler = th.optim.lr_scheduler.LambdaLR(lr_lambda=lambda epoch: 1/np.sqrt(self.time+1), optimizer=self.optimv)
         if state is None:
-            self.set_state({'time': 0, 'vt': [th.zeros_like(p) for p in self.wx]}) 
+            self.set_state({'time': 0, 'vt': [th.zeros_like(p) for p in self.params_gr]}) 
     def step(self, closure=None):
         self.optimx.step()
         self.optimy.step()
@@ -898,56 +1060,48 @@ class SobaOptimizer(th.optim.Optimizer):
         if self.use_lr_decay:
             self.optimx_scheduler.step()
             self.optimy_scheduler.step()
-            self.optimv_scheduler.step() #TODO: This is an issue. After loading a checkpoint, the scheduler is not updated...
+            self.optimv_scheduler.step() 
         return None
 
 
-class SobaLoss(CrossEntropyRewardLossCluster):
-    # TODO: Use efficient version when it is known the grounding does not depend on VS
 
-    def __init__(self, model_indifference_tolerance, apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00, max_grad_norm_gr=1000.0, max_grad_norm_vs=1000.0):
-        super().__init__(model_indifference_tolerance, apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty)
-        
-        self.max_grad_norm_gr = max_grad_norm_gr
-        self.max_grad_norm_vs = max_grad_norm_vs
-
-    def set_parameters(self, wx,wy,vt):
-        self.wx = wx
-        self.wy = wy
+class SobaLoss(VSLCustomLoss):
+    def set_parameters(self, params_gr, params_vs, vt, **kwargs):
+        super().set_parameters(params_gr, params_vs)
         self.vt = vt
 
     
-    """def forward(self, gr_loss, vs_loss):
-        self.gr_loss = gr_loss
-        self.vs_loss = vs_loss
-        return gr_loss + vs_loss"""
     def parameters(self, recurse = True):
-        return self.wx + self.wy + self.vt
+        return self.params_gr + self.params_vs + self.vt
     
-    def forward(self, preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, fragment_pairs_per_agent_id = None, preferences_per_agent_id = None, preferences_per_agent_id_with_grounding = None, value_system_network_per_cluster = None, grounding_per_value_per_cluster = None):
-        lossMetrics = super().forward(preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, fragment_pairs_per_agent_id, preferences_per_agent_id, preferences_per_agent_id_with_grounding, value_system_network_per_cluster, grounding_per_value_per_cluster)
-        self.gr_loss = lossMetrics.loss[1]
-        self.vs_loss = lossMetrics.loss[0]
-        return lossMetrics
     
-    def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
+    
+    def gradients(self, scalar_loss: th.Tensor, renormalization: float, fast=False) -> None:
         """Dtheta, Dv, Dlambda = gradients_soba(
             self.wx, self.wy, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
         )"""
-        Dtheta, Dv, Dlambda = gradients_soba_eff(
-            self.wx, self.wy, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
-        )
-        assert len(Dtheta) == len(self.wx)
-        assert len(Dlambda) == len(self.wy)
-        assert len(self.vt) == len(Dv)
-        for p,pref in zip(self.wx, Dtheta):
-            p.grad = pref
+        if fast:
+            # This is when the derivative of gr_loss does not depend on self.params_vs. This makes convergence an
+            Dtheta, Dv, Dlambda = gradients_soba_eff(
+                self.params_gr, self.params_vs, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
+            )
+        else:
+            Dtheta, Dv, Dlambda = gradients_soba(
+                self.params_gr, self.params_vs, self.vt, self.gr_loss*renormalization, self.vs_loss*renormalization
+            )
+            assert len(self.vt) == len(Dv)
+            
+            with th.no_grad():
+                for p,pref in zip(self.vt, Dv):
+                    p.grad = pref
+        assert len(Dtheta) == len(self.params_gr)
+        assert len(Dlambda) == len(self.params_vs)
+        with th.no_grad():
+            for p,pref in zip(self.params_gr, Dtheta):
+                p.grad = pref
         
-        for p,pref in zip(self.wy, Dlambda):
-            p.grad = pref
-        for p,pref in zip(self.vt, Dv):
-            p.grad = pref
-        
-        th.nn.utils.clip_grad_norm_(self.wx, self.max_grad_norm_gr)
-        th.nn.utils.clip_grad_norm_(self.wy, self.max_grad_norm_vs)
-        th.nn.utils.clip_grad_norm_(self.vt, self.max_grad_norm_gr)
+            for p,pref in zip(self.params_vs, Dlambda):
+                p.grad = pref
+            
+        th.nn.utils.clip_grad_norm_(self.params_gr, self.max_grad_norm_gr)
+        th.nn.utils.clip_grad_norm_(self.params_vs, self.max_grad_norm_vs)

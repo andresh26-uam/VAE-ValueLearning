@@ -11,6 +11,9 @@ from typing import Any, List, Mapping, Self, Tuple
 from colorama import Fore, init
 import dill
 from matplotlib import pyplot as plt
+import matplotlib
+import matplotlib.axes
+from ordered_set import OrderedSet
 from sklearn.manifold import MDS
 
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, LinearAlignmentLayer
@@ -18,15 +21,15 @@ from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, Conv
 import numpy as np
 import torch as th
 
-from utils import CHECKPOINTS
+from defines import CHECKPOINTS
 
 
 from scipy.spatial.distance import euclidean
 
 ASSIGNMENT_CHECKPOINTS = os.path.join(CHECKPOINTS, "historic_assignments/")
 
-def assign_colors_matplotlib(num_coordinates):
-    colors = plt.cm.tab10.colors  # Use the 'tab10' colormap from matplotlib
+def assign_colors_matplotlib(num_coordinates,color_map=plt.cm.tab10.colors):
+    colors =  color_map # Use the 'tab10' colormap from matplotlib
     assigned_colors = [colors[i % len(colors)] for i in range(num_coordinates)]
     return assigned_colors
 def assign_colors(num_coordinates):
@@ -75,7 +78,7 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
                 assignment_per_value = assignment_aid_to_gr_cluster[aid]
 
                 model_params = {param for param in model.parameters()}
-                gNetworksParams = set()
+                gNetworksParams = OrderedSet()
                 for vi in range(len(model.get_learned_align_function())):
                     grNetwork: LinearAlignmentLayer = grounding_per_value_per_cluster[vi][assignment_per_value[vi]]
                     th.testing.assert_close(model.get_network_for_value(vi).state_dict(), grNetwork.state_dict()) # TODO: New class of base clustering vsl algorithm? or gather per grounding and then per agent?
@@ -93,9 +96,9 @@ def check_assignment_consistency(grounding_per_value_per_cluster, value_system_n
                     )
                     raise AssertionError(error_message)
                 
-        model_params = {param for model in reward_models_per_aid.values() for param in model.parameters()}
+        model_params = OrderedSet(param for model in reward_models_per_aid.values() for param in model.parameters())
         
-        network_params = {param for cluster in grounding_per_value_per_cluster for network in cluster for param in network.parameters()}
+        network_params = OrderedSet(param for cluster in grounding_per_value_per_cluster for network in cluster for param in network.parameters())
         network_params.update({param for network in value_system_network_per_cluster for param in network.parameters()})
         assert model_params.issubset(network_params)
 
@@ -115,12 +118,23 @@ def extract_cluster_coordinates(inter_cluster_dists, used_clusters):
         D[idx_i][idx_j] = dij
         D[idx_j][idx_i] = dij  # Make it symmetric
 
-    if n > 0:
+    if n > 2:
         # MDS to compute positions most likely to be sort of the same separations...
         embedding = MDS(n_components=2, max_iter=10000,dissimilarity='precomputed', random_state=42, eps=1e-12)
         coords = embedding.fit_transform(D)
 
         print("Computed distances between embedded points:\n")
+        calculated_distances = dict()
+        for (i, j), target_dist in inter_cluster_dists.items():
+            idx_i, idx_j = index_map[i], index_map[j]
+            point_i, point_j = coords[idx_i], coords[idx_j]
+            dist = euclidean(point_i, point_j)
+            print(f"Nodes ({i}, {j}): Target = {target_dist:.4f}, Actual = {dist:.4f}")
+            calculated_distances[(i,j)] = dist
+    elif n > 1:
+        # Case 2 clusters
+        nodes = used_clusters
+        coords = np.array([[0, -list(inter_cluster_dists.values())[0]/2.0], [0, list(inter_cluster_dists.values())[0]/2.0]])
         calculated_distances = dict()
         for (i, j), target_dist in inter_cluster_dists.items():
             idx_i, idx_j = index_map[i], index_map[j]
@@ -134,7 +148,7 @@ def extract_cluster_coordinates(inter_cluster_dists, used_clusters):
         coords = [[0,0]]
         calculated_distances = []
     return nodes,coords, calculated_distances
-
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 class ClusterAssignment():
     def __init__(self, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction] = {},
                  grounding_per_value_per_cluster: List[List[th.nn.Module]] = [],
@@ -180,7 +194,25 @@ class ClusterAssignment():
             aggregation_on_gr_scores = ClusterAssignment._default_aggr_on_gr_scores
         self.aggregation_on_gr_scores = aggregation_on_gr_scores
 
-
+    @property
+    def n_agents(self):
+        return len(self.reward_model_per_agent_id)
+    def get_value_system(self, cluster_idx):
+        vs =tuple(self.value_system_per_cluster[cluster_idx].get_alignment_layer()[0][0].detach().numpy().tolist())
+        if len(self.assignment_vs[cluster_idx]) > 0:
+            if self.reward_model_per_agent_id[self.assignment_vs[cluster_idx][0]].get_learned_align_function() != vs:
+                raise ValueError(f"Value system {vs} does not match the learned alignment function of the agents in cluster {cluster_idx}.")
+        return vs
+    
+    def average_value_system(self):
+        average_vs = np.array([0.0]*self.n_values)
+        for cluster_idx in range(len(self.assignment_vs)):
+            if len(self.assignment_vs[cluster_idx]) > 0:
+                vs = np.array(list(self.get_value_system(cluster_idx)))*len(self.assignment_vs[cluster_idx])
+                average_vs += vs
+        average_vs /= self.n_agents
+        return average_vs
+                
     def get_remove_env(self):
         example_model = self.reward_model_per_agent_id[list(self.reward_model_per_agent_id.keys())[0]]
         env_state = example_model.remove_env()
@@ -238,7 +270,9 @@ class ClusterAssignment():
         return 1.0 - np.mean(np.asarray(intra_cluster_distances))  # TODO. Representativity is the average of the negated intra cluster distances, but these are distances from each agent to its cluster, change that at vs_score().
     
     
-    def plot_vs_assignments(self, save_path=None):
+    def plot_vs_assignments(self, save_path="demo.pdf", show = False,subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
+                            values_names=None, 
+                                                   values_short_names=None, fontsize=12):
         """
         Plots the agents-to-value-system (VS) assignments in 2D space.
         Each cluster is represented as a point, and agents are plotted around the cluster center
@@ -259,9 +293,24 @@ class ClusterAssignment():
         
         cluster_colors_vs = assign_colors_matplotlib(self.L)
         
-        fig, ax = plt.subplots(figsize=(10, 10))
-        max_intra_dist = max(max(self.intra_discordances_vs ), 1.0)
-        for idx,(x, y)  in enumerate(cluster_positions):
+        fig, ax = plt.subplots(figsize=(12, 12))
+        max_intra_dist = max(max(self.intra_discordances_vs), 1.0)
+        sum_radius = 0
+        max_radius = 0
+
+        print(cluster_idx_to_label,cluster_positions)
+
+        for idx, (x, y) in enumerate(cluster_positions):
+            cluster_idx = cluster_idx_to_label[idx]
+            if len(calculated_distances) > 0:
+                min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
+            else:
+                min_inter_dist = 1.0
+            # Plot a circumference around the cluster center
+            radius = min_inter_dist / 2.0
+            max_radius = max(radius, max_radius)
+
+        for idx, (x, y) in enumerate(cluster_positions):
             cluster_idx = cluster_idx_to_label[idx]
             # Plot cluster center
             ax.scatter(x, y, color=cluster_colors_vs[idx], label=f"Cluster {cluster_idx}", s=100, zorder=3, marker='x')
@@ -269,40 +318,78 @@ class ClusterAssignment():
             # Plot agents around the cluster center
             agents = self.assignment_vs[cluster_idx]
             intra_distances = self.intra_discordances_vs_per_agent
-            if len (calculated_distances) > 0:
-                min_inter_dist = min(d for (i,j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
+            if len(calculated_distances) > 0:
+                min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
             else:
                 min_inter_dist = 1.0
+
             # Plot a circumference around the cluster center
-            radius =  min_inter_dist / 2.0
+            radius = min_inter_dist / 2.0
             circle = plt.Circle((x, y), radius, color=cluster_colors_vs[idx], fill=False, linestyle='--', alpha=0.5)
             ax.add_artist(circle)
-
+            sum_radius = radius + sum_radius
+            
             for agent_idx, agent in enumerate(agents):
                 # Place agents around the cluster center based on intra-cluster distances
-                agent_angle = 2 * np.pi * agent_idx / len(agents) 
-                
-                agent_x = x + ((intra_distances[agent]/max_intra_dist)*min_inter_dist/2 )* np.cos(agent_angle)
-                agent_y = y + ((intra_distances[agent]/max_intra_dist)*min_inter_dist/2) * np.sin(agent_angle)
+                agent_angle = 2 * np.pi * agent_idx / len(agents)
+                agent_x = x + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.cos(agent_angle)
+                agent_y = y + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.sin(agent_angle)
                 ax.scatter(agent_x, agent_y, color=cluster_colors_vs[idx], s=50, zorder=2)
-                #ax.text(agent_x, agent_y, agent, fontsize=8, ha="center", va="center", zorder=4)
 
-        # Add labels and legend
+            # Plot histogram of intra-cluster distances
+            cluster_intra_distances = [intra_distances[agent] for agent in agents]
+            
+
+            hist_ax = inset_axes(ax,
+                    width=max_radius*2*subfig_multiplier,                     # inch
+                    height=max_radius*2*subfig_multiplier,                    # inch
+                    bbox_transform=ax.transData, # data coordinates
+                    bbox_to_anchor=(x+radius +fontsize/200,y),    # data coordinates
+                    loc='center left')
+            
+            # Add the histogram at the transformed position
+            
+            # Plot histogram of intra-cluster distances
+            hist_ax.hist(cluster_intra_distances, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
+            hist_ax.set_xlim(0, 1.0)
+            hist_ax.set_ylim(0, len(self.assignment_vs[cluster_idx]))
+
+            hist_ax.tick_params(axis='both', which='major', labelsize=fontsize)
+            hist_ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+            hist_ax.set_yticks(np.linspace(0, len(self.assignment_vs[cluster_idx]), num=8, endpoint=True, dtype=np.int64))
+            hist_ax.set_title(f"{[float('{0:.3f}'.format(t)) for t in self.get_value_system(cluster_idx)]}", fontsize=fontsize)
+
+            # Add a pie chart for value system weights
+            pie_ax: matplotlib.axes.Axes = inset_axes(ax,
+                                width=max_radius * 2 * subfig_multiplier,  # inch
+                                height=max_radius * 2 * subfig_multiplier,  # inch
+                                bbox_transform=ax.transData,  # data coordinates
+                                bbox_to_anchor=(x - radius - fontsize/200, y),  # data coordinates
+                                loc='center right')
+
+            value_system_weights = self.get_value_system(cluster_idx)
+            pie_ax.pie(value_system_weights, labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [values_short_names[i] for i in range(len(value_system_weights))],
+                       autopct='%f', 
+                       startangle=90, colors=assign_colors_matplotlib(self.n_values,color_map=values_color_map), textprops={'fontsize': fontsize})
+            pie_ax.set_title("Value System", fontsize=fontsize)  # Add labels and legend
         ax.set_title("Agents-to-VS Assignments")
         ax.set_xlabel("X-axis")
         ax.set_ylabel("Y-axis")
         ax.set_aspect('equal', adjustable='datalim')  
-        ax.set_xlim(min(-0.5, ax.get_xlim()[0]), max(0.5, ax.get_xlim()[1]))
-        ax.set_ylim(min(-0.5, ax.get_ylim()[0]), max(0.5, ax.get_ylim()[1]))  
+        ax.set_xlim(min(-3*max_radius*1.3 - fontsize/200, ax.get_xlim()[0]), max(3*max_radius*1.3 + fontsize/200, ax.get_xlim()[1]))
+        ax.set_ylim(min(-3*max_radius*1.0, ax.get_ylim()[0]), max(3*max_radius*1.0, ax.get_ylim()[1]))  
         ax.legend()
-        ax.grid(True)
+        ax.grid(False)
 
         # Save or show the plot
-        if save_path:
+       
+        if save_path is not None:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, bbox_inches="tight")
-        else:
+        if show or save_path is None:
             plt.show()
-        
+        plt.close()
+
     def _default_aggr_on_gr_scores(x):
                 return np.mean(x, axis=0)
     def copy(self):
@@ -411,10 +498,10 @@ class ClusterAssignment():
         return ClusterAssignment._conciseness(self.inter_discordances_vs, self.L)
 
     def combined_cluster_score_gr(self, conciseness_if_K_is_1=None):
-        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr[i], self.K[i], conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else [1.0]*self.n_values) for i in range(self.n_values)]
+        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr[i], self.K[i], conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else None) for i in range(self.n_values)]
 
     def combined_cluster_score_vs(self,conciseness_if_L_is_1=None):
-        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs, self.L, conciseness_if_1_cluster=conciseness_if_L_is_1 if conciseness_if_L_is_1 is not None else 1.0)
+        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs, self.L, conciseness_if_1_cluster=conciseness_if_L_is_1)
 
     def combined_cluster_score_gr_aggr(self, conciseness_if_K_is_1=None):
         return self.combined_cluster_score_gr(conciseness_if_K_is_1) # TODO FUTURE WORK aggregation of combined scores is this, or dividing the aggregation?
@@ -437,12 +524,12 @@ class ClusterAssignment():
                 result += f"  Single VS Cluster: {cluster_idx}\n"
             else:
                 if len(agents) > 0:
-                    result += f"  Cluster {cluster_idx} {self.reward_model_per_agent_id[agents[0]].get_learned_align_function()}: {agents}\n"
+                    result += f"  Cluster {cluster_idx} {self.get_value_system(cluster_idx=cluster_idx)}: {agents}\n"
         result += "\nScores:\n"
         try:
             result += f"Representativities (Grounding): {self.representativities_gr()}\n"
             result += f"Concisenesses (Grounding): {self.concisenesses_gr()}\n"
-            result += f"Combined Scores (Grounding): {self.combined_cluster_score_gr()}\n"
+            result += f"Combined Scores (Grounding): {self.combined_cluster_score_gr_aggr()}\n"
             result += f"Representativity (Value System): {self.representativity_vs()}\n"
             result += f"Conciseness (Value System): {self.conciseness_vs()}\n"
             result += f"Combined Score (Value System): {self.combined_cluster_score_vs()}\n"
@@ -468,38 +555,11 @@ class ClusterAssignment():
         dist = set([tuple(cluster) for cluster in self.assignment_vs])
         return dist
 
-class ClusterAssignmentMemory():
-
-    # TODO: Cambiar a lista de soluciones no dominadas (que sea más grande que antes...)
-    # TODO: Escoger y ordenar por mejor ratio, que sea mejorable (ver abajo) teniendo en cuenta que
-        # TODO: La conciseness de los de 1 es la mejor conciseness hasta ahora (DE TODOS LOS QUE SE HAN INTENTADO INSERTAR > 1).
-        # TODO: si no hay un referente, se escoje representativity, no queda otra. 
-        # Asi ya son directamente comparables sin la movida del if, que no es un orden.
-    # TODO: Cuando coges uno para mejorar:
-        # TODO: si mejora a sí mismo, se borra el anterior.
-        # TODO: si no mejora tras un ciclo de epochs, se marca como no mejorable.
-        # TODO: Si todos son no mejorables, se escoge con mutaciones.
-        # Hasta end de iteraciones.
-    # Cuando insertas, borrar a todos los que la solución domine. Si hay dos assignment iguales no dominados, no pasa nada.
-    # Si domina a algunas pero no a todas...?
-    pass
     
 
 
 class ClusterAssignmentMemory():
 
-    # TODO: Cambiar a lista de soluciones no dominadas (que sea más grande que antes...) CHECK
-    # TODO: Escoger y ordenar por mejor ratio, que sea mejorable (ver abajo) teniendo en cuenta que
-        # TODO: La conciseness de los de 1 es la mejor conciseness hasta ahora (DE TODOS LOS QUE SE HAN INTENTADO INSERTAR > 1).
-        # TODO: si no hay un referente, se escoje representativity, no queda otra. 
-        # Asi ya son directamente comparables sin la movida del if, que no es un orden.
-    # TODO: Cuando coges uno para mejorar:
-        # TODO: si mejora a sí mismo, se borra el anterior.
-        # TODO: si no mejora tras un ciclo de epochs, se marca como no mejorable.
-        # TODO: Si todos son no mejorables, se escoge con mutaciones.
-        # Hasta end de iteraciones.
-    # Cuando insertas, borrar a todos los que la solución domine. Si hay dos assignment iguales no dominados, no pasa nada.
-    # Si domina a algunas pero no a todas...?
     def __init__(self, max_size, n_values):
         self.max_size = max_size
         self.memory: List[ClusterAssignment] = []
@@ -555,7 +615,9 @@ class ClusterAssignmentMemory():
         gr_score_dif = x.aggregation_on_gr_scores(difs) # TODO... maybe aggregation on scores should be modelled outside these two?
         #pareto
         vs_score_dif = x.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs) - y.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs)
-       
+        #repr_dif = x.representativity_vs() - y.representativity_vs()
+        #TODO: TEST PARETO TAKING INTO ACOUNT REPRESENTATIVITY TOO?
+        # TODO: test firefighters or others that have 1 cluster sometimes to see if this works.
         pareto_score = 0.0
         lexic_diff = 0.0
         if (gr_score_dif > 0.0 and vs_score_dif >= 0.0) or (gr_score_dif >= 0.0 and vs_score_dif > 0.0):
@@ -600,66 +662,127 @@ class ClusterAssignmentMemory():
         
         
         #lexico_diffs = []
-        #equivalent_assignments = []
+        equivalent_assignments = []
         pareto_diffs = []
 
         dominated_indices = []
         changes_made = False
-
+        is_dominated = False
         
         for i in range(len(self.memory)):
             cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=True,) 
-            #eq = self.memory[index].is_equivalent_assignment(assignment)
-            print("comparing assignments")
-            print(self.memory[i])
-            print("VS---------------")
-            print(assignment)
-            print(cmp_lexico, cmp_pareto)
-            #equivalent_assignments.append(eq)
+            eq = self.memory[i].is_equivalent_assignment(assignment)
+            equivalent_assignments.append(eq)
             #lexico_diffs.append(cmp_lexico)
             pareto_diffs.append(cmp_pareto)
 
-            if cmp_pareto < 0:
+            if cmp_pareto < 0 and eq:
                 changes_made= True
                 
-                dominated_indices.append(i)
+                dominated_indices.append(i) # Dominated that also equivalent
             elif cmp_pareto > 0:
                 assignment.explored = True
-                return 
+                is_dominated = True
 
         # Insert the new one if all the pareto diffs are less than or equal than 0 (pareto dominates someone or is non dominated).
         pareto_diffs = np.array(pareto_diffs)
-        if all(pareto_diffs <= 0):
+        if all(pareto_diffs <= 0) or (not is_dominated) or (is_dominated and equivalent_assignments.count(True) == 0) or all([self.memory[i].explored]):
             changes_made = True
             self.memory.append(assignment)  
         
         # Eliminate the assignments in the dominated_indices
         for idx in sorted(dominated_indices, reverse=True):
+                changes_made=True
                 self.memory.pop(idx)  
         if changes_made:
-            self.memory = sorted(self.memory, key=cmp_to_key(lambda x, y: self.compare_assignments(x,y,lexicographic_vs_first=True)[0]), reverse=True)
             if len(self.memory) > self.max_size:
-                e = self.memory.pop()
+                self.clean_memory(exhaustive=False)
+            self.sort_lexicographic(lexicographic_vs_first=True)
         assignment.explored = not changes_made
         return
+
+    def clean_memory(self, exhaustive=True):
+        pareto_dominated_counts = [0] * len(self.memory)
+        equivalent_assignments = [False] * len(self.memory)
+
+        # Calculate pareto dominance and equivalence
+        
+        for i in reversed(list(range(len(self.memory)))):
+            eliminated_i = False
+            for j in range(len(self.memory)):
+                if eliminated_i:
+                    continue
+                if i != j:
+                    _, cmp_pareto = self.compare_assignments(self.memory[j], self.memory[i], lexicographic_vs_first=True)
+                    eq = self.memory[i].is_equivalent_assignment(self.memory[j])
+                    if cmp_pareto > 0:
+                        
+                        pareto_dominated_counts[i] += 1
+                    if eq:
+                        equivalent_assignments[i] = True
+                    if (cmp_pareto > 0 and eq) or (cmp_pareto > 0 and self.memory[i].explored): 
+                        # This is always something that needs to be done.
+                        # If explored and is dominated, out, no interest in this solution.
+                        # In any case, an equivalent assignment that is dominated is not useful.
+                        self.memory.pop(i)
+                        pareto_dominated_counts.pop(i)
+                        equivalent_assignments.pop(i)
+                        eliminated_i = True
+            # Also try to eliminate any element that is pareto dominated and equivalent to another
+            # This is not compulsory, though. 
+            if not eliminated_i:
+                if exhaustive or len(self.memory) > self.max_size:
+                    if pareto_dominated_counts[i] > 0 and equivalent_assignments[i]:
+                        self.memory.pop(i)
+                        pareto_dominated_counts.pop(i)
+                        equivalent_assignments.pop(i)
+                        if not exhaustive:
+                            return
+        
+        # If still too many examples:
+        # Eliminate the one pareto dominated by the most others, or all if exhaustive (only at the end or under all examples explored)
+        if len(self.memory) > self.max_size:
+            max_dominated_count = max(pareto_dominated_counts)
+            while max_dominated_count > 0:
+                idx_to_remove = pareto_dominated_counts.index(max_dominated_count)
+                self.memory.pop(idx_to_remove)
+                pareto_dominated_counts.pop(idx_to_remove)
+                equivalent_assignments.pop(idx_to_remove)
+                max_dominated_count = max(pareto_dominated_counts)
+                if not exhaustive:
+                    break
+            
+        # If all are pareto dominated, remove the one with less representativity.
+        if len(self.memory) > self.max_size:
+            sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x:x[1].representativity_vs(), reverse=False)]
+            
+            worst = sorted_indices[0]
+            self.memory.pop(worst)  
+        return
+        
+    def sort_lexicographic(self, lexicographic_vs_first=False):
+        self.memory = sorted(self.memory, key=cmp_to_key(lambda x, y: self.compare_assignments(x,y,lexicographic_vs_first=lexicographic_vs_first)[0]), reverse=True)
+    
     def get_random_weighted_assignment(self, override_explore=True)-> ClusterAssignment:
         non_explored_assignments = [assignment for assignment in self.memory if not assignment.explored]
         if len(non_explored_assignments) == 0:
+            self.clean_memory(exhaustive=True)
             return None
         weights = list(reversed([i+1 for i in range(len(non_explored_assignments))])) # TODO: do something w.r.t. scores? But again K = 1...
         assignment_index =  random.choices(list(range(len(non_explored_assignments))), weights=weights, k=1)[0]
         assignment = non_explored_assignments[assignment_index]
         return self.assignment_with_env(assignment, override_explore)
 
-    def get_best_assignment(self, override_explore=False) -> ClusterAssignment:
-        if not override_explore:
-            return self.assignment_with_env(assignment=self.memory[0], override_explore=False)
+    def get_best_assignment(self, consider_only_unexplored=False, override_explore_state=True) -> ClusterAssignment:
+        if not consider_only_unexplored:
+            return self.assignment_with_env(assignment=self.memory[0], override_explore=override_explore_state)
         non_explored_assignments = [assignment for assignment in self.memory if not assignment.explored]
         if len(non_explored_assignments) == 0:
+            self.clean_memory(exhaustive=True)
             return None
         
         assignment = non_explored_assignments[0]
-        return self.assignment_with_env(assignment, override_explore)
+        return self.assignment_with_env(assignment, override_explore_state)
     
     def assignment_with_env(self, assignment: ClusterAssignment, override_explore) -> ClusterAssignment:
         if override_explore:

@@ -6,8 +6,7 @@ import numpy as np
 import scipy
 from seals import base_envs
 from imitation.data import types, rollout
-from imitation.util import logger as imit_logger
-from imitation.util import util
+
 
 from colorama import Fore, Style, init
 

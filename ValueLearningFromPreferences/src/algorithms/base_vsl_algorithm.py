@@ -701,6 +701,10 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                 use_probabilistic_reward=use_probabilistic_reward, forward_groundings=forward_groundings, info=info)
 
             predicted_r_np = predicted_r.detach().cpu().numpy()
+            if align_func is not None:
+                if used_align_func != align_func:
+                    raise ValueError("Fatal error: The alignment function used in the reward calculation is not the same as the one provided.")
+
             if forward_groundings:
                 ret = predicted_r, predicted_r_np, predicted_r_gr, (predicted_r_gr.detach().cpu().numpy() if predicted_r_gr is not None else None)
             else:

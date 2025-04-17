@@ -8,23 +8,26 @@ from typing import Any, Dict, List, Tuple, Union
 import numpy as np
 import torch
 
+from defines import CHECKPOINTS, TRAIN_RESULTS_PATH
 from envs.firefighters_env import FeatureSelectionFFEnv
 from envs.tabularVAenv import TabularVAMDP
-from generate_dataset import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, parse_dtype_torch
+from generate_dataset import parse_dtype_torch
+from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH
 from src.algorithms.clustering_utils import ClusterAssignment
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL, load_historic_assignments
-from src.algorithms.preference_based_vsl_lib import SobaOptimizer
-from src.data import VSLPreferenceDataset
+from src.algorithms.preference_based_vsl_lib import ConstrainedOptimizer, SobaOptimizer
+from src.dataset_processing.data import VSLPreferenceDataset
+from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
-from utils import CHECKPOINTS, filter_none_args, load_json_config, TRAIN_RESULTS_PATH
+from src.utils import filter_none_args, load_json_config
 
 
 import gymnasium as gym
 
 
-def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics):
+def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args):
     # Save the training results to a file
     os.makedirs(TRAIN_RESULTS_PATH, exist_ok=True)
 
@@ -32,7 +35,8 @@ def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, 
         dill.dump({
             "target_agent_and_vs_to_learned_ones": target_agent_and_vs_to_learned_ones,
             "reward_net_pair_agent_and_vs": reward_net_pair_agent_and_vs,
-            "metrics": metrics
+            "metrics": metrics,
+            "parser_args": parser_args,
         }, f)
 
     print(
@@ -43,13 +47,16 @@ def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple]
     # Load the training results from a file
     file_path = os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl")
     if not os.path.exists(file_path):
-        raise FileNotFoundError(
-            f"Training results file not found: {file_path}")
+        matching_files = [f for f in os.listdir(TRAIN_RESULTS_PATH) if f.startswith(experiment_name)]
+        if not matching_files:
+            raise FileNotFoundError(
+                f"Training results file not found: {file_path} or any file starting with {experiment_name}")
+        file_path = os.path.join(TRAIN_RESULTS_PATH, matching_files[0])
     with open(file_path, 'rb') as f:
         data = dill.load(f)
     print(f"Training results loaded from {file_path}")
 
-    returned_tuple = [None, None, None]
+    returned_tuple = [None, None, None,None]
     for k in data.keys():
         if k == "target_agent_and_vs_to_learned_ones":
             returned_tuple[0] = data[k]
@@ -57,6 +64,8 @@ def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple]
             returned_tuple[1] = data[k]
         elif k == "metrics":
             returned_tuple[2] = data[k]
+        elif k == "parser_args":
+            returned_tuple[3] = data[k]
     returned_tuple = tuple(returned_tuple)
     # Get the saved best assignments per iteration
     historic_assignments = load_historic_assignments(experiment_name, limit=20)
@@ -177,6 +186,8 @@ def parse_optimizer_data(environment_data, alg_config):
         opt_class = torch.optim.Adam
     elif opt_class == 'Soba':
         opt_class = SobaOptimizer
+    elif opt_class == 'lagrange':
+        opt_class = ConstrainedOptimizer
     else:
         raise ValueError(f"Unknown optimizer class {opt_class}")
     return opt_kwargs, opt_class

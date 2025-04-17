@@ -13,19 +13,17 @@ import numpy as np
 import torch
 
 from envs.routechoiceApollo import RouteChoiceEnvironmentApollo, RouteChoiceEnvironmentApolloComfort
-from generate_dataset import calculate_dataset_save_path, compare_trajectories, create_dataset, load_preferences, load_trajectories, save_preferences, save_trajectories
-from src.data import TrajectoryWithValueSystemRews
+from src.dataset_processing.trajectories import compare_trajectories
+from src.dataset_processing.data import TrajectoryWithValueSystemRews
 
-from utils import filter_none_args, load_json_config
+from src.dataset_processing.datasets import create_dataset
+from src.dataset_processing.preferences import load_preferences, save_preferences
+from src.dataset_processing.trajectories import load_trajectories, save_trajectories
+from src.dataset_processing.utils import DEFAULT_SEED, GROUNDINGS_PATH
+from src.utils import filter_none_args, load_json_config
 import gymnasium as gym
 
-DATASETS_PATH = 'datasets/complete_datasets'
-TRAJECTORIES_DATASETS_PATH = 'datasets/trajectories/'
-COMPARISONS_DATASETS_PATH = 'datasets/comparisons/'
-GROUNDINGS_PATH = 'groundings/'
 PICKLED_ENVS = 'datasets/environments/'
-DEFAULT_SEED = 26
-
 
 def parse_dtype_numpy(choice):
     ndtype = np.float32
@@ -48,8 +46,6 @@ def parse_dtype_torch(choice):
         ndtype = torch.float64
     return ndtype
 
-
-USEINFO = True
 
 
 def parse_args():
@@ -110,7 +106,7 @@ def parse_args():
                            default=False, help='Retrain experts')"""
     """env_group.add_argument('-appr', '--approx_expert', action='store_true',
                            default=False, help='Approximate expert')"""
-    env_group.add_argument('-reps', '--reward_epsilon', default=1e-4, type=float,
+    env_group.add_argument('-reps', '--reward_epsilon', default=0.0, type=float,
                            help='Distance between the cummulative rewards of each pair of trajectories for them to be considered as equal in the comparisons')
 
     return parser.parse_args()
@@ -141,7 +137,6 @@ if __name__ == "__main__":
     extra_kwargs = {}
     if parser_args.environment == 'apollo':
         extra_kwargs = {
-            'random_state': parser_args.seed,
             'test_size': parser_args.test_size
         }
 
@@ -171,32 +166,19 @@ if __name__ == "__main__":
                               society_data=society_data, environment_data=environment_data, dtype=parser_args.dtype)
 
     if parser_args.gen_preferences:
-        for i, agid in enumerate(environment.agent_ids_train):
-            ag = {'agent_id': agid, 'name': agid, 'value_system': 'unk', 'data': defaultdict(
-                lambda: 'nd'), 'grounding': list(groundings.keys())}
-            all_trajs_ag_train = load_trajectories(
-                dataset_name=dataset_name+'_train', ag=ag, society_data=society_data, environment_data=environment_data, override_dtype=parser_args.dtype)
-            idxs = []
-            agent_preferences = environment.preferences_per_agent_id[int(agid)]
-            preferences_by_idx_pair = {}
-            preferences_per_grounding_per_idx_pair = {vi: {} for vi in range(len(environment_data['basic_profiles']))}
-            for (t1id, t2id), choice in agent_preferences.items():
-                try:
-                    it1, t1 = next((it, t) for it, t in enumerate(
-                        all_trajs_ag_train) if t.infos[0]['state'] == t1id)
-                    it2, t2 = next((it, t) for it, t in enumerate(
-                        all_trajs_ag_train) if t.infos[0]['state'] == t2id)
-                except StopIteration:
-                    continue
-                idxs.append(it1)
-                idxs.append(it2)
-                preferences_by_idx_pair[(
-                    it1, it2)] = agent_preferences[(t1id, t2id)]
-            
-            for vi in range(len(environment_data['basic_profiles'])):
-                agent_grounding_preferences = environment.preferences_grounding_per_agent_id[vi][int(agid)]
-            
-                for (t1id, t2id), choice in agent_grounding_preferences.items():
+
+        for iads, agent_ids_ in enumerate([environment.agent_ids_train, environment.agent_ids_test]):
+            suffix = '_train' if iads== 0 else '_test'
+            for i, agid in enumerate(agent_ids_):
+                ag = {'agent_id': agid, 'name': agid, 'value_system': 'unk', 'data': defaultdict(
+                    lambda: 'nd'), 'grounding': list(groundings.keys())}
+                all_trajs_ag_train = load_trajectories(
+                    dataset_name=dataset_name+suffix, ag=ag, society_data=society_data, environment_data=environment_data, override_dtype=parser_args.dtype)
+                idxs = []
+                agent_preferences = environment.preferences_per_agent_id[int(agid)]
+                preferences_by_idx_pair = {}
+                preferences_per_grounding_per_idx_pair = {vi: {} for vi in range(len(environment_data['basic_profiles']))}
+                for (t1id, t2id), choice in agent_preferences.items():
                     try:
                         it1, t1 = next((it, t) for it, t in enumerate(
                             all_trajs_ag_train) if t.infos[0]['state'] == t1id)
@@ -204,39 +186,55 @@ if __name__ == "__main__":
                             all_trajs_ag_train) if t.infos[0]['state'] == t2id)
                     except StopIteration:
                         continue
-                    #idxs.append(it1)
-                    #idxs.append(it2)
-                    preferences_per_grounding_per_idx_pair[vi][(
-                        it1, it2)] = agent_grounding_preferences[(t1id, t2id)]
+                    idxs.append(it1)
+                    idxs.append(it2)
+                    preferences_by_idx_pair[(
+                        it1, it2)] = agent_preferences[(t1id, t2id)]
                 
-            discounted_sums = np.zeros_like(idxs, dtype=np.float64)
-
-            discounted_sums_per_grounding = np.zeros(
-                (len(environment_data['basic_profiles']), discounted_sums.shape[0]), dtype=np.float64)
-            for i in range((len(all_trajs_ag_train))):
-
-                discounted_sums[i] = imitation.data.rollout.discounted_sum(
-                    all_trajs_ag_train[i].vs_rews, gamma=alg_config['discount_factor_preferences'])
-                for vi in range(discounted_sums_per_grounding.shape[0]):
-                    list_ = []
-
-                    if environment_data['is_contextual']:
-                        environment.contextualize(
-                            all_trajs_ag_train[i].infos[0]['context'])
-                    for o, no, a, info in zip(all_trajs_ag_train[i].obs[:-1], all_trajs_ag_train[i].obs[1:], all_trajs_ag_train[i].acts, all_trajs_ag_train[i].infos):
-
-                        list_.append(environment.get_reward_per_align_func(align_func=tuple(
-                            environment.basic_profiles[vi]), action=a, info=info, obs=o, next_obs=no, custom_grounding=None))
-
+                for vi in range(len(environment_data['basic_profiles'])):
+                    agent_grounding_preferences = environment.preferences_grounding_per_agent_id[vi][int(agid)]
+                
+                    for (t1id, t2id), choice in agent_grounding_preferences.items():
+                        try:
+                            it1, t1 = next((it, t) for it, t in enumerate(
+                                all_trajs_ag_train) if t.infos[0]['state'] == t1id)
+                            it2, t2 = next((it, t) for it, t in enumerate(
+                                all_trajs_ag_train) if t.infos[0]['state'] == t2id)
+                        except StopIteration:
+                            continue
+                        #idxs.append(it1)
+                        #idxs.append(it2)
+                        preferences_per_grounding_per_idx_pair[vi][(
+                            it1, it2)] = agent_grounding_preferences[(t1id, t2id)]
                     
-                    np.testing.assert_almost_equal(
-                        np.asarray(list_, dtype=parser_args.dtype), all_trajs_ag_train[i].v_rews[vi], decimal=5 if parser_args.dtype in [np.float32, np.float64] else 3)
+                discounted_sums = np.zeros_like(idxs, dtype=np.float64)
 
-                    discounted_sums_per_grounding[vi, i] = imitation.data.rollout.discounted_sum(
-                        all_trajs_ag_train[i].v_rews[vi], gamma=alg_config['discount_factor_preferences'])
+                discounted_sums_per_grounding = np.zeros(
+                    (len(environment_data['basic_profiles']), discounted_sums.shape[0]), dtype=np.float64)
+                for i in range((len(all_trajs_ag_train))):
 
-            save_preferences(idxs=idxs, discounted_sums=discounted_sums, discounted_sums_per_grounding=discounted_sums_per_grounding, dataset_name=dataset_name+'_train', epsilon=parser_args.reward_epsilon, environment_data=environment_data, society_data=society_data, ag=ag,
-                             real_preference=preferences_by_idx_pair, real_grounding_preference=preferences_per_grounding_per_idx_pair)
+                    discounted_sums[i] = imitation.data.rollout.discounted_sum(
+                        all_trajs_ag_train[i].vs_rews, gamma=alg_config['discount_factor_preferences'])
+                    for vi in range(discounted_sums_per_grounding.shape[0]):
+                        list_ = []
+
+                        if environment_data['is_contextual']:
+                            environment.contextualize(
+                                all_trajs_ag_train[i].infos[0]['context'])
+                        for o, no, a, info in zip(all_trajs_ag_train[i].obs[:-1], all_trajs_ag_train[i].obs[1:], all_trajs_ag_train[i].acts, all_trajs_ag_train[i].infos):
+
+                            list_.append(environment.get_reward_per_align_func(align_func=tuple(
+                                environment.basic_profiles[vi]), action=a, info=info, obs=o, next_obs=no, custom_grounding=None))
+
+                        
+                        np.testing.assert_almost_equal(
+                            np.asarray(list_, dtype=parser_args.dtype), all_trajs_ag_train[i].v_rews[vi], decimal=5 if parser_args.dtype in [np.float32, np.float64] else 3)
+
+                        discounted_sums_per_grounding[vi, i] = imitation.data.rollout.discounted_sum(
+                            all_trajs_ag_train[i].v_rews[vi], gamma=alg_config['discount_factor_preferences'])
+
+                save_preferences(idxs=idxs, discounted_sums=discounted_sums, discounted_sums_per_grounding=discounted_sums_per_grounding, dataset_name=dataset_name+suffix, epsilon=parser_args.reward_epsilon, environment_data=environment_data, society_data=society_data, ag=ag,
+                                real_preference=preferences_by_idx_pair, real_grounding_preference=preferences_per_grounding_per_idx_pair)
 
     # TEST preferences load okey.
     print("TESTING DATA COHERENCE. It is safe to stop this program now...")
@@ -297,8 +295,3 @@ if __name__ == "__main__":
     dataset_test = create_dataset(parser_args, config, society_data, train_or_test='test',
                                   default_groundings=society_config[parser_args.environment]['groundings'])
 
-    path = os.path.join(
-        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
-    os.makedirs(path, exist_ok=True)
-    dataset_train.save(os.path.join(path, "dataset_train.pkl"))
-    dataset_test.save(os.path.join(path, "dataset_test.pkl"))

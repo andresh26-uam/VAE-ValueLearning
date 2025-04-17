@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from copy import deepcopy
 import itertools
 import os
@@ -18,25 +19,27 @@ from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 import torch as th
 
 
-from src.algorithms.preference_based_vsl_lib import BasicRewardTrainerVSL, CrossEntropyRewardLossCluster, PrefLossClasses, PreferenceModelClusteredVSL, SobaLoss, SobaOptimizer, calculate_accuracies, discordance, likelihood_x_is_target
+from src.algorithms.preference_based_vsl_lib import BasicRewardTrainerVSL, ConstrainedLoss, BaseVSLClusterRewardLoss, PrefLossClasses, PreferenceModelClusteredVSL, SobaLoss, SobaOptimizer, VSLCustomLoss, VSLOptimizer, calculate_accuracies, discordance, likelihood_x_is_target
 from src.algorithms.utils import PolicyApproximators, convert_nested_list_to_tuple, mce_partition_fh
-from src.data import VSLPreferenceDataset
+from src.dataset_processing.data import VSLPreferenceDataset
 from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy, ValueSystemLearningPolicy
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, TrainingModes
 
 from imitation.algorithms import preference_comparisons
 
-
+from ordered_set import OrderedSet
 
 
 class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
     
-    def __init__(self, preference_model: PreferenceModelClusteredVSL, loss: CrossEntropyRewardLossCluster, rng: np.random.RandomState, batch_size=32,
+    def __init__(self, preference_model: PreferenceModelClusteredVSL, loss: BaseVSLClusterRewardLoss, rng: np.random.RandomState, batch_size=32,
                  minibatch_size: int = None, epochs: int = 1, refining_steps_after_cluster_assignment: int = 1, initial_refining_steps: int = 50,
                  initial_exploration_rate: float = 0.5, qualitative_cluster_assignment: bool = True, custom_logger: imit_logger.HierarchicalLogger = None, 
                  regularizer_factory: Optional[imitation.regularization.regularizers.RegularizerFactory] = None,
                  optim_cls: th.optim.Optimizer = th.optim.AdamW,
                  inner_k_fold_validation_divisions_per_epoch = None,
+                 debug_mode=__debug__,
+                 use_logger=False,
                  optim_kwargs=dict(lr=1e-3, weight_decay=0.0)):
         """Trains a reward model for a society of agents (clusterizing groundings of values into certain number of clusters)
 
@@ -64,8 +67,9 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         self.initial_refining_steps = initial_refining_steps
         self.initial_exploration_rate = initial_exploration_rate
         self.qualitative_cluster_assignment = qualitative_cluster_assignment
+        self.use_logger = use_logger
 
-
+        self.debug_mode = debug_mode
         self.use_full_batch = batch_size == "full"
         # if batchsize = '5-fold' or '3-fold' or '224-fold', put the numbers in self.k_cross_validation
         if inner_k_fold_validation_divisions_per_epoch == 1:
@@ -76,11 +80,12 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         if self.use_full_batch:
             batch_size = 32  # dummy initialization
 
-        super().__init__(preference_model=preference_model, loss=loss, rng=rng, batch_size=batch_size, minibatch_size=minibatch_size,
+        super().__init__(preference_model=preference_model, loss=loss, n_values=self.n_values, rng=rng, batch_size=batch_size, minibatch_size=minibatch_size,
                          epochs=epochs, custom_logger=custom_logger, regularizer_factory=regularizer_factory, optim_cls=optim_cls, optim_kwargs=optim_kwargs)
         self._preference_model: PreferenceModelClusteredVSL
         self.cluster_colors = None
         self.cluster_colors_vs = None
+        self._logger=custom_logger
 
     def reset_training(self):
         #self.assignment_scores_gr = [{} for vi in range(self.n_values)]
@@ -110,10 +115,11 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
     def train(self, dataset: VSLPreferenceDataset, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction], grounding_per_value_per_cluster: List[List[th.nn.Module]], value_system_per_cluster: List[Any] = [], running_assignment_vs=None, running_assignment_gr=None, epoch_multiplier: float = 1.0, global_iteration=None, global_iterations=None, starting_assignment: ClusterAssignment = 'start_random', assignment_ranking: ClusterAssignmentMemory=None) -> None:
         
-
+        
         if self.use_full_batch:
             self.batch_size = len(dataset)
             self.minibatch_size = self.batch_size
+            
         if self.k_mini_folds is not None:
             cross_splits = dataset.k_fold_split(self.k_mini_folds)
         else:
@@ -140,13 +146,13 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         check_optimizer_consistency(reward_model_per_agent_id, self.optim)
         check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
                         
-        with self.logger.accumulate_means("reward"):
+        with (self.logger.accumulate_means("reward") if self.use_logger is not None else nullcontext()) :
             
             for ie, epoch_num in enumerate(tqdm.tqdm(range(epochs), desc="Training reward model")):
                 
                 for cvi, (mini_train_dataset, mini_val_dataset) in enumerate(cross_splits):
                     # we train a single model with K splits train_set, val_set
-                    # in the outer loop a normal K fold cross validation is done.
+                    # in the outer loop a normal K fold cross validation TODO(not working as intended, the insertion is only after averaging evaluations. These are very slow on the number of agents, need another method)
                     # Then, the test set evaluation.
                     self.batch_size = min(len(mini_train_dataset), general_batch_size)
                     
@@ -161,7 +167,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
                     self.batch_size = general_batch_size # recover original batch size that is used for training 
                     
-                    with self.logger.add_key_prefix(f"ep-{epoch_num}-cv-{cvi}"):
+                    with (self.logger.add_key_prefix(f"ep-{epoch_num}-cv-{cvi}") if self.use_logger is not None else nullcontext()):
                         train_loss = 0.0
                         accumulated_size = 0
                         self.optim.zero_grad()
@@ -207,7 +213,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             DIDASTEP = False
                             
                             for r in range(self.refining_steps_after_cluster_assignment if epoch_num > 0 and starting_assignment!='start_random' else self.initial_refining_steps):
-                                with self.logger.add_key_prefix("train"):
+                                with (self.logger.add_key_prefix("train")if self.use_logger is not None else nullcontext()):
 
                                     
                                     loss, metrics = self._training_inner_loop(
@@ -237,14 +243,14 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                 accumulated_size += len(fragment_pairs)
                                 if accumulated_size >= self.batch_size:
                                     # self.optim.step()
-                                    if __debug__:
+                                    if self.debug_mode:
                                         pass
                                         #params_gr = {p for clust in grounding_per_value_per_cluster for c in clust for p in c.parameters()}
                                         #print("GR1", list(params_gr)[-1])
                                         #state_dict_old = {aid: deepcopy(rc.state_dict()) for aid, rc in reward_model_per_agent_id.items()}
 
                                     self.optim.step()
-                                    if __debug__:
+                                    if self.debug_mode:
                                         
                                     
                                         #state_dict_new = {aid: rc.state_dict() for aid, rc in reward_model_per_agent_id.items()}
@@ -315,6 +321,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
                         end_full_batch = time.time()
                         print("Epoch Training time: ", end_full_batch - st_full_batch)
+                        self.logger.dump()
                         # Clustering evaluation. Registering the best configurations.
                         st = time.time()
                         #aggs_permutation = np.random.permutation(list(reward_model_per_agent_id.keys()))                            
@@ -322,7 +329,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             assert hasattr(self.optim, 'get_state')
                             if hasattr(self.optim, 'get_state'):
                                 
-                                new_assignment.optimizer_state = deepcopy(self.optim.get_state())
+                                new_assignment.optimizer_state = self.optim.get_state(copy=True)
                                 
                             val_data_loader : data_th.DataLoader
                             data = [data for data in val_data_loader]
@@ -331,44 +338,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                 zip(*data)
                             )
                             
-                            new_assignment_copy, val_fragment_pairs_per_aid, val_preferences_per_aid, val_preference_grounding_per_aid, val_fragment_idxs_per_aid = self.cluster_assignment(
-                                fragment_pairs=val_fragment_pairs, preferences=val_preferences, preferences_with_grounding=val_preferences_per_grounding,
-                                reward_model_per_agent_id=reward_model_per_agent_id, grounding_per_value_per_cluster=grounding_per_value_per_cluster,
-                                running_assignment_gr=running_assignment_gr, running_assignment_vs=running_assignment_vs,
-                                agent_ids=val_agent_ids,
-                                value_system_network_per_cluster=value_system_per_cluster, use_assignment=new_assignment)
-                                
-                      
-                            
-                            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
-                                                                                              fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None, add_probs_per_agent=True)
-
-                            
-                            vs_intra_dist, vs_inter_dist, vs_intra_per_agent, vs_inter_per_cluster_pair = self.vs_discordances(reward_model_per_agent_id=reward_model_per_agent_id,
-                                                                                vs_cluster_to_agents_assignment=new_assignment_copy.assignment_vs, 
-                                                                                value_system_per_cluster=value_system_per_cluster,
-                                                                                fragment_pairs_per_aid=val_fragment_pairs_per_aid,
-                                                                                probs_per_aid=probs_vs_per_agent, preferences_per_aid=val_preferences_per_aid)
-                            
-                            # Grounding distances
-                            gr_intra_dist, gr_inter_dist, gr_intra_per_agent, gr_inter_per_cluster_pair = self.gr_discordances(grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
-                                                                                gr_cluster_to_agents_assignment=new_assignment_copy.assignment_gr, 
-                                                                                fragment_pairs_per_aid= val_fragment_pairs_per_aid,
-                                                                                preferences_grounding_per_aid= val_preference_grounding_per_aid, 
-                                                                                probs_gr_per_agent=probs_gr_per_agent)
-                            
-                            
-                            new_assignment_copy.inter_discordances_gr = gr_inter_dist
-                            new_assignment_copy.intra_discordances_gr = gr_intra_dist
-                            
-                            new_assignment_copy.intra_discordances_gr_per_agent = gr_intra_per_agent
-                            new_assignment_copy.inter_discordances_gr_per_cluster_pair = gr_inter_per_cluster_pair
-
-                            new_assignment_copy.inter_discordances_vs = vs_inter_dist
-                            new_assignment_copy.intra_discordances_vs = vs_intra_dist
-
-                            new_assignment_copy.intra_discordances_vs_per_agent = vs_intra_per_agent
-                            new_assignment_copy.inter_discordances_vs_per_cluster_pair = vs_inter_per_cluster_pair
+                            new_assignment_copy = self.evaluate_assignment_with_dataset(new_assignment, val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, running_assignment_vs, running_assignment_gr)
                             
                         
                                 
@@ -383,7 +353,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                         check_optimizer_consistency(reward_model_per_agent_id, self.optim)
                         starting_assignment = None # to not use it again
                         
-                        if train_loss > 0.0 and DIDASTEP and grad_norm >= 1e-7 and __debug__:
+                        if train_loss > 0.0 and DIDASTEP and grad_norm >= 1e-7 and self.debug_mode:
                             counter_fails = 0
                             """for aid in reward_model_per_agent_id.keys():
                                 
@@ -407,7 +377,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             
                             print("NEW BEST", "old_scores: ", old_assignment.vs_score, old_assignment.gr_score, "new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
                             print(assignment_ranking)
-                            if __debug__:
+                            if self.debug_mode:
                                 time.sleep(5)
                         elif old_assignment is not None:
                             print("Inserted before: ", old_assignment.vs_score, old_assignment.gr_score,"new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
@@ -423,23 +393,74 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
         # after training all the epochs,
         # record also the final value in a separate key for easy access.
-        keys = list(self.logger.name_to_value.keys())
-        outer_prefix = self.logger.get_accumulate_prefixes()
-        for key in keys:
-            # existing prefix + accum_means ctx
-            base_path = f"{outer_prefix}reward/"
-            # mean for last epoch
-            epoch_path = f"mean/{base_path}ep-{epoch_num}-cv-{len(cross_splits)-1}/"
-            final_path = f"{base_path}final/"  # path to record last epoch
-            pattern = rf"{epoch_path}(.+)"
-            if regex_match := re.match(pattern, key):
-                (key_name,) = regex_match.groups()
-                val = self.logger.name_to_value[key]
-                new_key = f"{final_path}{key_name}"
-                self.logger.record(new_key, val)
+        if self.use_logger:
+            keys = list(self.logger.name_to_value.keys())
+            outer_prefix = self.logger.get_accumulate_prefixes()
+            for key in keys:
+                # existing prefix + accum_means ctx
+                base_path = f"{outer_prefix}reward/"
+                # mean for last epoch
+                epoch_path = f"mean/{base_path}ep-{epoch_num}-cv-{len(cross_splits)-1}/"
+                final_path = f"{base_path}final/"  # path to record last epoch
+                pattern = rf"{epoch_path}(.+)"
+                if regex_match := re.match(pattern, key):
+                    (key_name,) = regex_match.groups()
+                    val = self.logger.name_to_value[key]
+                    new_key = f"{final_path}{key_name}"
+                    self.logger.record(new_key, val)
         
 
         return assignment_ranking
+
+    def evaluate_assignment_with_dataset(self, new_assignment: ClusterAssignment, val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids, reward_model_per_agent_id=None, grounding_per_value_per_cluster=None, value_system_per_cluster=None, running_assignment_vs=None, running_assignment_gr=None):
+        
+        with th.no_grad():
+            reward_model_per_agent_id = new_assignment.reward_model_per_agent_id if reward_model_per_agent_id is None else reward_model_per_agent_id
+            grounding_per_value_per_cluster = new_assignment.grounding_per_value_per_cluster if grounding_per_value_per_cluster is None else grounding_per_value_per_cluster
+            value_system_per_cluster = new_assignment.value_system_per_cluster if value_system_per_cluster is None else value_system_per_cluster
+            running_assignment_vs = new_assignment.agent_to_vs_cluster_assignments if running_assignment_vs is None else running_assignment_vs
+            running_assignment_gr = new_assignment.agent_to_gr_cluster_assignments if running_assignment_gr is None else running_assignment_gr
+
+            
+            new_assignment_copy, val_fragment_pairs_per_aid, val_preferences_per_aid, val_preference_grounding_per_aid, val_fragment_idxs_per_aid = self.cluster_assignment(
+                                    fragment_pairs=val_fragment_pairs, preferences=val_preferences, preferences_with_grounding=val_preferences_per_grounding,
+                                    reward_model_per_agent_id=reward_model_per_agent_id, grounding_per_value_per_cluster=grounding_per_value_per_cluster,
+                                    running_assignment_gr=running_assignment_gr, running_assignment_vs=running_assignment_vs,
+                                    agent_ids=val_agent_ids,
+                                    value_system_network_per_cluster=value_system_per_cluster, use_assignment=new_assignment)
+                                    
+            print("Cluster assigned.")              
+                                
+            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
+                                                                                                fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None, add_probs_per_agent=True)
+
+                                
+            vs_intra_dist, vs_inter_dist, vs_intra_per_agent, vs_inter_per_cluster_pair = self.vs_discordances(reward_model_per_agent_id=reward_model_per_agent_id,
+                                                                                    vs_cluster_to_agents_assignment=new_assignment_copy.assignment_vs, 
+                                                                                    value_system_per_cluster=value_system_per_cluster,
+                                                                                    fragment_pairs_per_aid=val_fragment_pairs_per_aid,
+                                                                                    probs_per_aid=probs_vs_per_agent, preferences_per_aid=val_preferences_per_aid)
+                                
+                                # Grounding distances
+            gr_intra_dist, gr_inter_dist, gr_intra_per_agent, gr_inter_per_cluster_pair = self.gr_discordances(grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
+                                                                                    gr_cluster_to_agents_assignment=new_assignment_copy.assignment_gr, 
+                                                                                    fragment_pairs_per_aid= val_fragment_pairs_per_aid,
+                                                                                    preferences_grounding_per_aid= val_preference_grounding_per_aid, 
+                                                                                    probs_gr_per_agent=probs_gr_per_agent)
+                                
+                                
+            new_assignment_copy.inter_discordances_gr = gr_inter_dist
+            new_assignment_copy.intra_discordances_gr = gr_intra_dist
+                                
+            new_assignment_copy.intra_discordances_gr_per_agent = gr_intra_per_agent
+            new_assignment_copy.inter_discordances_gr_per_cluster_pair = gr_inter_per_cluster_pair
+
+            new_assignment_copy.inter_discordances_vs = vs_inter_dist
+            new_assignment_copy.intra_discordances_vs = vs_intra_dist
+
+            new_assignment_copy.intra_discordances_vs_per_agent = vs_intra_per_agent
+            new_assignment_copy.inter_discordances_vs_per_cluster_pair = vs_inter_per_cluster_pair
+            return new_assignment_copy
 
    
     def gr_discordances(self, grounding_per_value_per_cluster, gr_cluster_to_agents_assignment, fragment_pairs_per_aid, preferences_grounding_per_aid, probs_gr_per_agent):
@@ -473,16 +494,15 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             assert len(gr_intra_cluster_distances[vi]) <= len(preferences_grounding_per_aid.keys())
                 if len(assigned_c1) > 0 and len(assigned_c2) > 0:
                     fragments_on_v1c1c2 = [*fragments_on_each_cluster[vi][c1] , *fragments_on_each_cluster[vi][c2]]
-                    q_div, acc_div = self._preference_model.diversity_grounding(fragments=fragments_on_v1c1c2,
+                    acc_div = self._preference_model.conciseness_pairwise_gr(fragments=fragments_on_v1c1c2,
                                                                         grounding1=grounding_per_value_per_cluster[vi][c1],
                                                                         grounding2=grounding_per_value_per_cluster[vi][c2],
-                                                                        value_idx=vi,indifference_tolerance=self.loss.model_indifference_tolerance,
-                                                                        difference_function = self.loss.loss_func
+                                                                        value_idx=vi,indifference_tolerance=self.loss.model_indifference_tolerance
                                                                         )
                                             
                     gr_inter_cluster_distances[vi].append(acc_div) 
                     gr_inter_dist_for_each_pair_of_clusters[vi][(c1,c2)] = acc_div
-                    print(f"VALUE {vi}, Clusters {c1}, {c2}. Inter cluster distances: Quantitative {q_div}, Qualitative {acc_div}" )
+                    print(f"VALUE {vi}, Clusters {c1}, {c2}. Inter cluster distance: {acc_div}" )
                 else:
                     if len(assigned_c1) == 0:
                         print(f"VALUE {vi}, Cluster {c1} is of length 0, skipping" )
@@ -526,21 +546,22 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     #assert len(fragments_on_each_cluster_per_aid[ci]) == len(preferences_on_each_cluster_per_aid[ci])
                     #assert len(fragments_on_each_cluster_per_aid[ci]) == len(assigned_ci)
                     #assert all(np.allclose(preferences[fragment_idxs_per_aid[aid]], preferences_per_aid[aid]) for aid in assigned_ci)
-                    assert all(np.allclose(reward_model_per_agent_id[aid].get_learned_align_function(), value_system_per_cluster[ci].get_alignment_layer()[0])  for aid in assigned_ci)
+                    #assert all(np.allclose(reward_model_per_agent_id[aid].get_learned_align_function(), value_system_per_cluster[ci].get_alignment_layer()[0])  for aid in assigned_ci)
                 
                     
             if len(assigned_c1) > 0 and len(assigned_c2) > 0:
                 fragments_on_each_cluster_c1c2 = fragments_on_each_cluster_per_aid[c1] | fragments_on_each_cluster_per_aid[c2]
                 
-                q_div_vs, ql_div_vs = self._preference_model.diversity_vs(fragments=fragments_on_each_cluster_c1c2,
+                ql_div_vs = self._preference_model.conciseness_pairwise_vs(fragments=fragments_on_each_cluster_c1c2,
                                                                     reward_net_per_aid=reward_model_per_agent_id,
                                                                     vs1=value_system_per_cluster[c1],
                                                                     vs2=value_system_per_cluster[c2],indifference_tolerance=self.loss.model_indifference_tolerance,
-                                                                    difference_function = self.loss.loss_func)
+                                                                    #difference_function = self.loss.loss_func
+                                                                    )
                                         
                 vs_inter_cluster_distances.append(ql_div_vs)
                 vs_inter_dist_for_each_pair_of_clusters[(c1,c2)] = ql_div_vs
-                print(f"VS Clusters {c1} {c2}. Inter cluster distances: Quantitative {q_div_vs}, Qualitative {ql_div_vs}" )
+                print(f"VS Clusters {c1} {c2}. Inter cluster distances: Qualitative {ql_div_vs}" )
             else:
                 if len(assigned_c1) == 0:
                     print(f"VS Cluster {c1} is of length 0, skipping" )
@@ -593,10 +614,11 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
             value_system_network_per_cluster=value_system_network_per_cluster,
             grounding_per_value_per_cluster=grounding_per_value_per_cluster) # These two provide penalties
 
-        loss_vs, loss_gr = output.loss
-        self.logger.record("loss_gr", loss_gr.item())
+        loss_vs, loss_gr, loss_gr_per_vi = output.loss
+        if self.use_logger:
+            self.logger.record("loss_gr", loss_gr.item())
 
-        self.logger.record("loss_vs", loss_vs.item())
+            self.logger.record("loss_vs", loss_vs.item())
 
         self.last_metrics = output.metrics
 
@@ -607,19 +629,18 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
             loss = loss_vs
         else:   
             #raise NotImplementedError("Simultaneous not tested yet")
-            loss =  loss_vs  + loss_gr # TODO simultaneous
-            # TODO implement bi level optimization
-            
+            loss =  loss_vs  + loss_gr
+        
+        if self.use_logger:
+            for name, value in output.metrics.items():
+                if isinstance(value, dict):
+                    for v_key, v in value.items():
 
-        for name, value in output.metrics.items():
-            if isinstance(value, dict):
-                for v_key, v in value.items():
+                        self.logger.record(name + '-' + str(v_key), v)
+                else:
+                    self.logger.record(name, value)
 
-                    self.logger.record(name + '-' + str(v_key), v)
-            else:
-                self.logger.record(name, value)
-
-        if __debug__:
+        if self.debug_mode:
             networks_to_train = []
             for aid in reward_model_per_agent_id.keys():
                 for vi in range(self.n_values):
@@ -728,25 +749,20 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                 rew_aid.set_network_for_value(
                                     value_id=vi, network=network_vi_c)
                                 rew_aid.set_alignment_function(vi_profile)
-                                # TODO: probably not needed.
-                                rew_aid.set_mode(self.train_mode)
-                            probs_vs, _ = self._preference_model.forward(fragments_aid_temp_dict, custom_model_per_agent_id=rew_aid, fragment_pairs_idxs_per_agent_id=agent_fragments_idxs_temp_dict, only_for_alignment_function=vi_profile)
-                            gt_probs = agent_preferences_with_grounding[:, vi]
-                            # adaptive slope is not necessary if only want the maximum likelihood. In other contexts, though, it could be useful to better discern the probability differences.
-                            aid_likelihood_per_value_per_cluster[vi][icluster] = likelihood_x_is_target(probs_vs.detach(), gt_probs.detach(), mode='th', slope=0.3, adaptive_slope=False, qualitative_mode=self.qualitative_cluster_assignment, indifference_tolerance=self.loss.model_indifference_tolerance)
-                            #gr_intra_cluster_distances[vi][icluster] = self.loss.loss_func(probs_vs, gt_probs)
+                                rew_aid.set_mode(TrainingModes.VALUE_GROUNDING_LEARNING)
+                                probs_vs, _ = self._preference_model.forward(fragments_aid_temp_dict, custom_model_per_agent_id=rew_aid, fragment_pairs_idxs_per_agent_id=agent_fragments_idxs_temp_dict, only_for_alignment_function=vi_profile)
+                                gt_probs = agent_preferences_with_grounding[:, vi]
+                                aid_likelihood_per_value_per_cluster[vi][icluster] = likelihood_x_is_target(probs_vs.detach(), gt_probs.detach(), mode='th', slope=0.3, adaptive_slope=False, qualitative_mode=self.qualitative_cluster_assignment, indifference_tolerance=self.loss.model_indifference_tolerance)
+                                
                            
-                    # MAX ASsIgnMent
-                    # assigned_cluster = int(np.argmax(aid_likelihood_per_value_per_cluster[vi]))
-                    # PROBABILISTIC ASSIGNMENT # TOO stochastic, but seems to kind of converge to something... Still dependent on initial conditions...
-                    # assigned_cluster = int(np.random.choice(a=len(aid_likelihood_per_value_per_cluster[vi]), p=aid_likelihood_per_value_per_cluster[vi]/np.sum(aid_likelihood_per_value_per_cluster[vi])))
-                    # TODO: Try epsilon greedy. Should be good enough ?
+                    
                         if len(grounding_per_value_per_cluster[vi]) > 1:
                             assigned_cluster = np.argmax(
                                 aid_likelihood_per_value_per_cluster[vi])
                                 
                             rew_aid.set_network_for_value(
                                 value_id=vi, network=grounding_per_value_per_cluster[vi][assigned_cluster])
+                            rew_aid.set_mode(self.train_mode)
                         else:
                             assigned_cluster = 0
                     
@@ -755,7 +771,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                         gr_cluster_to_agents_assignment[vi][assigned_cluster].append(aid)
                         """examples_indexes_per_value_per_cluster[vi][assigned_cluster].extend(
                         agent_fragments_idxs)"""
-                        if len(grounding_per_value_per_cluster[vi]) > 1 or __debug__:
+                        if len(grounding_per_value_per_cluster[vi]) > 1 and self.debug_mode:
                             print(
                                 f"ESTIMATED CPrefs FOR {aid} and Value {vi_profile}", end='(')
                             
@@ -777,7 +793,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             # adaptive slope is not necessary if only want the maximum likelihood. In other contexts, though, it could be useful to better discern the probability differences.
                             aid_likelihood_per_vs_cluster[ivscluster] = likelihood_x_is_target(probs_vs.detach(), gt_probs.detach(), mode='th', slope=0.3, adaptive_slope=False, qualitative_mode=self.qualitative_cluster_assignment, indifference_tolerance=self.loss.model_indifference_tolerance)
                             
-                    if len(value_system_network_per_cluster) > 1 or __debug__:
+                    if len(value_system_network_per_cluster) > 1:
                         assigned_cluster_vs = np.argmax(
                                 aid_likelihood_per_vs_cluster)
                     else:
@@ -787,13 +803,14 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     agent_to_vs_cluster_assignments[aid] = assigned_cluster_vs
                     running_assignment_vs[aid] = assigned_cluster_vs                    
                     vs_cluster_to_agents_assignment[assigned_cluster_vs].append(aid)
-                    if len(value_system_network_per_cluster) > 1:
+                    if len(value_system_network_per_cluster) > 1 and self.debug_mode:
                         for i, value in enumerate(aid_likelihood_per_vs_cluster):
                             color = self.cluster_colors_vs[i]
                             print(f"{color}{value}{Style.RESET_ALL}", end=', ')
                         print(f"), {self.cluster_colors_vs[assigned_cluster_vs]} {rew_aid.get_learned_align_function()} - VS Cluster {assigned_cluster_vs}: {aid_likelihood_per_vs_cluster[assigned_cluster_vs]}, {Style.RESET_ALL}")
                     
-                check_assignment_consistency(grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr, running_assignment_vs, reward_model_per_agent_id
+                if self.debug_mode:
+                    check_assignment_consistency(grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr, running_assignment_vs, reward_model_per_agent_id
                                                  )
         if not using_assignment:
             gr_cluster_to_agents_assignment = convert_nested_list_to_tuple(gr_cluster_to_agents_assignment)
@@ -828,33 +845,33 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
             
                 
-                
-            check_assignment_consistency(grounding_per_value_per_cluster=assignment.grounding_per_value_per_cluster,
-                                          assignment_aid_to_gr_cluster=assignment.agent_to_gr_cluster_assignments,
-                                          assignment_aid_to_vs_cluster=assignment.agent_to_vs_cluster_assignments,
-                                          reward_models_per_aid=assignment.reward_model_per_agent_id,
-                                          value_system_network_per_cluster=assignment.value_system_per_cluster)
-            check_assignment_consistency(grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr, running_assignment_vs, reward_model_per_agent_id
-                                                 )
-            check_assignment_consistency(assignment.grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr
-                                         , running_assignment_vs, assignment.reward_model_per_agent_id
-                                                 )
+            if self.debug_mode:    
+                check_assignment_consistency(grounding_per_value_per_cluster=assignment.grounding_per_value_per_cluster,
+                                            assignment_aid_to_gr_cluster=assignment.agent_to_gr_cluster_assignments,
+                                            assignment_aid_to_vs_cluster=assignment.agent_to_vs_cluster_assignments,
+                                            reward_models_per_aid=assignment.reward_model_per_agent_id,
+                                            value_system_network_per_cluster=assignment.value_system_per_cluster)
+                check_assignment_consistency(grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr, running_assignment_vs, reward_model_per_agent_id
+                                                    )
+                check_assignment_consistency(assignment.grounding_per_value_per_cluster,value_system_network_per_cluster,running_assignment_gr
+                                            , running_assignment_vs, assignment.reward_model_per_agent_id
+                                                    )
                                                  
 
         return assignment, fragment_pairs_per_aid, preferences_per_aid, preference_grounding_per_aid, fragment_idxs_per_aid
     def update_training_networks_from_assignment(self, reward_model_per_agent_id: Dict[str, AbstractVSLRewardFunction], grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment: ClusterAssignment, prev_agent_to_vs=None, prev_agent_to_gr=None):
-        
-        check_assignment_consistency(grounding_per_value_per_cluster=reference_assignment.grounding_per_value_per_cluster,value_system_network_per_cluster=reference_assignment.value_system_per_cluster,
-                                     assignment_aid_to_gr_cluster=reference_assignment.agent_to_gr_cluster_assignments, assignment_aid_to_vs_cluster=reference_assignment.agent_to_vs_cluster_assignments, reward_models_per_aid=reference_assignment.reward_model_per_agent_id)
-        
-        check_assignment_consistency(grounding_per_value_per_cluster=grounding_per_value_per_cluster,value_system_network_per_cluster=value_system_per_cluster,
-                                     assignment_aid_to_gr_cluster=prev_agent_to_gr, assignment_aid_to_vs_cluster=prev_agent_to_vs, reward_models_per_aid=reward_model_per_agent_id)
+        if self.debug_mode:
+            check_assignment_consistency(grounding_per_value_per_cluster=reference_assignment.grounding_per_value_per_cluster,value_system_network_per_cluster=reference_assignment.value_system_per_cluster,
+                                        assignment_aid_to_gr_cluster=reference_assignment.agent_to_gr_cluster_assignments, assignment_aid_to_vs_cluster=reference_assignment.agent_to_vs_cluster_assignments, reward_models_per_aid=reference_assignment.reward_model_per_agent_id)
+            
+            check_assignment_consistency(grounding_per_value_per_cluster=grounding_per_value_per_cluster,value_system_network_per_cluster=value_system_per_cluster,
+                                        assignment_aid_to_gr_cluster=prev_agent_to_gr, assignment_aid_to_vs_cluster=prev_agent_to_vs, reward_models_per_aid=reward_model_per_agent_id)
         with th.no_grad():
             
                 
             for aid, model in reward_model_per_agent_id.items():
                 reference_model = reference_assignment.reward_model_per_agent_id[aid]
-                if __debug__:
+                if self.debug_mode:
                     th.testing.assert_close(reference_model.get_trained_alignment_function_network().state_dict(), reference_assignment.value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]].state_dict())
                
                 model: AbstractVSLRewardFunction
@@ -864,16 +881,16 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     grounding_per_value_per_cluster[vi][reference_assignment.agent_to_gr_cluster_assignments[aid][vi]].load_state_dict(deepcopy(reference_model.get_network_for_value(vi).state_dict()))
                     #model.get_network_for_value(vi).load_state_dict(reference_model.get_network_for_value(vi).state_dict())
                     model.set_network_for_value(vi, grounding_per_value_per_cluster[vi][reference_assignment.agent_to_gr_cluster_assignments[aid][vi]])
-                    if __debug__:
+                    if self.debug_mode:
                         th.testing.assert_close(model.get_network_for_value(vi).state_dict(), reference_model.get_network_for_value(vi).state_dict())
                         th.testing.assert_close(model.get_network_for_value(vi).state_dict(), grounding_per_value_per_cluster[vi][prev_agent_to_gr[aid][vi]].state_dict())
                     prev_agent_to_gr[aid][vi] = reference_assignment.agent_to_gr_cluster_assignments[aid][vi]
-                if __debug__:
+                if self.debug_mode:
                     th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), value_system_per_cluster[prev_agent_to_vs[aid]].state_dict())
                 value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]].load_state_dict(deepcopy(reference_model.get_trained_alignment_function_network().state_dict()))
                 model.set_trained_alignment_function_network(value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]])
                 prev_agent_to_vs[aid] = reference_assignment.agent_to_vs_cluster_assignments[aid]
-                if __debug__:
+                if self.debug_mode:
                     th.testing.assert_close(reference_model.get_trained_alignment_function_network().state_dict(), value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]].state_dict())
                     
                     th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]].state_dict())
@@ -883,7 +900,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     
                     th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), reference_model.get_trained_alignment_function_network().state_dict())
                     np.testing.assert_almost_equal(model.get_learned_align_function(), reference_model.get_learned_align_function())
-            if __debug__:
+            if self.debug_mode:
                 for aid, model in reward_model_per_agent_id.items():
                     reference_model = reference_assignment.reward_model_per_agent_id[aid]
                     vsNetwork: ConvexAlignmentLayer = value_system_per_cluster[reference_assignment.agent_to_vs_cluster_assignments[aid]]
@@ -894,22 +911,21 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     th.testing.assert_close(model.get_trained_alignment_function_network().state_dict(), vsNetwork.state_dict())
             
         
-        if isinstance(self.loss, SobaLoss):
-            assert isinstance(self.optim, SobaOptimizer)
+        if isinstance(self.loss, VSLCustomLoss):
+            assert isinstance(self.optim, VSLOptimizer)
             self.optim.set_state(reference_assignment.optimizer_state)
-            print("OPTIM STATE AFTER ASSIGN", self.optim.get_state()['time'])
             
-            if __debug__:
+            if self.debug_mode:
                 should_be_wx = {param for rew in reward_model_per_agent_id.values() for network in [rew.get_network_for_value(i) for i in range(self.n_values)] for param in network.parameters()}
                 should_be_wy = {param for rew in reward_model_per_agent_id.values() for param in rew.get_trained_alignment_function_network().parameters()}
                 
-                assert should_be_wx.issubset(self.optim.wx), "Mismatch in wx parameters"
-                assert should_be_wy.issubset(self.optim.wy), "Mismatch in wy parameters"
-                assert self.optim.wx == {param for vi, cluster in enumerate(grounding_per_value_per_cluster) for network in cluster for param in network.parameters()}, "Mismatch in wx parameters"
-                assert self.optim.wy == {param for network in value_system_per_cluster for param in network.parameters()}, "Mismatch in wy parameters"
-            # TODO: esto de arriba
-            self.loss.set_parameters(wx= self.optim.wx, wy=self.optim.wy, vt=self.optim.vt)
-        if __debug__:
+                assert should_be_wx.issubset(self.optim.params_gr), "Mismatch in wx parameters"
+                assert should_be_wy.issubset(self.optim.params_vs), "Mismatch in wy parameters"
+                assert self.optim.params_gr == {param for vi, cluster in enumerate(grounding_per_value_per_cluster) for network in cluster for param in network.parameters()}, "Mismatch in wx parameters"
+                assert self.optim.params_vs == {param for network in value_system_per_cluster for param in network.parameters()}, "Mismatch in wy parameters"
+            
+            self.loss.set_parameters(params_gr=self.optim.params_gr, params_vs=self.optim.params_vs, optim_state=self.optim.get_state())
+        if self.debug_mode:
             updated_params = {
                 param for group in self.optim.param_groups for param in group['params']
             }
@@ -933,8 +949,9 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
 class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
     def __init__(self, dataset: VSLPreferenceDataset, reward_model: AbstractVSLRewardFunction, num_iterations: int, reward_trainer: ClusteringRewardTrainerVSL, rng,
-                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant"):
+                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant", use_logger=False):
         self.complete_dataset = dataset
+        self.use_logger = use_logger
         super().__init__(preference_comparisons.TrajectoryDataset(dataset, rng, custom_logger),
                          reward_model, num_iterations, fragmenter=None, preference_gatherer=None, reward_trainer=reward_trainer,
                          comparison_queue_size=1,
@@ -969,7 +986,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             The assignment memory resulting from the training is also returned.
         """
         
-        all_ids = set(self.complete_dataset.agent_data.keys())
+        all_ids = OrderedSet(self.complete_dataset.agent_data.keys())
         min_number_of_trajectories = float('inf')
         for aid in all_ids:
             min_number_of_trajectories = min(
@@ -1009,9 +1026,11 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             # Gather new preferences #
             ##########################
 
-            self.logger.log(
-                f"Collecting {num_pairs} pairs of fragments per agent",
-            )
+            if self.use_logger:
+                
+                self.logger.log(
+                    f"Collecting {num_pairs} pairs of fragments per agent",
+                )
             # trajectories = self.trajectory_generator.sample(num_pairs)
 
             # This assumes there are no fragments missing initial timesteps
@@ -1027,10 +1046,11 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 dataset_batch.push(fragments=agent_dataset_batch[0], preferences=agent_dataset_batch[1], preferences_with_grounding=agent_dataset_batch[2], agent_ids=[
                                    aid]*len(selection), agent_data={aid: self.complete_dataset.agent_data[aid]})
 
-            self.logger.log("Creating fragment pairs")
+            if self.use_logger:
+                self.logger.log("Creating fragment pairs")
             # fragments = self.fragmenter(trajectories, self.fragment_length, num_pairs)
-            with self.logger.accumulate_means("preferences"):
-                self.logger.log("Gathering preferences")
+                with self.logger.accumulate_means("preferences"):
+                    self.logger.log("Gathering preferences")
 
                 # preferences = self.preference_gatherer(fragment_pairs=dataset_batch[aid], traj_ids=None, value_or_value_system='vs')
             """TODO: online adding trajectories from learning policies...
@@ -1049,40 +1069,41 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 if random.random() < exploration or use_random:
                     choosing = False
                     starting_assignment = 'start_random'
-                    if global_iter <= int(num_iterations*0.3):
+                    if global_iter <= int(num_iterations*0.1):
                         reference_assignment = self.generate_random_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
                     else:
                         reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
                     self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
                     
                     assert self.reward_trainer.optim.time == 0
-                    assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
+                    #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                 else:
-                    starting_assignment = best_assignments_list.get_random_weighted_assignment()
+                    starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
                     if starting_assignment is None:
                         use_random = True
                         choosing = True
                         continue
                     else:
                         choosing = False
+                    
                     check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
-                                                assignment_aid_to_gr_cluster=original_agent_to_gr_cluster_assignments,
-                                                assignment_aid_to_vs_cluster=original_agent_to_vs_cluster_assignments, 
-                                                reward_models_per_aid=reward_model_per_agent_id)
+                                                    assignment_aid_to_gr_cluster=original_agent_to_gr_cluster_assignments,
+                                                    assignment_aid_to_vs_cluster=original_agent_to_vs_cluster_assignments, 
+                                                    reward_models_per_aid=reward_model_per_agent_id)
                     check_assignment_consistency(starting_assignment.grounding_per_value_per_cluster,starting_assignment.value_system_per_cluster,
-                                                starting_assignment.agent_to_gr_cluster_assignments,
-                                                assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
-                                                reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
+                                                    starting_assignment.agent_to_gr_cluster_assignments,
+                                                    assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
+                                                    reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
                     assert self.reward_trainer.optim.time != 0
                     assert starting_assignment.optimizer_state['time'] != 0
-                    assert not np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
+                    #assert not np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                         
                     self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, starting_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
 
 
                 # Assert that the optimizer parameters are still those of the changed networks
-            exploration = self.reward_trainer.initial_exploration_rate*(1-1/num_iterations)
-            print("EXPLORATION RATE", exploration)
+            exploration = self.reward_trainer.initial_exploration_rate * ((num_iterations-global_iter)/num_iterations)**4 # TODO epsilon decay?
+            print(f"ITERATION {global_iter}/{num_iterations}.", "EXPLORATION RATE", exploration)
             
             best_assignments_list: ClusterAssignmentMemory = self.reward_trainer.train(
                 dataset_batch, reward_model_per_agent_id=reward_model_per_agent_id, grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
@@ -1091,23 +1112,24 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 epoch_multiplier=1, 
                 global_iteration=global_iter, global_iterations=len(schedule),
                 starting_assignment = starting_assignment,
-                assignment_ranking=best_assignments_list)
+                assignment_ranking=best_assignments_list,
+
+                )
             
             print("BEST ASSIGNMENTS so far:", best_assignments_list)
-            
-            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(override_explore=False)
+
+            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False)
             # Save the best assignment of each iteration
             best_assignment.save(historical_assignments_save_folder, f"best_assignment_iter_{global_iter}.pkl")
 
             
-            # TODO: save assign
-            # TODO: Overhaul debugging metrics...
-            self.logger.name_to_value['cluster_score'] = best_assignment.vs_score, best_assignment.gr_score
-            base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
-            assert f"{base_key}/loss_vs" in self.logger.name_to_value
-            assert f"{base_key}/global_accvs" in self.logger.name_to_value
-            assert f"{base_key}/loss_gr" in self.logger.name_to_value
-            assert f"{base_key}/global_accgr" in self.logger.name_to_value
+            if self.use_logger:
+                self.logger.name_to_value['cluster_score'] = best_assignment.vs_score, best_assignment.gr_score
+                base_key = self.logger.get_accumulate_prefixes() + "reward/final/train"
+                assert f"{base_key}/loss_vs" in self.logger.name_to_value
+                assert f"{base_key}/global_accvs" in self.logger.name_to_value
+                assert f"{base_key}/loss_gr" in self.logger.name_to_value
+                assert f"{base_key}/global_accgr" in self.logger.name_to_value
             """
             reward_loss_vs = self.logger.name_to_value[f"{base_key}/loss_vs"]
             reward_accuracy_vs = self.logger.name_to_value[f"{base_key}/global_accvs"]
@@ -1123,8 +1145,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             # at the end of training (where the reward model is presumably best)
             if global_iter == self.num_iterations - 1:
                 num_steps += extra_timesteps
-            with self.logger.accumulate_means("agent"):
-                self.logger.log(f"Training agent for {num_steps} timesteps")
+            with (self.logger.accumulate_means("agent") if self.use_logger is not None else nullcontext()):
+                if self.use_logger: self.logger.log(f"Training agent for {num_steps} timesteps")
                 self.trajectory_generator.train(steps=num_steps)
             
             self.logger.dump(self._iteration)
@@ -1135,9 +1157,11 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             if callback:
                 callback(self._iteration)
             self._iteration += 1
-
+        best_assignments_list.clean_memory(exhaustive=True)
+        best_assignments_list.sort_lexicographic(lexicographic_vs_first=False)
+        best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False)
         self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments, reference_assignment=best_assignment)
-            
+        
         return best_assignments_list
 
     def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs):
@@ -1171,12 +1195,10 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 for vi, cluster_vi_aid in grclusterby_value_aid.items():
                     assignment_gr_new[vi][cluster_vi_aid].append(aid)
                     agent_to_gr_cluster_assignments[aid][vi] = cluster_vi_aid
-                    if len(assignment_gr_new[vi][cluster_vi_aid]) == 1:
-                        # TODO: mutate cluster corresponding...
-                        
+                    if len(assignment_gr_new[vi][cluster_vi_aid]) == 1:                        
                         for param in grounding_per_value_per_cluster_c[vi][cluster_vi_aid].parameters():
                             if param.requires_grad:
-                                mask = th.rand_like(param) < 0.05  # percentage of parameters changed.
+                                mask = th.rand_like(param) < 0.01  # percentage of parameters changed.
                                 unifr= th.empty_like(param).uniform_(0, 1.0)
                                 param.mul_(th.where(mask, unifr, th.ones_like(param)))
                         # Assert that the original is different from the updated network
@@ -1269,9 +1291,14 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         return reference_assignment
 
 def load_historic_assignments(experiment_name, limit=20):
-    save_folder = os.path.join(ASSIGNMENT_CHECKPOINTS,experiment_name)
+    save_folder = os.path.join(ASSIGNMENT_CHECKPOINTS, experiment_name)
     if not os.path.exists(save_folder):
-        raise FileNotFoundError(f"Historic assignments directory not found: {save_folder}")
+        parent_folder = ASSIGNMENT_CHECKPOINTS
+        matching_folders = [folder for folder in os.listdir(parent_folder) if folder.startswith(experiment_name)]
+        if matching_folders:
+            save_folder = os.path.join(parent_folder, matching_folders[0])
+        else:
+            raise FileNotFoundError(f"Historic assignments directory not found: {save_folder}")
     
     historic_assignments = []
 
@@ -1296,7 +1323,6 @@ def load_historic_assignments(experiment_name, limit=20):
         for a in historic_assignments:
             for aid, r in a.reward_model_per_agent_id.items():
                 r.set_env(env_state)
-                # TODO : check this works! GENERALIZE!
     print(f"Historic assignments loaded from {save_folder}")
     return historic_assignments
 
@@ -1328,15 +1354,15 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                      'epochs': 5, 'lr': 0.05, 'regularizer_factory': None, 'batch_size': 32, 'minibatch_size': None, },
                  loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
 
-                 *, custom_logger=None):
+                 *, custom_logger='disable'):
 
         self.cluster_sizes = cluster_sizes
         
         self.vs_L_clusters = vs_cluster_sizes if vs_cluster_sizes is not None else []
         self.allow_variable_horizon = not assume_variable_horizon
 
-        vsi_target_align_funcs_per_agent = set()
-        vgl_target_align_funcs_per_agent = set()
+        vsi_target_align_funcs_per_agent = OrderedSet()
+        vgl_target_align_funcs_per_agent = OrderedSet()
         for aid, adata in dataset.agent_data.items():
             vsi_target_align_funcs_per_agent.add(
                 tuple([aid, tuple(adata['value_system'])]))
@@ -1351,7 +1377,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                          vsi_optimizer_cls=optimizer_cls,
                          vgl_optimizer_kwargs=optimizer_kwargs, vsi_optimizer_kwargs=optimizer_kwargs, discount=discount,
                          log_interval=log_interval, vgl_expert_policy=None, vsi_expert_policy=None, vsi_target_align_funcs=vsi_target_align_funcs_per_agent,
-                         vgl_target_align_funcs=vgl_target_align_funcs_per_agent, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy, stochastic_expert=expert_is_stochastic)
+                         vgl_target_align_funcs=vgl_target_align_funcs_per_agent, training_mode=training_mode, custom_logger=None, learn_stochastic_policy=learn_stochastic_policy, stochastic_expert=expert_is_stochastic)
+        self.use_logger = custom_logger != 'disable'
         self.policy_approximator = policy_approximator
         self.approximator_kwargs = approximator_kwargs
         self.rng = rng
@@ -1375,10 +1402,13 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         self.loss_kwargs = loss_kwargs
 
         if self.loss_class == PrefLossClasses.CROSS_ENTROPY_CLUSTER.value:
-            self.loss_class = CrossEntropyRewardLossCluster
+            self.loss_class = BaseVSLClusterRewardLoss
         elif self.loss_class == PrefLossClasses.SOBA.value:
             # TODO: modified versions here...
             self.loss_class = SobaLoss
+        elif self.loss_class == PrefLossClasses.LAGRANGE.value:
+            # TODO: modified versions here...
+            self.loss_class = ConstrainedLoss
         else:
             raise ValueError(
                 "Unsupported for clustering VSL or unrecognized loss_class: ", self.loss_class)
@@ -1446,23 +1476,25 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         self.last_accuracies_gr_global.append(
             self.pref_comparisons.reward_trainer.last_metrics['global_accgr'])
 
-        if t % self.log_interval == 0:
-            self.logger.record("iteration", t)
-            n_agents = 0
-            for aid, adata in self.dataset.agent_data.items():
-                n_agents+=1
-                if n_agents <= 10:
-                    if self.training_mode == TrainingModes.SIMULTANEOUS or self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+        if self.use_logger:
+            if t % self.log_interval == 0:
+                self.logger.record("iteration", t)
+                n_agents = 0
+                for aid, adata in self.dataset.agent_data.items():
+                    n_agents+=1
+                    if n_agents <= 10:
+                        if self.training_mode == TrainingModes.SIMULTANEOUS or self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION:
+                            self.logger.record(
+                                f"Agent {aid} VS target", adata['value_system'])
+                            self.logger.record(f"Agent {aid} VS learned: ", tuple(
+                                [float("{0:.3f}".format(v)) for v in self.training_reward_nets_per_agent[aid].get_learned_align_function()]))
+                    """else:
                         self.logger.record(
-                            f"Agent {aid} VS target", adata['value_system'])
-                        self.logger.record(f"Agent {aid} VS learned: ", tuple(
-                            [float("{0:.3f}".format(v)) for v in self.training_reward_nets_per_agent[aid].get_learned_align_function()]))
-                """else:
-                    self.logger.record(
-                        f"Agent {aid} grounding", adata['grounding'])
-                    self.logger.record(f"Agent {aid} learned: ",
-                                       self.training_reward_nets_per_agent[aid].get_learned_grounding())"""
-
+                            f"Agent {aid} grounding", adata['grounding'])
+                        self.logger.record(f"Agent {aid} learned: ",
+                                        self.training_reward_nets_per_agent[aid].get_learned_grounding())"""
+        self.logger.dump(t)
+        
     def train_simultaneous_vsl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
         
 
@@ -1532,12 +1564,12 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                             value_system_network_per_cluster[cs_])
                         networks_vs.append(
                             value_system_network_per_cluster[cs_])
-        all_params = {
-            param for network in networks_to_train for param in network.parameters()}
-        params_gr = {
-            param for network in networks_gr for param in network.parameters()}
-        params_vs = {
-            param for network in networks_vs for param in network.parameters() }
+        all_params = OrderedSet(
+            param for network in networks_to_train for param in network.parameters())
+        params_gr = OrderedSet(
+            param for network in networks_gr for param in network.parameters())
+        params_vs = OrderedSet(
+            param for network in networks_vs for param in network.parameters() )
         
         optim_cls=self.vgl_optimizer_cls if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.vsi_optimizer_cls
         optim_kwargs = self.vgl_optimizer_kwargs if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.vsi_optimizer_kwargs
@@ -1546,8 +1578,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
 
         reward_models_per_aid = self.training_reward_nets_per_agent
         check_assignment_consistency(grounding_per_value_per_cluster, value_system_network_per_cluster, assignment_aid_to_gr_cluster, assignment_aid_to_vs_cluster, reward_models_per_aid)
-
-        best_assignment = self._train_global(max_iter, parameters={'params_gr': params_gr, 'params_vs': params_vs} if optim_cls==SobaOptimizer else all_params,
+        
+        assignment_memory = self._train_global(max_iter, parameters={'params_gr': params_gr, 'params_vs': params_vs} if issubclass(optim_cls, VSLOptimizer) else all_params,
                            assignment_aid_to_vs_cluster=assignment_aid_to_vs_cluster,
                            assignment_aid_to_gr_cluster=assignment_aid_to_gr_cluster,
                            comparisons_per_agent_per_step=self.comparisons_per_agent_per_step,
@@ -1556,11 +1588,13 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                            reward_nets_per_agent=self.training_reward_nets_per_agent,
                            historical_assignments_save_folder=self.historical_assignments_save_folder,
                            optim_cls=optim_cls, optim_kwargs=optim_kwargs,max_assignment_memory=self.max_assignment_memory)
+        
+        
         assert self.training_reward_nets_per_agent.keys() == self.training_reward_nets_per_agent.keys()
         for aid in self.training_reward_nets_per_agent.keys():
-            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , best_assignment.reward_model_per_agent_id[aid].state_dict())
-        self.best_assignment = best_assignment
-
+            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , assignment_memory.get_best_assignment(consider_only_unexplored=False,override_explore_state=False).reward_model_per_agent_id[aid].state_dict())
+        self.assignment_memory = assignment_memory
+    
         return self.training_reward_nets_per_agent 
 
     def train_vgl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed):
@@ -1571,34 +1605,10 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                       assignment_aid_to_vs_cluster,
                       assignment_aid_to_gr_cluster,
                       comparisons_per_agent_per_step,
-                      reward_nets_per_agent, grounding_per_value_per_cluster, value_system_per_cluster=[], starting_t=0, max_assignment_memory=10,historical_assignments_save_folder='train_assignments'):
+                      reward_nets_per_agent, grounding_per_value_per_cluster, value_system_per_cluster=[], 
+                      starting_t=0, max_assignment_memory=10,historical_assignments_save_folder='train_assignments') -> ClusterAssignmentMemory:
         
-        self.preference_model = PreferenceModelClusteredVSL(
-            model=self.current_net,
-            algorithm=self,
-            noise_prob=0,
-            discount_factor=self.discount_factor_preferences,
-            threshold=50,
-        )
-        reward_trainer = ClusteringRewardTrainerVSL(
-            preference_model=self.preference_model,
-            loss=self.loss_class(**self.loss_kwargs),
-            rng=self.rng,
-            optim_cls=optim_cls,
-            optim_kwargs=optim_kwargs,
-            **self.reward_trainer_kwargs
-        )
-
-        self.pref_comparisons = PreferenceComparisonVSL(
-            dataset=self.dataset,
-            reward_model=self.current_net,
-            num_iterations=max_iter,
-            reward_trainer=reward_trainer,
-            allow_variable_horizon=self.allow_variable_horizon,
-            query_schedule=self.query_schedule,
-            rng=self.rng,
-            custom_logger=None
-        )
+        self.init_models(max_iter, optim_cls, optim_kwargs)
         self.pref_comparisons.reward_trainer.reset_optimizer_with_params(
             parameters=parameters)
         
@@ -1614,8 +1624,38 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                                               try_without_replacement=True,
                                               historical_assignments_save_folder=historical_assignments_save_folder,
                                                 callback=lambda t: self.train_callback(t+starting_t),max_assignment_memory=max_assignment_memory)
-        return assignment_memory.get_best_assignment(override_explore=False)
+        return assignment_memory
 
+    def init_models(self, max_iter, optim_cls, optim_kwargs):
+        self.preference_model = PreferenceModelClusteredVSL(
+            model=self.current_net,
+            algorithm=self,
+            noise_prob=0,
+            discount_factor=self.discount_factor_preferences,
+            threshold=50,
+        )
+        reward_trainer = ClusteringRewardTrainerVSL(
+            preference_model=self.preference_model,
+            loss=self.loss_class(**self.loss_kwargs),
+            rng=self.rng,
+            optim_cls=optim_cls,
+            optim_kwargs=optim_kwargs,
+            use_logger=self.use_logger,
+            **self.reward_trainer_kwargs
+        )
+
+        self.pref_comparisons = PreferenceComparisonVSL(
+            dataset=self.dataset,
+            reward_model=self.current_net,
+            num_iterations=max_iter,
+            reward_trainer=reward_trainer,
+            allow_variable_horizon=self.allow_variable_horizon,
+            query_schedule=self.query_schedule,
+            rng=self.rng,
+            use_logger=self.use_logger,
+            custom_logger=None
+        )
+        
     def train_vsl(self, max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed, target_align_func):
         raise NotImplementedError("train vsl need args in train global...")
         self._train_global(max_iter, target_align_func,
@@ -1658,6 +1698,27 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
 
         ).get_metrics()
         metrics.update({
-                       'global_accvs': self.last_accuracies_vs_global, 'global_accgr': self.last_accuracies_gr_global, 'assignment': self.best_assignment})
+                       'global_accvs': self.last_accuracies_vs_global, 'global_accgr': self.last_accuracies_gr_global, 'assignment_memory': self.assignment_memory})
         return metrics
-    
+    def evaluate_assignment(self, assignment: ClusterAssignment, dataset: VSLPreferenceDataset):
+        self.init_models(10, self.vsi_optimizer_cls, self.vsi_optimizer_kwargs)
+        self.pref_comparisons.reward_trainer.debug_mode = False
+        
+        print("DATASET????????", dataset, len(dataset), len(self.dataset))
+        self.pref_comparisons.reward_trainer.batch_size = len(dataset)
+        dataloader = self.pref_comparisons.reward_trainer._make_data_loader(dataset) # ???????????????
+        data = [data for data in dataloader]
+        print(len(data))
+        val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids = map(
+            lambda x: np.concatenate(x, axis=0) if len(data) > 1 else x[0],
+            zip(*data)
+        )
+        print("evaluating")
+        print(len(val_fragment_pairs))
+        new_assignment = self.pref_comparisons.reward_trainer.evaluate_assignment_with_dataset(assignment.copy(), 
+                                                                              val_fragment_pairs, 
+                                                                              val_preferences, 
+                                                                              val_preferences_per_grounding, 
+                                                                              val_agent_ids)
+        self.pref_comparisons.reward_trainer.debug_mode = __debug__
+        return new_assignment

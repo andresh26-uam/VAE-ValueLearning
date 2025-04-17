@@ -1,10 +1,8 @@
 import argparse
-from collections import defaultdict
-import csv
 import os
 import pprint
 import random
-from typing import Dict, Sequence, Tuple, Union
+from typing import Dict, Union
 import imitation
 import imitation.data
 import imitation.data.rollout
@@ -13,22 +11,23 @@ import numpy as np
 import torch
 
 from envs.tabularVAenv import ContextualEnv, TabularVAMDP
+from src.dataset_processing.utils import DEFAULT_SEED, GROUNDINGS_PATH
 from src.algorithms.utils import PolicyApproximators, mce_partition_fh
 from envs.firefighters_env import FeatureSelectionFFEnv
-from src.data import TrajectoryWithValueSystemRews, TrajectoryWithValueSystemRewsPair, VSLPreferenceDataset, load_vs_trajectories, save_vs_trajectories
+from src.dataset_processing.data import TrajectoryWithValueSystemRews
+from src.dataset_processing.utils import calculate_dataset_save_path
+from src.dataset_processing.datasets import create_dataset
+from src.dataset_processing.preferences import save_preferences
+from src.dataset_processing.preferences import load_preferences
+from src.dataset_processing.trajectories import compare_trajectories, load_trajectories
+from src.dataset_processing.trajectories import save_trajectories
 from src.policies.vsl_policies import ContextualVAlignedDictSpaceActionPolicy, VAlignedDictSpaceActionPolicy
 
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
-from utils import filter_none_args, load_json_config
+from src.utils import filter_none_args, load_json_config
 import gymnasium as gym
 
-DATASETS_PATH = 'datasets/complete_datasets/'
-TRAJECTORIES_DATASETS_PATH = 'datasets/trajectories/'
-COMPARISONS_DATASETS_PATH = 'datasets/comparisons/'
 
-GROUNDINGS_PATH = 'groundings/'
-
-DEFAULT_SEED = 26
 
 
 def parse_dtype_numpy(choice):
@@ -52,8 +51,6 @@ def parse_dtype_torch(choice):
         ndtype = torch.float64
     return ndtype
 
-
-USEINFO = True
 
 
 def parse_args():
@@ -115,296 +112,6 @@ def parse_args():
                            help='Distance between the cummulative rewards of each pair of trajectories for them to be considered as equal in the comparisons')
 
     return parser.parse_args()
-
-
-def calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=None):
-    path = f"{environment_data['name']}/{society_data['name']}/{dataset_name}/"
-    if epsilon is not None:
-        path = os.path.join(path, f"reps_{epsilon}/")
-    return path
-
-
-def calculate_trajectory_save_path(dataset_name, ag, environment_data, society_data):
-    return os.path.join(calculate_dataset_save_path(dataset_name, environment_data, society_data), f"trajs_ag_{ag['name']}_{ag['value_system']}_rp_{ag['data']['random_traj_proportion']}_rat_{ag['data']['rationality']}")
-
-
-def calculate_preferences_save_path(dataset_name, ag, environment_data, society_data, epsilon):
-
-    return os.path.join(calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon), f"prefs_ag_{ag['name']}_{ag['value_system']}")
-
-
-def save_trajectories(trajectories: Sequence[TrajectoryWithValueSystemRews], dataset_name, ag, environment_data, society_data, dtype=np.float32):
-    path = calculate_trajectory_save_path(
-        dataset_name, ag, environment_data, society_data)
-    path = os.path.join(TRAJECTORIES_DATASETS_PATH, path)
-    os.makedirs(path, exist_ok=True)
-    save_vs_trajectories(path=path, trajectories=trajectories,
-                         dtype=dtype, use_infos=USEINFO)
-
-
-def load_trajectories(dataset_name, ag, environment_data, society_data, override_dtype=np.float32) -> Sequence[TrajectoryWithValueSystemRews]:
-    path = calculate_trajectory_save_path(
-        dataset_name, ag, environment_data, society_data)
-    trajs = load_vs_trajectories(
-        os.path.join(TRAJECTORIES_DATASETS_PATH, path))
-    new_trajs = [0]*len(trajs)
-    for i, t in enumerate(trajs):
-        t: TrajectoryWithValueSystemRews
-        if isinstance(override_dtype, torch.dtype):
-            new_trajs[i] = TrajectoryWithValueSystemRews(t.obs, t.acts, t.infos, t.terminal, rews=torch.tensor(
-                t.vs_rews, dtype=override_dtype, requires_grad=False), v_rews=torch.tensor(t.value_rews, dtype=override_dtype, requires_grad=False), n_vals=t.n_vals, agent=t.agent)
-
-        else:
-            assert np.issubdtype(override_dtype, np.floating)
-            new_trajs[i] = TrajectoryWithValueSystemRews(t.obs, t.acts, t.infos, t.terminal, rews=np.array(
-                t.vs_rews, dtype=override_dtype), v_rews=np.array(t.value_rews, dtype=override_dtype), n_vals=t.n_vals, agent=t.agent)
-
-    return new_trajs
-
-
-def compare_trajectories(traj_i, traj_j, epsilon=0.0):
-    """
-    Compare two trajectories based on their discounted sums.
-    Args:
-        traj_i (float): Discounted sum of the first trajectory.
-        traj_j (float): Discounted sum of the second trajectory.
-        epsilon (float): Threshold for comparison.
-    Returns:
-        float: Comparison flag (1.0, 0.5, 0.0).
-    """
-    comparison = traj_i - traj_j
-    if abs(comparison) < epsilon:
-        return 0.5
-    elif comparison > 0:
-        return 1.0
-    else:
-        return 0.0
-
-
-def save_preferences(idxs: np.ndarray, discounted_sums: np.ndarray, discounted_sums_per_grounding: np.ndarray, epsilon: float, dataset_name, ag, environment_data, society_data, real_preference=None, real_grounding_preference=None):
-    path = calculate_preferences_save_path(
-        dataset_name, ag, environment_data, society_data, epsilon)
-    path = os.path.join(COMPARISONS_DATASETS_PATH, path)
-    os.makedirs(path, exist_ok=True)
-    csv_path = os.path.join(path, 'agent_preferences_file.csv')
-    with open(csv_path, 'w', newline='') as csvfile:
-        fieldnames = ['Traj1', 'Traj2', 'CR1', 'CR2', 'Flag']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for i in range(len(discounted_sums)-1):
-            if real_preference is not None:
-                if (idxs[i], idxs[i+1]) not in real_preference.keys():
-                    continue
-            traj_i = discounted_sums[idxs[i]]
-            traj_j = discounted_sums[idxs[i+1]]
-            comparison_flag = compare_trajectories(
-                traj_i, traj_j, epsilon=epsilon)
-            if real_preference is not None:
-                comparison_flag_real = float(
-                    real_preference[(idxs[i], idxs[i+1])])
-                
-                assert comparison_flag_real == comparison_flag
-            writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
-
-    for vi in range(discounted_sums_per_grounding.shape[0]):
-        csv_path = os.path.join(path, f'value_{vi}_preferences_file.csv')
-        with open(csv_path, 'w', newline='') as csvfile:
-            fieldnames = ['Traj1', 'Traj2', 'CR1', 'CR2', 'Flag']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for i in range(len(discounted_sums_per_grounding[vi])-1):
-                traj_i = discounted_sums_per_grounding[vi][idxs[i]]
-                traj_j = discounted_sums_per_grounding[vi][idxs[(
-                    i+1)]]
-                comparison_flag = compare_trajectories(
-                    traj_i, traj_j, epsilon=epsilon)
-
-                if real_grounding_preference is not None:
-                    if (idxs[i], idxs[i+1]) in real_grounding_preference[vi].keys():
-                        comparison_flag_real = float(
-                            real_grounding_preference[vi][(idxs[i], idxs[i+1])])
-                        writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                            i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag_real})
-                else:
-                    writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                        i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
-
-
-def load_preferences(dataset_name, ag, environment_data, society_data, epsilon, dtype=np.float32, debug_grounding=True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    path = calculate_preferences_save_path(
-        dataset_name, ag, environment_data, society_data, epsilon=epsilon)
-    path = os.path.join(COMPARISONS_DATASETS_PATH, path)
-    csv_path = os.path.join(path, 'agent_preferences_file.csv')
-    idxs = []
-    preferences = []
-
-    with open(csv_path, 'r') as csvfile:
-        reader = csv.DictReader(csvfile)
-        max_traj_idx = 0
-        for row in reader:
-            traj1 = int(row['Traj1'])
-            traj2 = int(row['Traj2'])
-            max_traj_idx = max(max(traj1, traj2), max_traj_idx)
-            comparison_flag = float(row['Flag'])
-            idxs.append([traj1, traj2])
-            preferences.append(comparison_flag)
-
-        if isinstance(dtype, torch.dtype):
-            discounted_sums = torch.zeros(
-                (max_traj_idx+1,), dtype=dtype, requires_grad=False)
-        elif np.issubdtype(dtype, np.floating):
-            discounted_sums = np.zeros((max_traj_idx+1,), dtype=dtype)
-    with open(csv_path, 'r') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for ir, row in enumerate(reader):
-            traj1 = int(row['Traj1'])
-            traj2 = int(row['Traj2'])
-            cr1 = float(row['CR1'])
-            cr2 = float(row['CR2'])
-            comparison_flag = float(row['Flag'])
-
-            if discounted_sums[traj1] != 0.0:
-                assert discounted_sums[traj1] == cr1
-            discounted_sums[traj1] = cr1
-
-            if discounted_sums[traj2] != 0.0:
-                assert discounted_sums[traj2] == cr2
-            assert comparison_flag == preferences[ir]
-            discounted_sums[traj2] = cr2
-            assert compare_trajectories(cr1, cr2, epsilon) == preferences[ir]
-
-    if isinstance(dtype, torch.dtype):
-        discounted_sums_per_grounding = torch.zeros(
-            (len(environment_data['basic_profiles']), discounted_sums.shape[0]), dtype=dtype)
-        preferences_per_grounding = torch.zeros((len(preferences),
-                                                 len(environment_data['basic_profiles'])), dtype=dtype)
-    elif np.issubdtype(dtype, np.floating):
-        discounted_sums_per_grounding = np.zeros(
-            (len(environment_data['basic_profiles']), discounted_sums.shape[0]), dtype=dtype)
-        preferences_per_grounding = np.zeros(
-            (len(preferences), len(environment_data['basic_profiles'])), dtype=dtype)
-
-    for vi in range(len(environment_data['basic_profiles'])):
-
-        csv_path = os.path.join(path, f'value_{vi}_preferences_file.csv')
-        with open(csv_path, 'r') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for ir, row in enumerate(reader):
-                traj1 = int(row['Traj1'])
-                traj2 = int(row['Traj2'])
-                cr1 = float(row['CR1'])
-                cr2 = float(row['CR2'])
-                comparison_flag = float(row['Flag'])
-
-                preferences_per_grounding[ir, vi] = comparison_flag
-                if discounted_sums_per_grounding[vi, traj1] != 0.0:
-                    assert discounted_sums_per_grounding[vi, traj1] == cr1
-                discounted_sums_per_grounding[vi, traj1] = cr1
-
-                if discounted_sums_per_grounding[vi, traj2] != 0.0:
-                    assert discounted_sums_per_grounding[vi, traj2] == cr2
-
-                discounted_sums_per_grounding[vi, traj2] = cr2
-                
-                if debug_grounding:
-                    assert compare_trajectories(
-                    cr1, cr2, epsilon) == preferences_per_grounding[ir, vi]
-    if isinstance(dtype, torch.dtype):
-        return np.array(idxs, dtype=np.int_), discounted_sums, discounted_sums_per_grounding, torch.tensor(preferences, dtype=dtype, requires_grad=False), preferences_per_grounding
-    else:
-        return np.array(idxs, dtype=np.int_), discounted_sums, discounted_sums_per_grounding, np.array(preferences, dtype=dtype), preferences_per_grounding
-
-
-def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None, debug_grounding=False):
-    environment_data = config[parser_args.environment]
-
-    dataset_name = parser_args.dataset_name
-    if train_or_test is not None:
-        dataset_name += '_'
-        assert train_or_test == 'train' or train_or_test == 'test'
-        dataset_name += train_or_test
-
-    dataset = VSLPreferenceDataset(n_values=environment_data['n_values'])
-
-    if 'agents' not in society_data.keys():
-        agents = []
-        # TODO: HERE; THIS PATH IS NOT CORRECT!!
-        folder_path = os.path.join(
-            COMPARISONS_DATASETS_PATH, f"{environment_data['name']}/{society_data['name']}/{dataset_name}")
-        for root, dirs, files in os.walk(folder_path):
-            for dir_name in dirs:
-                if dir_name.startswith("prefs_ag_"):
-                    ag_name = dir_name.split("_")[2]
-                    agents.append(ag_name)
-    else:
-        agents = society_data['agents']
-
-    for i, ag in enumerate(agents):
-        if 'agents' not in society_data.keys():
-            ag = {'agent_id': ag, 'name': ag, 'value_system': 'unk', 'data': defaultdict(
-                lambda: 'nd'), 'n_agents': 1, 'grounding': list(default_groundings.keys())}
-        #  Here idxs is the list of trajectory PAIRS of indices from the trajectory list that are compared.
-        idxs, discounted_sums, discounted_sums_per_grounding, preferences, preferences_per_grounding = load_preferences(
-            epsilon=parser_args.reward_epsilon, dataset_name=dataset_name, environment_data=environment_data, society_data=society_data, ag=ag, dtype=parser_args.dtype, debug_grounding=debug_grounding)
-        trajs_ag = np.asarray(load_trajectories(dataset_name=dataset_name,
-                              ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype))
-
-        for t in range(ag['n_agents']-2):
-            np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']], (idxs[(
-                t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)))
-
-            for traj_i in range(ag['data']['trajectory_pairs']):
-
-                np.testing.assert_allclose(trajs_ag[traj_i + t*ag['data']['trajectory_pairs']].obs, trajs_ag[(
-                    t+1)*ag['data']['trajectory_pairs'] + traj_i].obs)
-
-        ag_point = 0
-        n_pairs_per_agent = len(idxs)//ag['n_agents']
-        for id in range(ag['n_agents']):
-            agent_id = ag['name']+'_'+str(id)
-            ag_idxs = idxs[ag_point:ag_point+n_pairs_per_agent]
-
-            trajectory_pairs: Sequence[TrajectoryWithValueSystemRewsPair] = trajs_ag[ag_idxs]
-            dataset.push(trajectory_pairs, preferences[ag_point:ag_point+n_pairs_per_agent], preferences_per_grounding[ag_point:(
-                ag_point+n_pairs_per_agent)], agent_ids=[agent_id]*n_pairs_per_agent, agent_data={agent_id: ag})
-            """if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
-                prev_ag_idxs = idxs[ag_point -
-                                    n_pairs_per_agent:ag_point+n_pairs_per_agent]
-                
-                for j in range(len(ag_idxs)):
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][0].obs, trajs_ag[prev_ag_idxs][j][0].obs)
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][1].obs, trajs_ag[prev_ag_idxs][j][1].obs)
-                if ag['name'] == las_agent_name:
-                    np.testing.assert_allclose(
-                        dataset.data_per_agent[last_agent_id].preferences_with_grounding, dataset.data_per_agent[agent_id].preferences_with_grounding)
-                    np.testing.assert_allclose([t.obs for t in dataset.data_per_agent[last_agent_id].fragments1], [
-                                               t.obs for t in dataset.data_per_agent[agent_id].fragments1])
-"""
-            ag_point += n_pairs_per_agent
-            # last_agent_id = agent_id
-            # las_agent_name = ag['name']
-
-        """for i in range((len(trajs_ag))):
-            assert discounted_sums[i] == imitation.data.rollout.discounted_sum(
-                trajs_ag[i].rews, gamma=alg_config['discount_factor_preferences'])
-        for idx, pr in zip(idxs, preferences):
-            assert discounted_sums[idx[0]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[0]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert discounted_sums[idx[1]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[1]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert compare_trajectories(
-                discounted_sums[idx[0]], discounted_sums[idx[1]], epsilon=parser_args.reward_epsilon) == pr
-        for vi in range(len(environment_data['basic_profiles'])):
-
-            for idx, pr in zip(idxs, preferences_per_grounding[vi]):
-                assert compare_trajectories(
-                    discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon) == pr"""
-
-    return dataset
 
 
 if __name__ == "__main__":
@@ -691,8 +398,5 @@ if __name__ == "__main__":
 
     print("Dataset generated correctly.")
     dataset = create_dataset(parser_args, config, society_data,
-                             default_groundings=society_config[parser_args.environment]['groundings'])
-    path = os.path.join(
-        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=parser_args.reward_epsilon))
-    os.makedirs(path, exist_ok=True)
-    dataset.save(os.path.join(path, "dataset.pkl"))
+                             default_groundings=society_config[parser_args.environment]['groundings'],save=True)
+    

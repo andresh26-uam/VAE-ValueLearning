@@ -17,7 +17,7 @@ from itertools import chain
 
 from envs.tabularVAenv import ValueAlignedEnvironment
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv
-from utils import CHECKPOINTS
+from defines import CHECKPOINTS
 
 class TrainingModes(enum.Enum):
     VALUE_SYSTEM_IDENTIFICATION = 'profile_learning'
@@ -602,6 +602,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
         else:
             # Use bias everywhere.
             self.use_bias = [use_bias]*(len(hid_sizes) + 1)
+            
         assert len(self.use_bias) == len(hid_sizes) + 1
         super().__init__(environment=environment, action_dim=action_dim, state_dim=state_dim, observation_space=observation_space,
                          action_space=action_space,

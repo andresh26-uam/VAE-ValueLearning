@@ -26,8 +26,10 @@ from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.base_class import BaseAlgorithm
 from envs.tabularVAenv import ContextualEnv, TabularVAMDP, ValueAlignedEnvironment
 from src.algorithms.utils import PolicyApproximators, mce_partition_fh
-from src.data import TrajectoryWithValueSystemRews
-from utils import CHECKPOINTS, NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
+from src.dataset_processing.data import TrajectoryWithValueSystemRews
+from defines import CHECKPOINTS
+
+from src.utils import NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
 
 
 class ValueSystemLearningPolicy(BasePolicy):

@@ -5,15 +5,17 @@ import random
 from typing import Union
 import numpy as np
 import torch
-from generate_dataset import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH, calculate_dataset_save_path, parse_dtype_torch
+from generate_dataset import parse_dtype_torch
+from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED, GROUNDINGS_PATH
 from generate_dataset_one_shot_tasks import PICKLED_ENVS
 from src.algorithms.clustering_utils import ClusterAssignment
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
+from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from train_vsl import load_training_results, parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data, save_training_results
-from src.data import VSLPreferenceDataset
+from src.dataset_processing.data import VSLPreferenceDataset
 import os
-from utils import filter_none_args, load_json_config
+from src.utils import filter_none_args, load_json_config
 
 
 def parse_args():
@@ -73,7 +75,7 @@ def parse_args():
                            default=False, help='Retrain experts (roadworld)')
     env_group.add_argument('-appr', '--approx_expert', action='store_true',
                            default=False, help='Approximate expert (roadworld)')
-    env_group.add_argument('-reps', '--reward_epsilon', default=0.0001, type=float,
+    env_group.add_argument('-reps', '--reward_epsilon', default=0.000, type=float,
                            help='Distance between the cummulative rewards of each pair of trajectories for them to be considered as equal in the comparisons')
 
     return parser.parse_args()
@@ -95,7 +97,7 @@ if __name__ == "__main__":
 
     environment_data = config[parser_args.environment]
     society_data = society_config[parser_args.environment]['default']
-
+    parser_args.society_name = 'default'
     grounding_path = os.path.join(
         'envs', parser_args.environment, GROUNDINGS_PATH)
     dataset_name = parser_args.dataset_name
@@ -117,7 +119,6 @@ if __name__ == "__main__":
 
     if parser_args.environment == 'apollo':
         extra_kwargs = {
-            'random_state': parser_args.seed,
             'test_size': parser_args.split_ratio
         }
 
@@ -204,6 +205,7 @@ if __name__ == "__main__":
             expert_is_stochastic=society_data['stochastic_expert'],
             loss_class=alg_config['loss_class'],
             loss_kwargs=alg_config['loss_kwargs'],
+            custom_logger='disable',
             assume_variable_horizon=environment_data['assume_variable_horizon']
 
         )
@@ -213,16 +215,13 @@ if __name__ == "__main__":
                    assumed_grounding=None, **alg_config['train_kwargs'])
     # Now we need to train.
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
-                          reward_net_pair_agent_and_vs_s, metrics_s)
-    print(metrics_s['assignment'])
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(
+                          reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
+    print(metrics_s['assignment_memory'])
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args, historic_assignments = load_training_results(
         experiment_name)
     
     assignment: ClusterAssignment = historic_assignments[-1]
     
-
-    assignment.plot_vs_assignments("demo.png")
-
     assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
     assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
     ), "Mismatch in reward_net_pair_agent_and_vs"
