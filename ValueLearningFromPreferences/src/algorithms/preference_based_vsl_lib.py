@@ -18,7 +18,7 @@ from ordered_set import OrderedSet
 
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 from src.dataset_processing.data import TrajectoryWithValueSystemRewsPair
-from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, TrainingModes
+from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, LinearAlignmentLayer, TrainingModes
 import torch as th
 
 from imitation.algorithms.preference_comparisons import LossAndMetrics
@@ -139,10 +139,17 @@ def calculate_accuracies(probs_vs: th.Tensor = None, probs_gr: th.Tensor = None,
 
     return accuracy_vs, accuracy_gr, misclassified_vs, misclassified_gr
 
-def total_variation_distance(preferences1, preferences2, p='inf'):
-    return th.norm(preferences1-preferences2, p=p)
-    return th.mean(th.abs(preferences1 - preferences2))#/len(preferences1)
+def total_variation_distance(preferences1, preferences2):
+    #return th.norm(preferences1-preferences2, p=p)
+    return th.mean(th.square(preferences1 - preferences2))#/len(preferences1)
 
+def jensen_shannon_pairwise_preferences(preferences1, preferences2):
+    #return th.norm(preferences1-preferences2, p=p)
+    m = (preferences1+preferences2)/2.0
+    k1 = preferences1*(th.log(preferences1+1e-8) - th.log(m+1e-8)) + (1-preferences1)*(th.log(1-preferences1+1e-8) - th.log(1-m+1e-8))
+    k2 = preferences2*(th.log(preferences2+1e-8) - th.log(m+1e-8)) + (1-preferences2)*(th.log(1-preferences2+1e-8) - th.log(1-m+1e-8))
+
+    return th.mean((k1+k2)/2.0)#/len(preferences1)
 
 def likelihood_x_is_target(pred_probs, target_probs, mode='numpy', slope=1, adaptive_slope=True, qualitative_mode=False, indifference_tolerance=0.0):
     # SEE GEOGEBRA: https://www.geogebra.org/calculator/vdn3mj4k
@@ -294,7 +301,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         on_specific_agent_ids: Iterable = None,
         only_for_alignment_function=None,
         only_grounding=False,
-
+        return_rewards_per_agent=False,
         add_probs_per_agent=False
     ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor], Optional[th.Tensor]]:
         """Computes the preference probability of the first fragment for all pairs.
@@ -329,28 +336,44 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         probs_vs_per_aid = dict()
         probs_gr_per_aid = dict()
 
+        if return_rewards_per_agent:
+            rews_vs_per_aid = dict()
+            rews_gr_per_aid = dict()
         counter_idx = 0
 
         #  TODO... Fragments per agent id... But remain in the order said by fragment_pairs
-        
+        n_values = 0
         for aid, fragment_pairs_aid in fragment_pairs_per_agent_id.items():
+            if n_values == 0:
+                n_values = fragment_pairs_aid[0][0].value_rews.shape[0]
+
             model = models_per_agent[aid]
             n_fragments = len(fragment_pairs_aid)
+            fragment_size = len(fragment_pairs_aid[0][0])
 
             probs_vs_per_aid[aid] = th.empty(n_fragments, dtype=dtype)
             if only_for_alignment_function is None:
                 probs_gr_per_aid[aid] = th.zeros(
-                    (len(fragment_pairs_aid), fragment_pairs_aid[0][0].value_rews.shape[0]), dtype=dtype)
+                    (len(fragment_pairs_aid), n_values), dtype=dtype)
+                if return_rewards_per_agent:
+                    rews_vs_per_aid[aid] = None # tuple initialized later.
+                    rews_gr_per_aid[aid] = (th.empty(
+                    (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype), th.empty(
+                    (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype))
 
             all_transitions_aid = rollout.flatten_trajectories(
                 [frag for fragment in fragment_pairs_aid for frag in fragment])
             
             all_rews_vs_aid, all_rews_gr_aid = self.rewards(
                 all_transitions_aid, only_with_alignment=only_for_alignment_function is not None, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
+            
+                
+                
 
             idx = 0
 
             if self.algorithm.allow_variable_horizon:
+                raise ValueError("You should overhaul this... Like padding with 0 maybe?")
                 for iad, (f1, f2) in enumerate(fragment_pairs_aid):
 
                     rews1_vsaid, rews1_graid = all_rews_vs_aid[idx:idx+len(
@@ -373,21 +396,29 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                             probs_gr_per_aid[aid][iad, j] = self.probability(
                                 rews1_graid[j], rews2_graid[j])
             else:
-                fragment_size = len(fragment_pairs_aid[0][0])
+                
                 if not only_grounding:
                     rews1_vsaid_all, rews2_vsaid_all = PreferenceModelClusteredVSL._slice_all_transitions_into_pairs(
                         all_rews_vs_aid, fragment_size)
                     probs_vs_per_aid[aid] = self.probability(
                         rews1_vsaid_all, rews2_vsaid_all)
+                    if return_rewards_per_agent:
+                        rews_vs_per_aid[aid] = (rews1_vsaid_all, rews2_vsaid_all)
+
                 if only_for_alignment_function is None:
-                    for j in range(fragment_pairs_aid[0][0].value_rews.shape[0]):
+                    for j in range(n_values):
                         rews1_graid_all_j, rews2_graid_all_j = PreferenceModelClusteredVSL._slice_all_transitions_into_pairs(
                             all_rews_gr_aid[j], fragment_size)
                         probs_gr_per_aid[aid][:, j] = self.probability(
                             rews1_graid_all_j, rews2_graid_all_j)
-
+                        if return_rewards_per_agent:
+                            rews_gr_per_aid[aid][0][:, :, j] = rews1_graid_all_j
+                            rews_gr_per_aid[aid][1][:, :, j] = rews2_graid_all_j
+                            assert rews_gr_per_aid[aid][0].shape == (len(fragment_pairs_aid), fragment_size, n_values)
+                
+                
             if fragment_pairs_idxs_per_agent_id is not None:
-                fragment_idxs = fragment_pairs_idxs_per_agent_id[aid]
+                fragment_idxs = fragment_pairs_idxs_per_agent_id[aid] #TODO optimize later to index rews_gr_per_aid
             else:
                 # just put them in order of appearance of each agent. 
                 fragment_idxs = np.array(list(range(n_fragments))) + counter_idx
@@ -400,10 +431,16 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         if custom_model_per_agent_id is not None:
             self.model = prev_model
 
-        if add_probs_per_agent:
-            return probs_vs, probs_gr, probs_vs_per_aid, probs_gr_per_aid
+        if return_rewards_per_agent is False:
+            if add_probs_per_agent:
+                return probs_vs, probs_gr, probs_vs_per_aid, probs_gr_per_aid
+            else:
+                return probs_vs, probs_gr,
         else:
-            return probs_vs, probs_gr,
+            if add_probs_per_agent:
+                return probs_vs, probs_gr, probs_vs_per_aid, probs_gr_per_aid, rews_vs_per_aid, rews_gr_per_aid
+            else:
+                return probs_vs, probs_gr, rews_vs_per_aid, rews_gr_per_aid
 
     def rewards(self, transitions: Transitions, only_with_alignment=False, only_grounding=False, real=False, alignment=None, grounding=None, custom_model=None) -> th.Tensor:
         """Computes the reward for all transitions.
@@ -761,14 +798,16 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         preferences_per_agent_id_with_grounding: np.ndarray = None,
 
         value_system_network_per_cluster: List =None,
-        grounding_per_value_per_cluster: List =None
+        grounding_per_value_per_cluster: List =None,
+        agent_to_vs_cluster_assignments: Dict[str, int] = None,
 
     ) -> preference_comparisons.LossAndMetrics:
         """Computes the loss. Same as Cross Entropy but does not overfit to class certainty, i.e. does not consider examples that are already correct."""
         # start_time = time.time()
 
-        probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent = preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
-                                                                                              fragment_pairs_idxs_per_agent_id=fragment_idxs_per_aid, only_for_alignment_function=None, add_probs_per_agent=True)
+        probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_agent = preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
+                                                                                              fragment_pairs_idxs_per_agent_id=fragment_idxs_per_aid, only_for_alignment_function=None, 
+                                                                                              add_probs_per_agent=True, return_rewards_per_agent=True)
 
         """This tests forward works correctly...
         probs_vs_n, _, gt_probs_vs_n, gt_probs_gr_n  = preference_model.forward(fragment_pairs_per_agent_id={'normal_0': fragment_pairs_per_agent_id['normal_0']}, custom_model_per_agent_id={'normal_0': reward_model_per_agent_id['normal_0']}, 
@@ -816,14 +855,11 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         else:
             loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
             if self.cluster_similarity_penalty > 0.0:
-                value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
-                
-                # TODO. only take into account the clusters that are used in the current assignment.
-                avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
-                
-                vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )
+
+                conc_penalty = self.conciseness_penalty(preference_model, rews_gr_per_aid=rews_gr_per_agent, rews_vs_per_agent=rews_vs_per_agent, value_system_network_per_cluster=value_system_network_per_cluster, 
+                                                      agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments)
             
-                loss_vs -= self.cluster_similarity_penalty*vs_penalty
+                loss_vs = (1-self.cluster_similarity_penalty)*loss_vs - self.cluster_similarity_penalty*conc_penalty
             metrics['loss_vs'] = loss_vs
         # LOSS GROUNDING.
         # start_time = time.time()
@@ -857,6 +893,67 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             loss=(loss_vs, loss_gr, metrics['loss_per_vi']),
             metrics=metrics,
         )
+
+    def conciseness_penalty(self, preference_model: PreferenceModelClusteredVSL, 
+                            rews_gr_per_aid: Dict[str, Tuple[th.Tensor, th.Tensor]], 
+                            rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]],
+                            value_system_network_per_cluster: List[LinearAlignmentLayer], 
+                            agent_to_vs_cluster_assignments: Dict[str, int]):
+        if len(value_system_network_per_cluster) <= 1:
+            return th.tensor(0.0, device=value_system_network_per_cluster[0].device, dtype=value_system_network_per_cluster[0].dtype)
+        ex_model = list(rews_gr_per_aid.values())[0][0]
+        device = ex_model.device
+        dtype = ex_model.dtype
+
+        agents_per_cluster = {int(c): [] for c in range(len(value_system_network_per_cluster))}
+        for aid, c in agent_to_vs_cluster_assignments.items():
+            agents_per_cluster[int(c)].append(aid) # TODO: EFFICIENCY!! (GET THE ASSIGNMENTS TO CLUSTERS INSTEAD??)
+
+        conc_penalty = th.tensor(1.0, device=device, dtype=dtype)
+        for (c1, c2) in itertools.combinations(list(range(len(value_system_network_per_cluster))), 2):
+            ac1 = agents_per_cluster[c1]
+            ac2 = agents_per_cluster[c2]
+            if len(ac1) == 0 or len(ac2) == 0:
+                continue
+
+            agents_in_c1_c2 = agents_per_cluster[c1] + agents_per_cluster[c2]
+            
+            vs1 = value_system_network_per_cluster[c1]
+            vs2 = value_system_network_per_cluster[c2]
+
+            rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
+            rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
+            assert rews_f1_in_c1_c2.shape == rews_f2_in_c1_c2.shape
+            assert rews_f1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1], value_system_network_per_cluster[0].in_features), rews_f1_in_c1_c2.shape
+
+            rews_vs1_f1_in_c1_c2 = vs1.forward(rews_f1_in_c1_c2).squeeze(-1)
+            # TODO: optimize here: get the rews from vs1 ancd c1 from rews_vs_per_agent. Only in the misture recalculate.
+            th.testing.assert_close(rews_vs_per_agent[agents_per_cluster[c1][0]][0] , rews_vs1_f1_in_c1_c2[0:rews_vs_per_agent[agents_per_cluster[c1][0]][0].shape[0]])
+            rews_vs1_f2_in_c1_c2 = vs1.forward(rews_f2_in_c1_c2).squeeze(-1)
+
+            rews_vs2_f1_in_c1_c2 = vs2.forward(rews_f1_in_c1_c2).squeeze(-1)
+            rews_vs2_f2_in_c1_c2 = vs2.forward(rews_f2_in_c1_c2).squeeze(-1)
+
+            assert rews_vs1_f1_in_c1_c2.shape == rews_vs2_f2_in_c1_c2.shape
+            assert rews_vs2_f2_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1])
+
+            probabilities_vs1_in_c1_c2 = preference_model.probability(rews_vs1_f1_in_c1_c2, rews_vs1_f2_in_c1_c2)
+            probabilities_vs2_in_c1_c2 = preference_model.probability(rews_vs2_f1_in_c1_c2, rews_vs2_f2_in_c1_c2)
+
+            assert probabilities_vs1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0],)
+            conc_penalty = min(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2), conc_penalty) # TODO minimum?? or maybe other aggregation...
+
+            
+        #print("CONCISENESS FACTOR", conc_penalty)
+        # This is a dummy weight similarity dispersion loss
+
+        """value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
+                
+                # TODO. only take into account the clusters that are used in the current assignment.
+        avg_vs = th.mean(value_systems_in_each_cluster, axis=0)
+                
+        vs_penalty = th.norm(value_systems_in_each_cluster - avg_vs )"""
+        return conc_penalty
     
 class VSLOptimizer(th.optim.Optimizer):
     def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, lr_value_system=None,sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
@@ -921,8 +1018,8 @@ class VSLCustomLoss(BaseVSLClusterRewardLoss):
     def forward(self, preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, 
                 fragment_pairs_per_agent_id = None, preferences_per_agent_id = None, 
                 preferences_per_agent_id_with_grounding = None, value_system_network_per_cluster = None, 
-                grounding_per_value_per_cluster = None) -> LossAndMetrics:
-        lossMetrics = super().forward(preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, fragment_pairs_per_agent_id, preferences_per_agent_id, preferences_per_agent_id_with_grounding, value_system_network_per_cluster, grounding_per_value_per_cluster)
+                grounding_per_value_per_cluster = None,agent_to_vs_cluster_assignments=None) -> LossAndMetrics:
+        lossMetrics = super().forward(preferences, preferences_with_grounding, preference_model, reward_model_per_agent_id, fragment_idxs_per_aid, fragment_pairs_per_agent_id, preferences_per_agent_id, preferences_per_agent_id_with_grounding, value_system_network_per_cluster, grounding_per_value_per_cluster,agent_to_vs_cluster_assignments)
         self.gr_loss_per_vi = lossMetrics.loss[2]
         self.gr_loss = lossMetrics.loss[1]
         self.vs_loss = lossMetrics.loss[0]
@@ -994,13 +1091,6 @@ class ConstrainedLoss(VSLCustomLoss):
                 gr_acc_vi = float(self.last_accuracy_gr[vi])
 
                 if gr_acc_vi > self.best_accuracies[vi]:
-                    """if self.lambdas_when_best is None:
-                        self.lambdas_when_best = [float(self.lagrange_multipliers[vi].detach().numpy())]*len(self.gr_loss_per_vi)
-                    else:
-                        if gr_loss_vi == self.best_gr_losses[vi]:
-                            self.lambdas_when_best[vi] = min(float(self.lagrange_multipliers[vi].detach().numpy()), self.lambdas_when_best[vi])
-                        else:
-                            self.lambdas_when_best[vi] = float(self.lagrange_multipliers[vi].detach().numpy())"""
                     self.best_accuracies[vi] = gr_acc_vi
                     self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
                     

@@ -92,7 +92,7 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 100,
+                    "epochs": 200,
                     "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 15,

@@ -541,10 +541,21 @@ class ClusterAssignment():
         return self.__str__()
     
     def is_equivalent_assignment(self, other: Self):
-        if self.L != other.L:
+        l = self.L 
+        l_other = other.L
+        k_t = tuple(self.K)
+        k_t_other = tuple(other.K)
+        if self.n_values != other.n_values:
             return False
-        if self.K != other.K:
+        
+        if l != l_other:
             return False
+        if k_t != k_t_other:
+            return False
+        
+        if l == 1 and l_other == 1 and k_t == tuple([1]*self.n_values) and k_t_other == tuple([1]*self.n_values):
+            return True
+        
         return self.agent_distribution_gr() == other.agent_distribution_gr() and self.agent_distribution_vs() == other.agent_distribution_vs()
 
     def agent_distribution_gr(self):
@@ -567,6 +578,8 @@ class ClusterAssignmentMemory():
         self.maximum_conciseness_vs = float('-inf')
         self.maximum_conciseness_gr = [float('-inf') for _ in range(n_values)]
 
+        self.maximum_grounding_coherence = [float('-inf') for _ in range(n_values)]
+
         self.non_improvable_assignments = []
 
     def __str__(self):
@@ -587,7 +600,7 @@ class ClusterAssignmentMemory():
 
     
     
-    def compare_assignments(self, x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False) -> float:
+    def compare_assignments(self, x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False, tolerance=0.001, tolerance_conc=0.01) -> float:
 
         # first on different grounding scores... then on value system scores.
         assert x.n_values == y.n_values
@@ -615,50 +628,41 @@ class ClusterAssignmentMemory():
         gr_score_dif = x.aggregation_on_gr_scores(difs) # TODO... maybe aggregation on scores should be modelled outside these two?
         #pareto
         vs_score_dif = x.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs) - y.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs)
-        #repr_dif = x.representativity_vs() - y.representativity_vs()
+        repr_dif = x.representativity_vs() - y.representativity_vs()
         #TODO: TEST PARETO TAKING INTO ACOUNT REPRESENTATIVITY TOO?
-        # TODO: test firefighters or others that have 1 cluster sometimes to see if this works.
+        
         pareto_score = 0.0
         lexic_diff = 0.0
-        if (gr_score_dif > 0.0 and vs_score_dif >= 0.0) or (gr_score_dif >= 0.0 and vs_score_dif > 0.0):
+        if (gr_score_dif > 0.0 and vs_score_dif >= 0.0 and repr_dif >=0) or (gr_score_dif >= 0.0 and vs_score_dif > 0.0 and repr_dif >=0) or (gr_score_dif >= 0.0 and vs_score_dif >= 0.0 and repr_dif > 0):
                 pareto_score = 1.0
-        elif (gr_score_dif <= 0.0 and vs_score_dif < 0.0) or (gr_score_dif < 0.0 and vs_score_dif <= 0.0):
+        elif (gr_score_dif < 0.0 and vs_score_dif <= 0.0 and repr_dif <=0) or (gr_score_dif <= 0.0 and vs_score_dif < 0.0 and repr_dif <=0) or (gr_score_dif <= 0.0 and vs_score_dif <= 0.0 and repr_dif < 0):
             pareto_score    = -1.0
         else:
             pareto_score = 0.0
 
         if lexicographic_vs_first:
                 
-                if vs_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
+                if abs(vs_score_dif) > tolerance_conc: 
                         lexic_diff = vs_score_dif
                 else:
-                        
+                    if abs(repr_dif) > tolerance:
+                        lexic_diff = repr_dif
+                    else:
                         lexic_diff = gr_score_dif
         else:
-            if gr_score_dif != 0.0: # TODO relax this comparison? Lexicograhic is very strict... But this is how it is modelled.
-                    lexic_diff = gr_score_dif
+            if abs(gr_score_dif) > tolerance: 
+                lexic_diff = gr_score_dif  
             else:
+                if abs(repr_dif) > tolerance:
+                        lexic_diff = repr_dif
+                else:
                     lexic_diff = vs_score_dif
         return lexic_diff, pareto_score
        
     def insert_assignment(self, assignment: ClusterAssignment) -> Tuple[int, ClusterAssignment]:
 
-        if assignment.L > 1:
-            new_max_c = max(self.maximum_conciseness_vs, assignment.conciseness_vs()) 
-            if new_max_c != self.maximum_conciseness_vs:
-                changes_made = True
-            self.maximum_conciseness_vs = new_max_c
-        
-        for vi in range(len(assignment.K)):
-            if assignment.K[vi] > 1:
-                new_max_c = max(assignment.concisenesses_gr()[vi], self.maximum_conciseness_gr[i])
-                if new_max_c != self.maximum_conciseness_gr[i]:
-                    changes_made = True
-                self.maximum_conciseness_gr[i] = new_max_c
+        self.update_maximum_conciseness(assignment)
             
-        if __debug__:
-            for a,b in itertools.combinations(range(len(self.memory)), 2):
-                assert not self.memory[a].is_equivalent_assignment(self.memory[b]), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
         
         
         #lexico_diffs = []
@@ -668,42 +672,77 @@ class ClusterAssignmentMemory():
         dominated_indices = []
         changes_made = False
         is_dominated = False
-        
+        admit_insertion = True
+
+        l_assignment = assignment.L # if it is 1, need to have only one.
         for i in range(len(self.memory)):
-            cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=True,) 
+            cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=False,) 
             eq = self.memory[i].is_equivalent_assignment(assignment)
             equivalent_assignments.append(eq)
             #lexico_diffs.append(cmp_lexico)
             pareto_diffs.append(cmp_pareto)
 
-            if cmp_pareto < 0 and eq:
-                changes_made= True
-                
-                dominated_indices.append(i) # Dominated that also equivalent
-            elif cmp_pareto > 0:
-                assignment.explored = True
+            if cmp_pareto > 0:
                 is_dominated = True
 
+            if (cmp_pareto < 0 and eq) or (cmp_pareto < 0 and self.memory[i].explored):
+                dominated_indices.append(i) # Dominated that also equivalent
+
+            if l_assignment == 1 and self.memory[i].L == 1:
+                if cmp_lexico > 0 or cmp_pareto > 0:
+                    admit_insertion = False
+                else:
+                    if i not in dominated_indices:
+                        dominated_indices.append(i)
+        if assignment.L == 1:
+            print("L1" ,admit_insertion, dominated_indices, self.maximum_conciseness_vs)            
         # Insert the new one if all the pareto diffs are less than or equal than 0 (pareto dominates someone or is non dominated).
         pareto_diffs = np.array(pareto_diffs)
-        if all(pareto_diffs <= 0) or (not is_dominated) or (is_dominated and equivalent_assignments.count(True) == 0) or all([self.memory[i].explored]):
+        if admit_insertion and ((all(pareto_diffs <= 0)) or (not is_dominated) or (equivalent_assignments.count(True) == 0) or all([asa.explored for asa in self.memory])):
             changes_made = True
             self.memory.append(assignment)  
-        
-        # Eliminate the assignments in the dominated_indices
-        for idx in sorted(dominated_indices, reverse=True):
-                changes_made=True
-                self.memory.pop(idx)  
+            # Eliminate the assignments in the dominated_indices
+            for idx in sorted(dominated_indices, reverse=True):
+                    changes_made=True
+                    self.memory.pop(idx)  
+
         if changes_made:
+            self.sort_lexicographic(lexicographic_vs_first=True)
             if len(self.memory) > self.max_size:
                 self.clean_memory(exhaustive=False)
-            self.sort_lexicographic(lexicographic_vs_first=True)
+            
         assignment.explored = not changes_made
+
+        if __debug__:
+            for a,b in itertools.combinations(range(len(self.memory)), 2):
+                assert not (self.memory[a].is_equivalent_assignment(self.memory[b]) and self.compare_assignments(self.memory[a],self.memory[b])[1] != 0), f"Assignments {a} and {b} are not equivalent. {a} vs {b}"
+        
         return
+
+    def update_maximum_conciseness(self, assignment: ClusterAssignment):
+
+        gr_diffs = np.array(self.maximum_grounding_coherence) - np.array(assignment.gr_score)
+        better_grounding_precondition = all(gr_diffs <= 0.0)
+        if better_grounding_precondition:
+            self.maximum_grounding_coherence = assignment.gr_score
+
+        if better_grounding_precondition:
+            if assignment.L > 1: 
+                new_max_c = max(self.maximum_conciseness_vs, assignment.conciseness_vs()) 
+                if new_max_c != self.maximum_conciseness_vs:
+                    changes_made = True
+                self.maximum_conciseness_vs = new_max_c
+            
+            for vi in range(len(assignment.K)):
+                if assignment.K[vi] > 1:
+                    new_max_c = max(assignment.concisenesses_gr()[vi], self.maximum_conciseness_gr[vi])
+                    if new_max_c != self.maximum_conciseness_gr[vi]:
+                        changes_made = True
+                    self.maximum_conciseness_gr[vi] = new_max_c
 
     def clean_memory(self, exhaustive=True):
         pareto_dominated_counts = [0] * len(self.memory)
-        equivalent_assignments = [False] * len(self.memory)
+        equivalent_assignments_counts = [0] * len(self.memory)
 
         # Calculate pareto dominance and equivalence
         
@@ -719,23 +758,23 @@ class ClusterAssignmentMemory():
                         
                         pareto_dominated_counts[i] += 1
                     if eq:
-                        equivalent_assignments[i] = True
+                        equivalent_assignments_counts[i] += 1
                     if (cmp_pareto > 0 and eq) or (cmp_pareto > 0 and self.memory[i].explored): 
                         # This is always something that needs to be done.
-                        # If explored and is dominated, out, no interest in this solution.
+                        # If explored and is dominated is of no interest.
                         # In any case, an equivalent assignment that is dominated is not useful.
                         self.memory.pop(i)
                         pareto_dominated_counts.pop(i)
-                        equivalent_assignments.pop(i)
+                        equivalent_assignments_counts.pop(i)
                         eliminated_i = True
             # Also try to eliminate any element that is pareto dominated and equivalent to another
             # This is not compulsory, though. 
             if not eliminated_i:
                 if exhaustive or len(self.memory) > self.max_size:
-                    if pareto_dominated_counts[i] > 0 and equivalent_assignments[i]:
+                    if pareto_dominated_counts[i] > 0 and equivalent_assignments_counts[i] > 0:
                         self.memory.pop(i)
                         pareto_dominated_counts.pop(i)
-                        equivalent_assignments.pop(i)
+                        equivalent_assignments_counts.pop(i)
                         if not exhaustive:
                             return
         
@@ -747,17 +786,16 @@ class ClusterAssignmentMemory():
                 idx_to_remove = pareto_dominated_counts.index(max_dominated_count)
                 self.memory.pop(idx_to_remove)
                 pareto_dominated_counts.pop(idx_to_remove)
-                equivalent_assignments.pop(idx_to_remove)
+                equivalent_assignments_counts.pop(idx_to_remove)
                 max_dominated_count = max(pareto_dominated_counts)
                 if not exhaustive:
                     break
-            
-        # If all are pareto dominated, remove the one with less representativity.
+        # If still too many, remove the first assignment that is equivalent to another
         if len(self.memory) > self.max_size:
-            sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x:x[1].representativity_vs(), reverse=False)]
-            
+            #sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: equivalent_assignments_counts[x[0]], reverse=True)]
+            sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (equivalent_assignments_counts[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
             worst = sorted_indices[0]
-            self.memory.pop(worst)  
+            self.memory.pop(worst)
         return
         
     def sort_lexicographic(self, lexicographic_vs_first=False):

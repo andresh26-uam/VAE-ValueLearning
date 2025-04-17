@@ -75,9 +75,11 @@ class ConvexTensorModule(th.nn.Module):
 
 
 class LinearAlignmentLayer(th.nn.Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, device=None, dtype=None, data=None) -> None:
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, device=None, dtype=None, data=None, n_values=None) -> None:
         super().__init__(in_features, out_features, bias, device, dtype)
         self.linear_bias = bias
+        self.n_values = in_features if n_values is None else n_values # TODO: This might not be the case in future works...
+
         with th.no_grad():
             state_dict = self.state_dict()
             random_vector = th.rand_like(state_dict['weight'])
@@ -85,7 +87,7 @@ class LinearAlignmentLayer(th.nn.Linear):
                 state_dict['weight']) * random_vector
 
             self.load_state_dict(state_dict)
-
+    
     def forward(self, input: th.Tensor) -> th.Tensor:
         w_bounded, b_bounded = self.get_alignment_layer()
 

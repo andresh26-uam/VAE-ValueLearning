@@ -226,6 +226,10 @@ if __name__ == "__main__":
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
     #  Make every single column modular, i.e. to activate or deactivate it with a flag.
     # Output the tables in latex anc csv in the test_results/{experiment_name}/csv and test_results/{experiment_name}/latex folders.
+
+    # 2: plots.
+    # 3: SHAP VALUES TODO
+    # 4: CONTEXT CLUSTERS TODO
     best_vs_then_gr_assignment = assignment_memory.memory[-1]
     best_gr_then_vs_assignment = assignment_memory.memory[0]
 

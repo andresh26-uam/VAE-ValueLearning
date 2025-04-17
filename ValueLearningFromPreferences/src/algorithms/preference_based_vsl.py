@@ -86,6 +86,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         self.cluster_colors = None
         self.cluster_colors_vs = None
         self._logger=custom_logger
+        self.loss: BaseVSLClusterRewardLoss
+
 
     def reset_training(self):
         #self.assignment_scores_gr = [{} for vi in range(self.n_values)]
@@ -612,7 +614,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
             fragment_idxs_per_aid=fragment_idxs_per_aid,
             
             value_system_network_per_cluster=value_system_network_per_cluster,
-            grounding_per_value_per_cluster=grounding_per_value_per_cluster) # These two provide penalties
+            grounding_per_value_per_cluster=grounding_per_value_per_cluster,
+            agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments) # These two provide penalties
 
         loss_vs, loss_gr, loss_gr_per_vi = output.loss
         if self.use_logger:
