@@ -743,7 +743,7 @@ class ClusterAssignmentMemory():
         equivalent_assignments = []
         pareto_diffs = []
 
-        dominated_indices = []
+        dominated_indices = set()
         changes_made = False
         is_dominated = False
         admit_insertion = True
@@ -762,16 +762,12 @@ class ClusterAssignmentMemory():
                     admit_insertion = False
 
             if (cmp_pareto < 0 and eq) or (cmp_pareto < 0 and self.memory[i].explored):
-                dominated_indices.append(i) # Dominated that also equivalent
+                dominated_indices.add(i) # Dominated that also equivalent
 
             if l_assignment == 1 and self.memory[i].L == 1:
-                if cmp_lexico > 0 or cmp_pareto > 0:
-                    admit_insertion = False
-                else:
-                    if cmp_lexico < 0 and cmp_pareto <= 0:
-                        admit_insertion = True
-                        if i not in dominated_indices:
-                            dominated_indices.append(i)
+                admit_insertion = True
+                if i not in dominated_indices:
+                        dominated_indices.add(i)
                     
                  
         # Insert the new one if all the pareto diffs are less than or equal than 0 (pareto dominates someone or is non dominated).
@@ -780,7 +776,7 @@ class ClusterAssignmentMemory():
             changes_made = True
             self.memory.append(assignment)  
             # Eliminate the assignments in the dominated_indices
-            for idx in sorted(dominated_indices, reverse=True):
+            for idx in sorted(list(dominated_indices), reverse=True):
                     changes_made=True
                     self.memory.pop(idx)  
 
@@ -826,9 +822,14 @@ class ClusterAssignmentMemory():
         # Calculate pareto dominance and equivalence
         
         for i in reversed(list(range(len(self.memory)))):
+            if self.memory[i].L == 1:
+                pareto_dominated_counts[i] = 0
+                equivalent_assignments_counts[i] = 0
+                similarity_index[i] = 0
+                continue
             eliminated_i = False
             for j in range(len(self.memory)):
-                if eliminated_i:
+                if eliminated_i: 
                     continue
                 if i != j:
                     _, cmp_pareto = self.compare_assignments(self.memory[j], self.memory[i], lexicographic_vs_first=True)
@@ -879,11 +880,9 @@ class ClusterAssignmentMemory():
             sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (similarity_index[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
             worst = sorted_indices[0]
             if self.memory[worst].L == 1:
-                # If it is a single cluster, remove the one with the most pareto dominated assignments
-                print("WHATATE ", self)
-                print(sorted_indices)
-                exit(0)
-            self.memory.pop(worst)
+                self.memory.pop(sorted_indices[1])
+            else:
+                self.memory.pop(worst)
         return
         
     def sort_lexicographic(self, lexicographic_vs_first=False):
