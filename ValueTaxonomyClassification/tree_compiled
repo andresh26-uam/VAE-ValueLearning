@@ -1,0 +1,11 @@
+digraph {
+	0 [label=neg]
+	1 [label=neg]
+	2 [label=add]
+	3 [label=0.12943007330894685]
+	4 [label=STP_3]
+	0 -> 1
+	1 -> 2
+	2 -> 3
+	2 -> 4
+}

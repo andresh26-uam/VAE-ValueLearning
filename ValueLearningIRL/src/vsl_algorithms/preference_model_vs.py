@@ -666,7 +666,6 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                  vsi_target_align_funcs=...,
                  vgl_target_align_funcs=...,
                  training_mode=TrainingModes.VALUE_GROUNDING_LEARNING,
-                 independent_vgl = False,
                  rng=np.random.default_rng(0),
                  discount_factor_preferences=None,
                  use_quantified_preference=False,
@@ -692,7 +691,6 @@ class PreferenceBasedTabularMDPVSL(BaseTabularMDPVSLAlgorithm):
                          vgl_target_align_funcs=vgl_target_align_funcs, training_mode=training_mode, custom_logger=custom_logger, learn_stochastic_policy=learn_stochastic_policy,stochastic_expert=expert_is_stochastic)
 
         self.rng = rng
-        self.independent_vgl = independent_vgl
         if discount_factor_preferences is None:
             self.discount_factor_preferences = discount
         else:
