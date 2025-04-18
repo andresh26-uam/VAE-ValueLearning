@@ -433,15 +433,18 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                     
             print("Cluster assigned.")              
                                 
-            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
-                                                                                                fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None, add_probs_per_agent=True)
+            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_aid = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
+                                                                                                fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None, 
+                                                                                                add_probs_per_agent=True, return_rewards_per_agent=True)
 
                                 
             vs_intra_dist, vs_inter_dist, vs_intra_per_agent, vs_inter_per_cluster_pair = self.vs_discordances(reward_model_per_agent_id=reward_model_per_agent_id,
                                                                                     vs_cluster_to_agents_assignment=new_assignment_copy.assignment_vs, 
                                                                                     value_system_per_cluster=value_system_per_cluster,
                                                                                     fragment_pairs_per_aid=val_fragment_pairs_per_aid,
-                                                                                    probs_per_aid=probs_vs_per_agent, preferences_per_aid=val_preferences_per_aid)
+                                                                                    probs_per_aid=probs_vs_per_agent, preferences_per_aid=val_preferences_per_aid, 
+                                                                                    
+                                                                                    assume_1_grounding=True,rews_gr_per_aid=rews_gr_per_aid, rews_vs_per_agent=rews_vs_per_agent)
                                 
                                 # Grounding distances
             gr_intra_dist, gr_inter_dist, gr_intra_per_agent, gr_inter_per_cluster_pair = self.gr_discordances(grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
@@ -517,7 +520,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                 gr_inter_cluster_distances[vi] = [float('inf')]
                
         return gr_intra_cluster_distances, gr_inter_cluster_distances, gr_discordance_of_each_agent, gr_inter_dist_for_each_pair_of_clusters
-    def vs_discordances(self, reward_model_per_agent_id, value_system_per_cluster, vs_cluster_to_agents_assignment, fragment_pairs_per_aid, preferences_per_aid, probs_per_aid):
+    def vs_discordances(self, reward_model_per_agent_id, value_system_per_cluster, vs_cluster_to_agents_assignment, fragment_pairs_per_aid, preferences_per_aid, probs_per_aid, assume_1_grounding=True, rews_gr_per_aid: Dict[str, Tuple[th.Tensor, th.Tensor]] = None, 
+                            rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]] = None):
         
         fragments_on_each_cluster_vs  = {(c1,c2): (vs_cluster_to_agents_assignment[c1], vs_cluster_to_agents_assignment[c2]) for c1,c2 in itertools.combinations(range(len(vs_cluster_to_agents_assignment)), r=2) }
         if len(fragments_on_each_cluster_vs) == 0:
@@ -533,12 +537,14 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         vs_inter_dist_for_each_pair_of_clusters = {}
 
         gt_is_numpy = isinstance(preferences_per_aid[list(preferences_per_aid.keys())[0]], np.ndarray)
+        s = time.time()
         for (c1,c2), (assigned_c1, assigned_c2) in fragments_on_each_cluster_vs.items():
             for (ci, assigned_ci) in [(c1, assigned_c1), (c2, assigned_c2)]:
                 #print("CI", ci, fragments_on_each_cluster_per_aid.keys(), assigned_ci, vs_intra_cluster_distances_per_value_per_cluster.keys())
                 if ci not in fragments_on_each_cluster_per_aid.keys():
-                    fragments_on_each_cluster_per_aid[ci] = {aid: fragment_pairs_per_aid[aid] for aid in assigned_ci }
-                    preferences_on_each_cluster_per_aid[ci] = {aid: preferences_per_aid[aid] for aid in assigned_ci }
+                    if not assume_1_grounding: # TODO
+                        fragments_on_each_cluster_per_aid[ci] = {aid: fragment_pairs_per_aid[aid] for aid in assigned_ci }
+                        preferences_on_each_cluster_per_aid[ci] = {aid: preferences_per_aid[aid] for aid in assigned_ci }
 
                     for aid in assigned_ci:
                         representativity_error = discordance(probs=probs_per_aid[aid].detach().numpy() if gt_is_numpy else probs_per_aid[aid],
@@ -552,15 +558,36 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                 
                     
             if len(assigned_c1) > 0 and len(assigned_c2) > 0:
-                fragments_on_each_cluster_c1c2 = fragments_on_each_cluster_per_aid[c1] | fragments_on_each_cluster_per_aid[c2]
                 
-                ql_div_vs = self._preference_model.conciseness_pairwise_vs(fragments=fragments_on_each_cluster_c1c2,
-                                                                    reward_net_per_aid=reward_model_per_agent_id,
-                                                                    vs1=value_system_per_cluster[c1],
-                                                                    vs2=value_system_per_cluster[c2],indifference_tolerance=self.loss.model_indifference_tolerance,
-                                                                    #difference_function = self.loss.loss_func
-                                                                    )
-                                        
+                
+                if not assume_1_grounding:
+                    fragments_on_each_cluster_c1c2 = fragments_on_each_cluster_per_aid[c1] | fragments_on_each_cluster_per_aid[c2]
+                    ql_div_vs = self._preference_model.conciseness_pairwise_vs(fragments=fragments_on_each_cluster_c1c2,
+                                                                        reward_net_per_aid=reward_model_per_agent_id,
+                                                                        vs1=value_system_per_cluster[c1],
+                                                                        vs2=value_system_per_cluster[c2],
+                                                                        #difference_function = self.loss.loss_func
+                                                                        )
+                else:
+                    agents_in_c1_c2 = assigned_c1 + assigned_c2
+                    with th.no_grad():
+                        vs1: ConvexAlignmentLayer = value_system_per_cluster[c1] 
+                        vs2: ConvexAlignmentLayer = value_system_per_cluster[c2]
+                        rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
+                        rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
+                        rews_vs1_f1_in_c1_c2 = vs1.forward(rews_f1_in_c1_c2).squeeze(-1)
+                        # TODO: optimize here: get the rews from vs1 ancd c1 from rews_vs_per_agent. Only in the misture recalculate.
+                        #th.testing.assert_close(rews_vs_per_agent[agents_per_cluster[c1][0]][0] , rews_vs1_f1_in_c1_c2[0:rews_vs_per_agent[agents_per_cluster[c1][0]][0].shape[0]])
+                        rews_vs1_f2_in_c1_c2 = vs1.forward(rews_f2_in_c1_c2).squeeze(-1)
+
+                        rews_vs2_f1_in_c1_c2 = vs2.forward(rews_f1_in_c1_c2).squeeze(-1)
+                        rews_vs2_f2_in_c1_c2 = vs2.forward(rews_f2_in_c1_c2).squeeze(-1)
+
+                        probabilities_vs1_in_c1_c2 = self._preference_model.probability(rews_vs1_f1_in_c1_c2, rews_vs1_f2_in_c1_c2)
+                        probabilities_vs2_in_c1_c2 = self._preference_model.probability(rews_vs2_f1_in_c1_c2, rews_vs2_f2_in_c1_c2)
+
+                        ql_div_vs = discordance(probs=probabilities_vs1_in_c1_c2,gt_probs=probabilities_vs2_in_c1_c2, indifference_tolerance=0.0)
+                                  
                 vs_inter_cluster_distances.append(ql_div_vs)
                 vs_inter_dist_for_each_pair_of_clusters[(c1,c2)] = ql_div_vs
                 print(f"VS Clusters {c1} {c2}. Inter cluster distances: Qualitative {ql_div_vs}" )
@@ -576,7 +603,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         assert len(vs_inter_cluster_distances) <= len(probs_per_aid.keys())
         if len(vs_intra_cluster_distances) == 0:
             raise ValueError("Cluster discordances are not well calculated")
-        
+        rs = time.time()
+        print("RS", rs-s)
         return vs_intra_cluster_distances, vs_inter_cluster_distances, vs_discordance_of_each_agent, vs_inter_dist_for_each_pair_of_clusters
 
     
@@ -952,9 +980,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
 class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
     def __init__(self, dataset: VSLPreferenceDataset, reward_model: AbstractVSLRewardFunction, num_iterations: int, reward_trainer: ClusteringRewardTrainerVSL, rng,
-                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant", use_logger=False):
+                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant", use_logger=False, env=None):
         self.complete_dataset = dataset
         self.use_logger = use_logger
+        self.env = env
         super().__init__(preference_comparisons.TrajectoryDataset(dataset, rng, custom_logger),
                          reward_model, num_iterations, fragmenter=None, preference_gatherer=None, reward_trainer=reward_trainer,
                          comparison_queue_size=1,
@@ -1327,7 +1356,7 @@ def load_historic_assignments(experiment_name, limit=20):
             for aid, r in a.reward_model_per_agent_id.items():
                 r.set_env(env_state)
     print(f"Historic assignments loaded from {save_folder}")
-    return historic_assignments
+    return historic_assignments, env_state
 
 class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     
@@ -1353,6 +1382,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                  # 0 for deterministic preference sampling, 1 for totally random according to softmax probabilities
                  preference_sampling_temperature=0,
                  assume_variable_horizon=False,
+                 debug_mode=False,
                  reward_trainer_kwargs={
                      'epochs': 5, 'lr': 0.05, 'regularizer_factory': None, 'batch_size': 32, 'minibatch_size': None, },
                  loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
@@ -1360,7 +1390,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                  *, custom_logger='disable'):
 
         self.cluster_sizes = cluster_sizes
-        
+        self.debug_mode = debug_mode
         self.vs_L_clusters = vs_cluster_sizes if vs_cluster_sizes is not None else []
         self.allow_variable_horizon = not assume_variable_horizon
 
@@ -1465,7 +1495,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                              use_probabilistic_reward=use_probabilistic_reward,
                              n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward,
                              **kwargs)
-        historic_assignments = load_historic_assignments(experiment_name)
+        
+        historic_assignments,env_state = load_historic_assignments(experiment_name)
         return *ret, historic_assignments
 
     def train_callback(self, t):
@@ -1644,6 +1675,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
             optim_cls=optim_cls,
             optim_kwargs=optim_kwargs,
             use_logger=self.use_logger,
+            debug_mode=self.debug_mode,
             **self.reward_trainer_kwargs
         )
 
@@ -1656,6 +1688,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
             query_schedule=self.query_schedule,
             rng=self.rng,
             use_logger=self.use_logger,
+            env=self.env,
             custom_logger=None
         )
         
@@ -1722,5 +1755,5 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                                                                               val_preferences, 
                                                                               val_preferences_per_grounding, 
                                                                               val_agent_ids)
-        self.pref_comparisons.reward_trainer.debug_mode = __debug__
+        self.pref_comparisons.reward_trainer.debug_mode = self.debug_mode
         return new_assignment

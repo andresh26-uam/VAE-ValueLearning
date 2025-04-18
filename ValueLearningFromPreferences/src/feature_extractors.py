@@ -116,4 +116,7 @@ class ContextualFeatureExtractorFromVAEnv(FeatureExtractorFromVAEnv):
     
 
     def adapt_info(self, info: Dict):
+        if info is None:
+            print("WARNING: COULD NOT ADAPT TO THIS INFO: NONE")
+            return
         self.contextualize(info.get('context', None))
