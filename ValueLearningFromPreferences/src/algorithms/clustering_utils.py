@@ -6,7 +6,7 @@ import itertools
 import os
 import random
 import sys
-from typing import Any, List, Mapping, Self, Tuple
+from typing import Any, List, Mapping, Self, Set, Tuple
 
 from colorama import Fore, init
 import dill
@@ -149,6 +149,7 @@ def extract_cluster_coordinates(inter_cluster_dists, used_clusters):
         calculated_distances = []
     return nodes,coords, calculated_distances
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from itertools import permutations
 class ClusterAssignment():
     def __init__(self, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction] = {},
                  grounding_per_value_per_cluster: List[List[th.nn.Module]] = [],
@@ -558,11 +559,64 @@ class ClusterAssignment():
         
         return self.agent_distribution_gr() == other.agent_distribution_gr() and self.agent_distribution_vs() == other.agent_distribution_vs()
 
+    def cluster_similarity(self, other: Self):
+        l = self.L 
+        l_other = other.L
+        k_t = tuple(self.K)
+        k_t_other = tuple(other.K)
+        if self.n_values != other.n_values:
+            return 0.0
+        
+        if l != l_other:
+            return 0.0
+        if k_t != k_t_other:
+            return 0.0
+        one_grounding = (k_t == tuple([1]*self.n_values) and k_t_other == tuple([1]*self.n_values))
+        if l == 1 and l_other == 1 and one_grounding:
+            return 1.0
+        if self.n_agents != other.n_agents:
+            raise ValueError("Number of agents is different between the two cluster assignments. This needs a workaround.")
+        
+        # self.agent_distribution_vs() is a set of tuples. I want to use the edit distance to compare the two distributions
+        total_differences = []
+
+        a1 = self.agent_distribution_vs()
+        a2 = other.agent_distribution_vs()
+        min_total_edit_distance = float('inf')
+
+        # Generate all possible permutations of clusters in a2
+        for perm in permutations(a2):
+            total_edit_distance = 0
+            for cluster1, cluster2 in zip(a1, perm):
+                total_edit_distance += len(set(cluster1).symmetric_difference(set(cluster2)))
+            min_total_edit_distance = min(min_total_edit_distance, total_edit_distance)
+        assert min_total_edit_distance <= 2*self.n_agents
+        total_differences .append(min_total_edit_distance)
+        if not one_grounding:
+            gr_dists = self.agent_distribution_gr()
+            gr_dists_other = other.agent_distribution_gr()
+            for a1, a2 in zip(gr_dists, gr_dists_other):
+                a1 = self.agent_distribution_vs()
+                a2 = other.agent_distribution_vs()
+                min_total_edit_distance = float('inf')
+                for perm in permutations(a2):
+                    total_edit_distance = 0
+                    for cluster1, cluster2 in zip(a1, perm):
+                        total_edit_distance += len(set(cluster1).symmetric_difference(cluster2))
+                min_total_edit_distance = min(min_total_edit_distance, total_edit_distance)
+                total_differences .append(min_total_edit_distance)
+        diff = np.mean(1.0 - np.array(total_differences)/ (2*self.n_agents) )
+        if diff == 1.0:
+            assert self.is_equivalent_assignment(other)
+        else:
+            assert not self.is_equivalent_assignment(other)
+        return diff # TODO: separate grounding?
+    
     def agent_distribution_gr(self):
 
         dist = [set(tuple(cluster) for cluster in self.assignment_gr[vi]) for vi in range(len(self.assignment_gr))]
         return dist
-    def agent_distribution_vs(self):
+    def agent_distribution_vs(self) -> Set[Tuple]:
         dist = set([tuple(cluster) for cluster in self.assignment_vs])
         return dist
 
@@ -600,7 +654,7 @@ class ClusterAssignmentMemory():
 
     
     
-    def compare_assignments(self, x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False, tolerance=0.001, tolerance_conc=0.01) -> float:
+    def compare_assignments(self, x: ClusterAssignment, y: ClusterAssignment, lexicographic_vs_first=False) -> float:
 
         # first on different grounding scores... then on value system scores.
         assert x.n_values == y.n_values
@@ -642,18 +696,18 @@ class ClusterAssignmentMemory():
 
         if lexicographic_vs_first:
                 
-                if abs(vs_score_dif) > tolerance_conc: 
+                if abs(vs_score_dif) > 0: 
                         lexic_diff = vs_score_dif
                 else:
-                    if abs(repr_dif) > tolerance:
+                    if abs(repr_dif) > 0:
                         lexic_diff = repr_dif
                     else:
                         lexic_diff = gr_score_dif
         else:
-            if abs(gr_score_dif) > tolerance: 
+            if abs(gr_score_dif) > 0: 
                 lexic_diff = gr_score_dif  
             else:
-                if abs(repr_dif) > tolerance:
+                if abs(repr_dif) > 0:
                         lexic_diff = repr_dif
                 else:
                     lexic_diff = vs_score_dif
@@ -743,7 +797,7 @@ class ClusterAssignmentMemory():
     def clean_memory(self, exhaustive=True):
         pareto_dominated_counts = [0] * len(self.memory)
         equivalent_assignments_counts = [0] * len(self.memory)
-
+        similarity_index = [0] * len(self.memory)
         # Calculate pareto dominance and equivalence
         
         for i in reversed(list(range(len(self.memory)))):
@@ -753,19 +807,21 @@ class ClusterAssignmentMemory():
                     continue
                 if i != j:
                     _, cmp_pareto = self.compare_assignments(self.memory[j], self.memory[i], lexicographic_vs_first=True)
-                    eq = self.memory[i].is_equivalent_assignment(self.memory[j])
+                    sim = self.memory[i].cluster_similarity(self.memory[j])
+                    similarity_index[i] += sim
                     if cmp_pareto > 0:
                         
                         pareto_dominated_counts[i] += 1
-                    if eq:
-                        equivalent_assignments_counts[i] += 1
-                    if (cmp_pareto > 0 and eq) or (cmp_pareto > 0 and self.memory[i].explored): 
+                    if sim == 1.0:
+                        equivalent_assignments_counts[i] += 1 
+                    if (cmp_pareto > 0 and sim==0.0) or (cmp_pareto > 0 and self.memory[i].explored): 
                         # This is always something that needs to be done.
                         # If explored and is dominated is of no interest.
                         # In any case, an equivalent assignment that is dominated is not useful.
                         self.memory.pop(i)
                         pareto_dominated_counts.pop(i)
                         equivalent_assignments_counts.pop(i)
+                        similarity_index.pop(i)
                         eliminated_i = True
             # Also try to eliminate any element that is pareto dominated and equivalent to another
             # This is not compulsory, though. 
@@ -775,6 +831,7 @@ class ClusterAssignmentMemory():
                         self.memory.pop(i)
                         pareto_dominated_counts.pop(i)
                         equivalent_assignments_counts.pop(i)
+                        similarity_index.pop(i)
                         if not exhaustive:
                             return
         
@@ -787,13 +844,14 @@ class ClusterAssignmentMemory():
                 self.memory.pop(idx_to_remove)
                 pareto_dominated_counts.pop(idx_to_remove)
                 equivalent_assignments_counts.pop(idx_to_remove)
+                similarity_index.pop(i)
                 max_dominated_count = max(pareto_dominated_counts)
                 if not exhaustive:
                     break
-        # If still too many, remove the first assignment that is equivalent to another
+        # If still too many, remove the first assignment that is the most equivalent to any other
         if len(self.memory) > self.max_size:
             #sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: equivalent_assignments_counts[x[0]], reverse=True)]
-            sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (equivalent_assignments_counts[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
+            sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (similarity_index[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
             worst = sorted_indices[0]
             self.memory.pop(worst)
         return
