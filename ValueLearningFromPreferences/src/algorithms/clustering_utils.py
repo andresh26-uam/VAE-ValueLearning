@@ -748,7 +748,8 @@ class ClusterAssignmentMemory():
         is_dominated = False
         admit_insertion = True
 
-        l_assignment = assignment.L # if it is 1, need to have only one.
+        l_assignment_1 = assignment.L == 1# if it is 1, need to have only one.
+        k_assignment_all_1 = all(np.asarray(assignment.K) == 1)
         for i in range(len(self.memory)):
             cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=False,) 
             eq = self.memory[i].is_equivalent_assignment(assignment)
@@ -764,7 +765,7 @@ class ClusterAssignmentMemory():
             if (cmp_pareto < 0 and eq) or (cmp_pareto < 0 and self.memory[i].explored):
                 dominated_indices.add(i) # Dominated that also equivalent
 
-            if l_assignment == 1 and self.memory[i].L == 1:
+            if l_assignment_1 and k_assignment_all_1 and self.memory[i].L == 1 and all(np.asarray(self.memory[i].K) == 1):
                 admit_insertion = True
                 if i not in dominated_indices:
                         dominated_indices.add(i)
@@ -822,7 +823,7 @@ class ClusterAssignmentMemory():
         # Calculate pareto dominance and equivalence
         
         for i in reversed(list(range(len(self.memory)))):
-            if self.memory[i].L == 1:
+            if self.memory[i].L == 1 and all(np.asarray(self.memory[i].K) == 1):
                 pareto_dominated_counts[i] = 0
                 equivalent_assignments_counts[i] = 0
                 similarity_index[i] = 0
@@ -879,7 +880,7 @@ class ClusterAssignmentMemory():
             #sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: equivalent_assignments_counts[x[0]], reverse=True)]
             sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (similarity_index[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
             worst = sorted_indices[0]
-            if self.memory[worst].L == 1:
+            if self.memory[worst].L == 1 and all(np.asarray(self.memory[worst].K) == 1):
                 self.memory.pop(sorted_indices[1])
             else:
                 self.memory.pop(worst)
