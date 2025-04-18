@@ -66,8 +66,8 @@ def parse_args():
                            help="Number of clusters per value (overriging configuration file)")
 
     debug_params = parser.add_argument_group('Debug Parameters')
-    debug_params.add_argument('-db', '--check_rewards', action='store_true',
-                              default=False, help='Check rewards before learning for debugging')
+    debug_params.add_argument('-db', '--debug_mode', action='store_true',
+                              default=False, help='Debug Mode')
 
     env_group = parser.add_argument_group('environment-specific Parameters')
 
@@ -206,6 +206,7 @@ if __name__ == "__main__":
             loss_class=alg_config['loss_class'],
             loss_kwargs=alg_config['loss_kwargs'],
             custom_logger='disable',
+            debug_mode=parser_args.debug_mode,
             assume_variable_horizon=environment_data['assume_variable_horizon']
 
         )

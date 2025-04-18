@@ -255,7 +255,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         fragments: Dict[str, Sequence[TrajectoryWithValueSystemRewsPair]],
         reward_net_per_aid: Dict[str, AbstractVSLRewardFunction],
         vs1: th.nn.Module, vs2: th.nn.Module,
-        indifference_tolerance=0.0,
         #difference_function = total_variation_distance
         ) -> Tuple[th.Tensor, th.Tensor]:
 
@@ -287,7 +286,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 custom_model_per_agent_id=reward_net_per_aid_2,
                                 only_for_alignment_function=al2)
         
-        return discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=indifference_tolerance)
+        return discordance(probs=probs_with_cluster1, gt_probs= probs_with_cluster2, indifference_tolerance=0.0)
         #disc = sum(missed_pairs)/len(probs_with_cluster1)
         #return difference_function(probs_with_cluster1, probs_with_cluster2), disc
         
@@ -298,7 +297,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         fragment_pairs_idxs_per_agent_id: Dict[str, np.ndarray],
         custom_model_per_agent_id: Union[AbstractVSLRewardFunction,
                                          Dict[str, AbstractVSLRewardFunction]] = None,
-        on_specific_agent_ids: Iterable = None,
+        
         only_for_alignment_function=None,
         only_grounding=False,
         return_rewards_per_agent=False,
@@ -309,9 +308,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         """
 
         dtype = self.algorithm.reward_net.dtype
-
-        if on_specific_agent_ids is not None:
-            fragment_pairs_per_agent_id = {aid: rid for aid, rid in fragment_pairs_per_agent_id.items() if aid in on_specific_agent_ids}
             
         if custom_model_per_agent_id is not None:
             prev_model = self.model

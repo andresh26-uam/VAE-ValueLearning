@@ -119,8 +119,8 @@ def parse_args():
                            help="Number of clusters per value (overriging configuration file)")
 
     debug_params = parser.add_argument_group('Debug Parameters')
-    debug_params.add_argument('-db', '--check_rewards', action='store_true',
-                              default=False, help='Check rewards before learning for debugging')
+    debug_params.add_argument('-db', '--debug_mode', action='store_true',
+                              default=False, help='Debug mode')
 
     env_group = parser.add_argument_group('environment-specific Parameters')
 
@@ -332,7 +332,8 @@ if __name__ == "__main__":
             expert_is_stochastic=society_data['stochastic_expert'],
             loss_class=alg_config['loss_class'],
             loss_kwargs=alg_config['loss_kwargs'],
-            assume_variable_horizon=environment_data['assume_variable_horizon']
+            assume_variable_horizon=environment_data['assume_variable_horizon'],
+            debug_mode=parser_args.debug_mode
 
         )
     if parser_args.algorithm == 'pc':
