@@ -899,11 +899,12 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                             rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]],
                             value_system_network_per_cluster: List[LinearAlignmentLayer], 
                             agent_to_vs_cluster_assignments: Dict[str, int]):
-        if len(value_system_network_per_cluster) <= 1:
-            return th.tensor(0.0, device=value_system_network_per_cluster[0].device, dtype=value_system_network_per_cluster[0].dtype)
         ex_model = list(rews_gr_per_aid.values())[0][0]
         device = ex_model.device
         dtype = ex_model.dtype
+        if len(value_system_network_per_cluster) <= 1:
+            return th.tensor(0.0, device=device, dtype=dtype)
+        
 
         agents_per_cluster = {int(c): [] for c in range(len(value_system_network_per_cluster))}
         for aid, c in agent_to_vs_cluster_assignments.items():
