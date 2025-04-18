@@ -1,5 +1,0 @@
-digraph {
-	0 [label=value_system]
-	1 [label=stimulation]
-	0 -> 1
-}

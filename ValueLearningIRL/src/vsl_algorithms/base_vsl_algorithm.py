@@ -224,6 +224,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
 
         else:
             # TODO: Simultaneous learning?
+
             raise NotImplementedError(
                 "Simultaneous learning mode is not implemented")
 
