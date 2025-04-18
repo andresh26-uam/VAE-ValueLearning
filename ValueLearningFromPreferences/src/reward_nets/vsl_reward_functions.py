@@ -570,7 +570,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
                 env = self.features_extractor.env
                 self.features_extractor.env = None
         else:
-            env = self.features_extractor_kwargs['env']
+            env = self.features_extractor_kwargs.get('env', None)
             self.features_extractor_kwargs['env']=None
         return env
 
@@ -784,7 +784,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
         new = self.__copy_args__(new)
         new.cur_align_func = deepcopy(self.cur_align_func)
         new.cur_value_grounding = deepcopy(self.cur_value_grounding)
-        new.features_extractor_kwargs['env'] = self.features_extractor_kwargs['env'] # the env should be exactly the same.
+        if 'env' in self.features_extractor_kwargs:
+            new.features_extractor_kwargs['env'] = self.features_extractor_kwargs['env'] # the env should be exactly the same.
         return new
 
     def parameters(self, recurse: bool = True) -> Iterator:

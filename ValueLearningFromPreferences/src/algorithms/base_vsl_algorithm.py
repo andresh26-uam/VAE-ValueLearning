@@ -565,7 +565,6 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         next_state_array = util.safe_to_tensor(next_state_mat[observations.numpy(
                         ), action_array.numpy()],  dtype=reward_net.dtype, device=reward_net.device)
                         # print("NEXTS", next_state_array)
-                            
                         reward_matrix[observations, action_array] += self.calculate_rewards(
                                 align_func=rew_al,
                                 # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
@@ -581,13 +580,13 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                                 requires_grad=False,
                                 info=info
                             )[1]
-                        
                         # print("REWARD", reward_matrix)
                         assert reward_matrix.shape == (
                             self.env.state_dim, self.env.action_dim)
                 rewards_per_target_agent_and_al[target_aid_and_al] = reward_matrix
                 assert rewards_per_target_agent_and_al[target_aid_and_al].shape == (
                     self.env.state_dim, self.env.action_dim)
+                # TODO: info should be used in contextual environments...
             return lambda target: (lambda state=None, action=None, info=None: (
                 rewards_per_target_agent_and_al[target] if (state is None and action is None)
                 else rewards_per_target_agent_and_al[target][state, :] if action is None and state is not None
@@ -660,33 +659,34 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                           use_probabilistic_reward=False, n_reps_if_probabilistic_reward=10, requires_grad=True, custom_model=None, 
                           forward_groundings=False, info=None):
         
-        if custom_model is not None:
-            prev_model = self.current_net
-            self.current_net = custom_model
+        with th.no_grad():
+            if custom_model is not None:
+                prev_model = self.current_net
+                self.current_net = custom_model
 
-        if self.current_net.use_one_hot_state_action:
-            if obs_action_mat is None:
-                obs_action_mat = th.as_tensor(
-                    np.identity(self.env.state_dim*self.env.action_dim),
-                    dtype=self.current_net.dtype,
-                    device=self.current_net.device,
-                )
-            obs_action_mat.requires_grad_(requires_grad)
+            if self.current_net.use_one_hot_state_action:
+                if obs_action_mat is None:
+                    obs_action_mat = th.as_tensor(
+                        np.identity(self.env.state_dim*self.env.action_dim),
+                        dtype=self.current_net.dtype,
+                        device=self.current_net.device,
+                    )
+                obs_action_mat.requires_grad_(requires_grad)
 
-        if recover_previous_config_after_calculation:
-            previous_rew_mode = self.current_net.mode
-            previous_rew_ground = self.current_net.cur_value_grounding
-            previous_rew_alignment = self.current_net.cur_align_func
+            if recover_previous_config_after_calculation:
+                previous_rew_mode = self.current_net.mode
+                previous_rew_ground = self.current_net.cur_value_grounding
+                previous_rew_alignment = self.current_net.cur_align_func
 
-        if requires_grad is False:
-            if obs_mat is not None and isinstance(obs_mat, th.Tensor):
-                obs_mat = obs_mat.detach()
-            if action_mat is not None and isinstance(action_mat, th.Tensor):
-                action_mat = action_mat.detach()
-            if obs_action_mat is not None and isinstance(obs_action_mat, th.Tensor):
-                obs_action_mat = obs_action_mat.detach()
-            if next_state_obs_mat is not None and isinstance(next_state_obs_mat, th.Tensor):
-                next_state_obs_mat = next_state_obs_mat.detach()
+            if requires_grad is False:
+                if obs_mat is not None and isinstance(obs_mat, th.Tensor):
+                    obs_mat = obs_mat.detach()
+                if action_mat is not None and isinstance(action_mat, th.Tensor):
+                    action_mat = action_mat.detach()
+                if obs_action_mat is not None and isinstance(obs_action_mat, th.Tensor):
+                    obs_action_mat = obs_action_mat.detach()
+                if next_state_obs_mat is not None and isinstance(next_state_obs_mat, th.Tensor):
+                    next_state_obs_mat = next_state_obs_mat.detach()
 
         self.current_net.set_mode(reward_mode)
         self.current_net.set_grounding_function(grounding)
