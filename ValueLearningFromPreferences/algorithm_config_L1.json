@@ -41,10 +41,10 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.015,
-                    "lr_value_system": 0.01,
+                    "lr_grounding": 0.01,
+                    "lr_value_system": 0.005,
                     "lr_lambda": 0.005,
-                    "initial_lambda": 0.1,
+                    "initial_lambda": 0.5,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -92,10 +92,10 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 200,
+                    "epochs": 500,
                     "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 10,
+                    "initial_refining_steps": 15,
                     "initial_exploration_rate": 0.0,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": 1
