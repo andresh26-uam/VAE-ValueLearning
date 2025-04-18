@@ -164,8 +164,6 @@ if __name__ == "__main__":
         dtype=parser_args.dtype
 
     )
-    print(reward_net)
-    exit(0)
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
 
     path = os.path.join(
