@@ -12,6 +12,8 @@
         
         "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
         "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
+        "values_names": ["Cost", "Efficiency", "Comfort"],
+        "values_short_names": ["Cost", "Eff", "Comf"],
         
         "environment_is_stochastic": false,
         "discount": 1.0,

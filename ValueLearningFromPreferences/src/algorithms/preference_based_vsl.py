@@ -1706,17 +1706,16 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     def evaluate_assignment(self, assignment: ClusterAssignment, dataset: VSLPreferenceDataset):
         self.init_models(10, self.vsi_optimizer_cls, self.vsi_optimizer_kwargs)
         self.pref_comparisons.reward_trainer.debug_mode = False
-        
-        print("DATASET????????", dataset, len(dataset), len(self.dataset))
+
         self.pref_comparisons.reward_trainer.batch_size = len(dataset)
-        dataloader = self.pref_comparisons.reward_trainer._make_data_loader(dataset) # ???????????????
+        dataloader = self.pref_comparisons.reward_trainer._make_data_loader(dataset) 
         data = [data for data in dataloader]
-        print(len(data))
+        print("Evaluating on ", len(data))
         val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids = map(
             lambda x: np.concatenate(x, axis=0) if len(data) > 1 else x[0],
             zip(*data)
         )
-        print("evaluating")
+        print("evaluating", len(val_fragment_pairs))
         print(len(val_fragment_pairs))
         new_assignment = self.pref_comparisons.reward_trainer.evaluate_assignment_with_dataset(assignment.copy(), 
                                                                               val_fragment_pairs, 

@@ -14,12 +14,12 @@ from src.dataset_processing.data import VSLPreferenceDataset
 from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes
 from train_vsl import load_training_results, parse_cluster_sizes, parse_optimizer_data
-from src.utils import filter_none_args
+from src.utils import filter_none_args, load_json_config
 
 
 import pandas as pd
 
-def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, experiment_name, output_columns, output_dir="test_results"):
+def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, experiment_name, output_columns, output_dir="test_results", label='train_set'):
     """
     Generate tables for the first, middle, and last assignments in the assignment memory.
 
@@ -31,8 +31,8 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
         output_dir (str): The base directory for saving the output files.
     """
     # Ensure output directories exist
-    csv_dir = os.path.join(output_dir, experiment_name, "csv")
-    latex_dir = os.path.join(output_dir, experiment_name, "latex")
+    csv_dir = os.path.join(output_dir, experiment_name, label, "csv")
+    latex_dir = os.path.join(output_dir, experiment_name, label, "latex")
     os.makedirs(csv_dir, exist_ok=True)
     os.makedirs(latex_dir, exist_ok=True)
 
@@ -46,6 +46,7 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
     for position, assignment in assignments:
         # Prepare data for the table
         data = []
+        
         for cluster_idx, agents in enumerate(assignment.assignment_vs):
             if len(agents) == 0:
                 continue
@@ -57,7 +58,7 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
                 row["Number of Agents"] = len(agents) 
             if output_columns.get("representativity", False):
                 intra_cluster_distances = [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in agents]
-                row["Representativeness"] = ClusterAssignment._representativity(intra_cluster_distances)
+                row["Representativeness"] = ClusterAssignment._representativity_cluster(intra_cluster_distances)
             if output_columns.get("conciseness", False):
                 if assignment.L == 1:
                     row['Conciseness'] = '-'
@@ -66,14 +67,14 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
                     row["Conciseness"] = ClusterAssignment._conciseness(inter_cluster_distances, assignment.L)
             if output_columns.get("combined_score", False):
                 # Use '-' if L is 1, otherwise calculate the combined score
-                row["Combined Score"] = "-" if assignment.L == 1 else row["Conciseness"]/(1-row['Representativeness'])  
+                row["Combined Score"] = "-" if assignment.L == 1 else row["Conciseness"]/(1.0-row['Representativeness'])  
             if output_columns.get("grounding_coherence", False):
                 # Expand coherence array into separate columns
                 coherence_array = assignment.gr_score
 
                 for i, value in enumerate(coherence_array):
                     intra_cluster_distances_gr = [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in agents]
-                    row[f"Coherence V{i + 1}"] = ClusterAssignment._representativity(intra_cluster_distances_gr)
+                    row[f"Coherence V{i + 1}"] = ClusterAssignment._representativity_cluster(intra_cluster_distances_gr)
             data.append(row)
         # Assingment-level information:
         row = {}
@@ -143,14 +144,26 @@ if __name__ == "__main__":
     parser_args = filter_none_args(parse_args())
     # If a config file is specified, load it and override command line args
     experiment_name = parser_args.experiment_name
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args, historic_assignments = load_training_results(
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments = load_training_results(
         experiment_name)
-    config = exp_parser_args['config']
-    society_config = exp_parser_args['society_config']
-    exp_parser_args = exp_parser_args['parser_args']
-    print(exp_parser_args)
+    config = exp_parser_args_base['config']
+    society_config = exp_parser_args_base['society_config']
+    exp_parser_args = exp_parser_args_base['parser_args']
 
-    pprint.pprint(parser_args)
+    # This will look again into the config files to see if there are new fields (wont update the old ones)
+    config_actual = load_json_config(exp_parser_args.config_file)
+    society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
+
+    def merge_dicts_recursive(base, update):
+        for key, value in update.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                merge_dicts_recursive(base[key], value)
+            else:
+                base[key] = value
+
+    merge_dicts_recursive(config, config_actual)
+    merge_dicts_recursive(society_config, society_config_actual)
+        
     np.random.seed(parser_args.seed)
     torch.manual_seed(parser_args.seed)
     random.seed(parser_args.seed)
@@ -226,13 +239,42 @@ if __name__ == "__main__":
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
     #  Make every single column modular, i.e. to activate or deactivate it with a flag.
     # Output the tables in latex anc csv in the test_results/{experiment_name}/csv and test_results/{experiment_name}/latex folders.
+    
+    output_columns = {
+        "value_systems": True,
+        "num_agents": True,
+        "representativity": True,
+        "conciseness": True,
+        "combined_score": True,
+        "grounding_coherence": True,
+    }
+
+    # Generate tables
+    generate_assignment_tables(assignment_memory, experiment_name, output_columns, output_dir='test_results', label='train_set')
+
+    best_vs_then_gr_assignment = assignment_memory.memory[-1]
+    best_gr_then_vs_assignment = assignment_memory.memory[0]
+
+    test_assignment_memory = ClusterAssignmentMemory(assignment_memory.max_size, n_values=assignment_memory.memory[0].n_values)
+    test_assignment_memory.maximum_conciseness_vs = assignment_memory.maximum_conciseness_vs
+    test_assignment_memory.maximum_conciseness_gr = assignment_memory.maximum_conciseness_gr # these two are train estimations.
+    for a in assignment_memory.memory:
+        test_assignment = vsl_algo.evaluate_assignment(a, dataset_test)
+        test_assignment_memory.memory.append(test_assignment) # just insert it.
+
+    generate_assignment_tables(test_assignment_memory, experiment_name, output_columns, output_dir='test_results', label='test_set')
+
 
     # 2: plots.
     # 3: SHAP VALUES TODO
     # 4: CONTEXT CLUSTERS TODO
-    best_vs_then_gr_assignment = assignment_memory.memory[-1]
-    best_gr_then_vs_assignment = assignment_memory.memory[0]
-
+    
+    print(best_gr_then_vs_assignment)
+    print(best_vs_then_gr_assignment)
+    print("TEST ASIGNMENT")
+    print(test_assignment)
+    print(len(assignment_memory))
+    print(assignment_memory)
 
     best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/plots/figure_clusters_vs_gr.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
@@ -248,22 +290,4 @@ if __name__ == "__main__":
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
     
-    test_assignment = vsl_algo.evaluate_assignment(best_gr_then_vs_assignment, dataset_test)
-    print(best_gr_then_vs_assignment)
-    print(best_vs_then_gr_assignment)
-    print("TEST ASIGNMENT")
-    print(test_assignment)
-    print(len(assignment_memory))
-    print(assignment_memory)
-
-    output_columns = {
-        "value_systems": True,
-        "num_agents": True,
-        "representativity": True,
-        "conciseness": True,
-        "combined_score": True,
-        "grounding_coherence": True,
-    }
-
-    # Generate tables
-    generate_assignment_tables(assignment_memory, experiment_name, output_columns)
+    

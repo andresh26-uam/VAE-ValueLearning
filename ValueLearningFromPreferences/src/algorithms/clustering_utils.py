@@ -6,7 +6,7 @@ import itertools
 import os
 import random
 import sys
-from typing import Any, List, Mapping, Self, Set, Tuple
+from typing import Any, Dict, List, Mapping, Self, Set, Tuple
 
 from colorama import Fore, init
 import dill
@@ -248,14 +248,36 @@ class ClusterAssignment():
             with open(save_path, 'wb') as f:
                 dill.dump(self, f)
 
-    def _combined_cluster_score(inter_cluster_distances, intra_cluster_distances, n_actual_clusters, conciseness_if_1_cluster=None):
+    def _combined_cluster_score(inter_cluster_distances, intra_cluster_distances_per_agent, n_actual_clusters, cluster_to_agents, conciseness_if_1_cluster=None, normalized=True):
+        n_actual_clusters = sum([1 for c in range(len(cluster_to_agents)) if len(cluster_to_agents[c]) > 0],0)
         if n_actual_clusters <= 1:
             if (conciseness_if_1_cluster is None) or (conciseness_if_1_cluster == float('-inf')):
-                return ClusterAssignment._representativity(intra_cluster_distances)
+                conc = 1.0
             else:
-                return conciseness_if_1_cluster/ ClusterAssignment._representativity(intra_cluster_distances)
-        return ClusterAssignment._conciseness(inter_cluster_distances, n_actual_clusters) / ClusterAssignment._representativity(intra_cluster_distances)
+                conc = (conciseness_if_1_cluster + 1.0)
+        else:
+            conc = ClusterAssignment._conciseness(inter_cluster_distances, n_actual_clusters)
+        represent = ClusterAssignment._representativity(intra_cluster_distances_per_agent, cluster_to_agents)
+        
+        if normalized: 
+            val = ((conc + 1.0) / (1.0 - represent + 1.0) -0.5)/1.5
+            assert val <= 1.0 and val >= 0.0, f"val {val} is negative, conciseness: {conc}, Representativity {represent}"
+        else:
+            val = conc/(1.0-represent)
+        return val
 
+    def _intra_cluster_discordances(intra_cluster_distances_per_agent, cluster_to_agents):
+        
+        intra_cluster_discordances = [0.0 for _ in range(len(cluster_to_agents))]
+        for c, agents in enumerate(cluster_to_agents):
+            if len(agents) == 0:
+                continue
+            intra_cluster_distances_c = sum(intra_cluster_distances_per_agent[agent] for agent in agents)
+            intra_cluster_distances_c /= len(agents)
+            intra_cluster_discordances[int(c)] = intra_cluster_distances_c
+        
+        return intra_cluster_discordances
+           
     def _conciseness(inter_cluster_distances, n_actual_clusters):
         if n_actual_clusters <= 1:
             return 1.0
@@ -266,10 +288,12 @@ class ClusterAssignment():
             conciseness = 0.0 # ?????
         return conciseness
 
-    def _representativity(intra_cluster_distances):
-        
-        return 1.0 - np.mean(np.asarray(intra_cluster_distances))  # TODO. Representativity is the average of the negated intra cluster distances, but these are distances from each agent to its cluster, change that at vs_score().
+    def _representativity_cluster(intra_cluster_distances):
+        return np.mean(1.0 - np.asarray(intra_cluster_distances))
     
+    def _representativity(intra_cluster_distances_per_agent: Dict[str, float], cluster_to_agents: List[List[str]]):
+        distances_per_cluster = ClusterAssignment._intra_cluster_discordances(intra_cluster_distances_per_agent, cluster_to_agents)
+        return 1.0 - np.max(np.asarray(distances_per_cluster)) 
     
     def plot_vs_assignments(self, save_path="demo.pdf", show = False,subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
                             values_names=None, 
@@ -484,12 +508,12 @@ class ClusterAssignment():
 
     def representativities_gr(self):
 
-        return [ClusterAssignment._representativity(np.array(self.intra_discordances_gr[i])) for i in range(self.n_values)]
+        return [ClusterAssignment._representativity(self.intra_discordances_gr_per_agent[i], self.assignment_gr[i]) for i in range(self.n_values)]
     def representativity_gr_aggr(self):
         return self.aggregation_on_gr_scores(self.representativities_gr())
 
     def representativity_vs(self):
-        return ClusterAssignment._representativity(self.intra_discordances_vs)
+        return ClusterAssignment._representativity(self.intra_discordances_vs_per_agent,self.assignment_vs)
 
     def concisenesses_gr(self):
         return [ClusterAssignment._conciseness(np.array(self.inter_discordances_gr[i]), self.K[i]) for i in range(self.n_values)]
@@ -498,14 +522,14 @@ class ClusterAssignment():
     def conciseness_vs(self):
         return ClusterAssignment._conciseness(self.inter_discordances_vs, self.L)
 
-    def combined_cluster_score_gr(self, conciseness_if_K_is_1=None):
-        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr[i], self.K[i], conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else None) for i in range(self.n_values)]
+    def combined_cluster_score_gr(self, conciseness_if_K_is_1=None, normalized=True):
+        return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr_per_agent[i], self.K[i], self.assignment_gr[i], normalized=normalized, conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else None) for i in range(self.n_values)]
 
-    def combined_cluster_score_vs(self,conciseness_if_L_is_1=None):
-        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs, self.L, conciseness_if_1_cluster=conciseness_if_L_is_1)
+    def combined_cluster_score_vs(self,conciseness_if_L_is_1=None, normalized=True):
+        return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs_per_agent, self.L, self.assignment_vs, normalized=normalized,conciseness_if_1_cluster=conciseness_if_L_is_1)
 
-    def combined_cluster_score_gr_aggr(self, conciseness_if_K_is_1=None):
-        return self.combined_cluster_score_gr(conciseness_if_K_is_1) # TODO FUTURE WORK aggregation of combined scores is this, or dividing the aggregation?
+    def combined_cluster_score_gr_aggr(self, conciseness_if_K_is_1=None, normalized=True):
+        return self.combined_cluster_score_gr(conciseness_if_K_is_1,normalized=True) # TODO FUTURE WORK aggregation of combined scores is this, or dividing the aggregation?
 
 
     def __str__(self):
@@ -643,8 +667,8 @@ class ClusterAssignmentMemory():
 
         for i, assignment in enumerate(self.memory):
             result += f"Assignment {i} (Explored: {assignment.explored}):"
-            result += f" VS: {assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr)}|{assignment.representativity_vs()}, GR: {assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)}, K: {assignment.K}, L: {assignment.L} \n"
-            result += f" GR Clusters: {assignment.active_gr_clusters()} VS Clusters: {assignment.active_vs_clusters()}\n"
+            result += f" VS: DI={assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr):.4f}|RP={assignment.representativity_vs():.4f}|CN={assignment.conciseness_vs():.4f}, GR: {[f"{float(g):.3f}" for g in assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)]}, K: {assignment.K}, L: {assignment.L} \n"
+            result += f" GR Clusters: {assignment.active_gr_clusters()}, VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
         return result
 
