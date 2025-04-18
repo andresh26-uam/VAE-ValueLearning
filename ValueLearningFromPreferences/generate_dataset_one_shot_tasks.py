@@ -292,6 +292,8 @@ if __name__ == "__main__":
     print("Dataset generated correctly.")
     dataset_train = create_dataset(parser_args, config, society_data, train_or_test='train',
                                    default_groundings=society_config[parser_args.environment]['groundings'])
+    print("TRAIN SIZE", len(dataset_train))
     dataset_test = create_dataset(parser_args, config, society_data, train_or_test='test',
                                   default_groundings=society_config[parser_args.environment]['groundings'])
+    print("TEST SIZE", len(dataset_test))
 
