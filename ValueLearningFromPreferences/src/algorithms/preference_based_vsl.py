@@ -980,9 +980,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
 class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
     def __init__(self, dataset: VSLPreferenceDataset, reward_model: AbstractVSLRewardFunction, num_iterations: int, reward_trainer: ClusteringRewardTrainerVSL, rng,
-                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant", use_logger=False):
+                 custom_logger=None, allow_variable_horizon=False, query_schedule="constant", use_logger=False, env=None):
         self.complete_dataset = dataset
         self.use_logger = use_logger
+        self.env = env
         super().__init__(preference_comparisons.TrajectoryDataset(dataset, rng, custom_logger),
                          reward_model, num_iterations, fragmenter=None, preference_gatherer=None, reward_trainer=reward_trainer,
                          comparison_queue_size=1,
@@ -1355,7 +1356,7 @@ def load_historic_assignments(experiment_name, limit=20):
             for aid, r in a.reward_model_per_agent_id.items():
                 r.set_env(env_state)
     print(f"Historic assignments loaded from {save_folder}")
-    return historic_assignments
+    return historic_assignments, env_state
 
 class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     
@@ -1494,7 +1495,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                              use_probabilistic_reward=use_probabilistic_reward,
                              n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward,
                              **kwargs)
-        historic_assignments = load_historic_assignments(experiment_name)
+        
+        historic_assignments,env_state = load_historic_assignments(experiment_name)
         return *ret, historic_assignments
 
     def train_callback(self, t):
@@ -1686,6 +1688,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
             query_schedule=self.query_schedule,
             rng=self.rng,
             use_logger=self.use_logger,
+            env=self.env,
             custom_logger=None
         )
         

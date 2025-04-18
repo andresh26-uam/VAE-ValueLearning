@@ -315,8 +315,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             if isinstance(custom_model_per_agent_id, dict):
                 models_per_agent: Dict = custom_model_per_agent_id
             else:
-                models_per_agent = {
-                    aid: custom_model_per_agent_id for aid in fragment_pairs_per_agent_id.keys()}
+                models_per_agent = {}
 
         total_number_of_fragment_pairs = sum(
             [len(fpair) for fpair in fragment_pairs_per_agent_id.values()])
@@ -343,7 +342,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             if n_values == 0:
                 n_values = fragment_pairs_aid[0][0].value_rews.shape[0]
 
-            model = models_per_agent[aid]
+            model = models_per_agent.get(aid, custom_model_per_agent_id)
             n_fragments = len(fragment_pairs_aid)
             fragment_size = len(fragment_pairs_aid[0][0])
 
@@ -356,10 +355,10 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                     rews_gr_per_aid[aid] = (th.empty(
                     (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype), th.empty(
                     (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype))
-
-            all_transitions_aid = rollout.flatten_trajectories(
-                [frag for fragment in fragment_pairs_aid for frag in fragment])
-            
+            with th.no_grad():
+                all_transitions_aid = rollout.flatten_trajectories(
+                    [frag for fragment in fragment_pairs_aid for frag in fragment])
+                
             all_rews_vs_aid, all_rews_gr_aid = self.rewards(
                 all_transitions_aid, only_with_alignment=only_for_alignment_function is not None, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
             
@@ -412,18 +411,18 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                             rews_gr_per_aid[aid][1][:, :, j] = rews2_graid_all_j
                             assert rews_gr_per_aid[aid][0].shape == (len(fragment_pairs_aid), fragment_size, n_values)
                 
-                
-            if fragment_pairs_idxs_per_agent_id is not None:
-                fragment_idxs = fragment_pairs_idxs_per_agent_id[aid] #TODO optimize later to index rews_gr_per_aid
-            else:
-                # just put them in order of appearance of each agent. 
-                fragment_idxs = np.array(list(range(n_fragments))) + counter_idx
+            with th.no_grad():    
+                if fragment_pairs_idxs_per_agent_id is not None:
+                    fragment_idxs = fragment_pairs_idxs_per_agent_id[aid] #TODO optimize later to index rews_gr_per_aid
+                else:
+                    # just put them in order of appearance of each agent. 
+                    fragment_idxs = np.array(list(range(n_fragments))) + counter_idx
             if not only_grounding:
                 probs_vs[fragment_idxs] = probs_vs_per_aid[aid]
             if only_for_alignment_function is None:
                 probs_gr[fragment_idxs] = probs_gr_per_aid[aid]
             counter_idx += n_fragments
-
+        
         if custom_model_per_agent_id is not None:
             self.model = prev_model
 
@@ -456,13 +455,13 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         state = None
         action = None
         next_state = None
-        state = util.safe_to_tensor(types.assert_not_dictobs(
-                transitions.obs), device=self.model.device, dtype=self.model.dtype)
+        state = util.safe_to_tensor(
+                transitions.obs, device=self.model.device, dtype=self.model.dtype)
         action = util.safe_to_tensor(
             transitions.acts, device=self.model.device, dtype=self.model.dtype)
         if self.model.use_next_state:
-            next_state = util.safe_to_tensor(types.assert_not_dictobs(
-            transitions.next_obs), device=self.model.device, dtype=self.model.dtype)
+            next_state = util.safe_to_tensor(
+            transitions.next_obs, device=self.model.device, dtype=self.model.dtype)
         
         info = transitions.infos[0] 
 
@@ -495,7 +494,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                 assert i not in indexes_so_far
             indexes_so_far.extend(indexes)"""
 
-            #self.algorithm.env.contextualize(context)
+            #self.algorithm.env.contextualize(context) TODO?
             #th.testing.assert_close(rews[indexes], th.zeros((len(deepcopy(states_i)),), device=self.model.device, dtype=self.model.dtype))
             #th.testing.assert_close(rews_gr[:,indexes], th.zeros((self.algorithm.env.n_values, len(deepcopy(states_i))), device=self.model.device, dtype=self.model.dtype))
 

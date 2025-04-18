@@ -68,8 +68,8 @@ def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple]
             returned_tuple[3] = data[k]
     returned_tuple = tuple(returned_tuple)
     # Get the saved best assignments per iteration
-    historic_assignments = load_historic_assignments(experiment_name, limit=20)
-    return *returned_tuple, historic_assignments
+    historic_assignments, env_state = load_historic_assignments(experiment_name, limit=20)
+    return *returned_tuple, historic_assignments, env_state
 
 
 def parse_args():
@@ -343,9 +343,9 @@ if __name__ == "__main__":
                                                                                                                               assumed_grounding=None, **alg_config['train_kwargs'])
 
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
-                          reward_net_pair_agent_and_vs_s, metrics_s)
+                          reward_net_pair_agent_and_vs_s, metrics_s, parser_args=parser_args)
     print(metrics_s['assignment'])
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments = load_training_results(
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments, env_state = load_training_results(
         experiment_name)
     
     assignment: ClusterAssignment = historic_assignments[-1]

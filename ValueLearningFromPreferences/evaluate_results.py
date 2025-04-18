@@ -144,7 +144,7 @@ if __name__ == "__main__":
     parser_args = filter_none_args(parse_args())
     # If a config file is specified, load it and override command line args
     experiment_name = parser_args.experiment_name
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments = load_training_results(
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments, env_state = load_training_results(
         experiment_name)
     config = exp_parser_args_base['config']
     society_config = exp_parser_args_base['society_config']
@@ -194,7 +194,7 @@ if __name__ == "__main__":
 
         # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
-            env=example_model.remove_env(),
+            env=env_state,
             reward_net=example_model,
             optimizer_cls=opt_class,
             optimizer_kwargs=opt_kwargs,
