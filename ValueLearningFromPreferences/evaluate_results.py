@@ -37,10 +37,9 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
     os.makedirs(latex_dir, exist_ok=True)
 
     # Select the first, middle, and last assignments
+    num_digits = len(str(len(assignment_memory.memory)))
     assignments = [
-        ("first", assignment_memory.memory[0]),
-        ("middle", assignment_memory.memory[len(assignment_memory.memory) // 2]),
-        ("last", assignment_memory.memory[-1]),
+        (f"assign_p{str(i+1).zfill(num_digits)}_in_train", assignment_memory.memory[i]) for i in range(0, len(assignment_memory.memory))
     ]
 
     for position, assignment in assignments:
@@ -103,11 +102,11 @@ def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, exper
         df = pd.DataFrame(data)
 
         # Save to CSV
-        csv_path = os.path.join(csv_dir, f"{position}_assignment.csv")
+        csv_path = os.path.join(csv_dir, f"{position}.csv")
         df.to_csv(csv_path, index=False)
 
         # Save to LaTeX
-        latex_path = os.path.join(latex_dir, f"{position}_assignment.tex")
+        latex_path = os.path.join(latex_dir, f"{position}.tex")
         with open(latex_path, "w") as f:
             f.write(df.to_latex(index=False, escape=False))
 
@@ -239,6 +238,7 @@ if __name__ == "__main__":
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
     #  Make every single column modular, i.e. to activate or deactivate it with a flag.
     # Output the tables in latex anc csv in the test_results/{experiment_name}/csv and test_results/{experiment_name}/latex folders.
+    pprint.pprint(config)
     
     output_columns = {
         "value_systems": True,
@@ -289,5 +289,6 @@ if __name__ == "__main__":
                                                    values_names=environment_data['values_names'], 
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
+    
     
     
