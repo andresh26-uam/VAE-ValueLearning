@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 from copy import deepcopy
 import itertools
+import math
 import os
 import dill
 import random
@@ -1106,13 +1107,13 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     else:
                         reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
                     self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
-                    
                     assert self.reward_trainer.optim.time == 0
                     #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                 else:
                     starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
                     if starting_assignment is None:
-                        use_random = True
+                        self.reward_trainer.refining_steps_after_cluster_assignment = math.ceil(self.reward_trainer.refining_steps_after_cluster_assignment + 0.1*self.reward_trainer.refining_steps_after_cluster_assignment)
+                        self.reward_trainer.initial_refining_steps = math.ceil(self.reward_trainer.initial_refining_steps + 0.1*self.reward_trainer.initial_refining_steps)
                         choosing = True
                         continue
                     else:

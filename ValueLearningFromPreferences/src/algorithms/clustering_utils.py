@@ -897,7 +897,8 @@ class ClusterAssignmentMemory():
         if len(non_explored_assignments) == 0:
             self.clean_memory(exhaustive=True)
             return None
-        weights = list(reversed([i+1 for i in range(len(non_explored_assignments))])) # TODO: do something w.r.t. scores? But again K = 1...
+        n = len(non_explored_assignments)
+        weights = [2*(n-i)/(n*(n+1)) for i in range(n)] # Linear rank selection Goldberg
         assignment_index =  random.choices(list(range(len(non_explored_assignments))), weights=weights, k=1)[0]
         assignment = non_explored_assignments[assignment_index]
         return self.assignment_with_env(assignment, override_explore)
