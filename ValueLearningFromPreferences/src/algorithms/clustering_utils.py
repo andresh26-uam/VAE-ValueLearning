@@ -785,7 +785,10 @@ class ClusterAssignmentMemory():
             self.sort_lexicographic(lexicographic_vs_first=True)
             if len(self.memory) > self.max_size:
                 self.clean_memory(exhaustive=False)
-            
+        if all([asa.explored for asa in self.memory]) and len(self.memory) >= self.max_size:
+            self.clean_memory(exhaustive=True)  
+            for i in range(len(self.memory)):  
+                self.memory[i].explored = False
         assignment.explored = not changes_made
 
         if __debug__:

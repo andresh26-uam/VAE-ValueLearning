@@ -56,9 +56,6 @@ def parse_args():
     general_group.add_argument('-df', '--discount_factor', type=float, default=1.0,
                                help='Discount factor. For some environments, it will be neglected as they need a specific discount factor.')
 
-    general_group.add_argument('-n', '--n_experiments', type=int,
-                               default=1, help='Number of experiment repetitions')
-
     general_group.add_argument('-sp', '--split_ratio', type=float,
                                default=0.2, help='Split ratio for train/test set. 0.2 means 80% train, 20% test')
     alg_group = parser.add_argument_group('Algorithm-specific Parameters')
