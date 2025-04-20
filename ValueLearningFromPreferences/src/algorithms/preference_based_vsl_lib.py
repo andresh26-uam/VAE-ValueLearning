@@ -290,7 +290,72 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         #disc = sum(missed_pairs)/len(probs_with_cluster1)
         #return difference_function(probs_with_cluster1, probs_with_cluster2), disc
         
+    def predict_proba(
+        self,
+        fragment_pairs: Tuple[th.Tensor, th.Tensor],
+        model: AbstractVSLRewardFunction,
+        obs_acts_next_obs_idxs: Dict[str, np.ndarray],
+        alignment: Optional[Tuple] = None,
+        one_shot = True
+    ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor], Optional[th.Tensor]]:
+        """Computes the preference probability of the first fragment for all pairs.
 
+        """
+
+        dtype = self.algorithm.reward_net.dtype
+            
+        prev_model = self.model
+        model.set_alignment_function(alignment)
+        
+        print(fragment_pairs[0].shape, fragment_pairs[1].shape    )
+
+        assert fragment_pairs[0].shape == fragment_pairs[1].shape, f"They are {fragment_pairs[0].shape, fragment_pairs[1].shape }"
+        probs = th.zeros((fragment_pairs[0].shape[0],), dtype=dtype)
+        counter_idx = 0
+
+        #  TODO... Fragments per agent id... But remain in the order said by fragment_pairs
+        n_values = 0
+        
+        n_fragments = len(fragment_pairs[0])
+        fragment_size = len(fragment_pairs[0][0])
+        
+        obs1 = fragment_pairs[0][:, obs_acts_next_obs_idxs['obs']]
+        obs = np.concatenate((obs1, fragment_pairs[1][:, obs_acts_next_obs_idxs['obs']]), axis=0)
+        acts = np.concatenate((fragment_pairs[0][:, obs_acts_next_obs_idxs['acts']], fragment_pairs[1][:, obs_acts_next_obs_idxs['acts']]), axis=0) if model.use_action else np.zeros((len(obs),), dtype=obs1.dtype)
+        next_obs = np.concatenate((fragment_pairs[0][:, obs_acts_next_obs_idxs['next_obs']], fragment_pairs[1][:, obs_acts_next_obs_idxs['next_obs']]), axis=0) if model.use_next_state else obs
+        dones = np.concatenate((fragment_pairs[0][:, obs_acts_next_obs_idxs['dones']], fragment_pairs[1][:, obs_acts_next_obs_idxs['dones']]), axis=0) if model.use_done else np.zeros((len(acts),), dtype=np.bool_)
+        infos = np.array([{}] * len(obs))  # TODO....?
+        trans1 = Transitions(obs=obs,
+                    acts=acts, 
+                    next_obs=next_obs, 
+                    dones=dones, 
+                    infos=infos)# TODO....?
+        
+        self.model.mode = TrainingModes.VALUE_GROUNDING_LEARNING
+        model.mode = TrainingModes.VALUE_GROUNDING_LEARNING
+        
+        model.set_alignment_function(alignment)
+        rews,_ = self.rewards(
+                trans1, only_with_alignment=True, alignment=alignment, custom_model=model, only_grounding=False, reward_mode=TrainingModes.VALUE_GROUNDING_LEARNING)
+        #rews_should_be = model.forward(th.tensor(trans1.obs, dtype=model.dtype), action=None, next_state=None, done=None, info=None).detach()
+        #rews_should_SHOULD_be = model.forward_value_groundings(th.tensor(trans1.obs, dtype=model.dtype), action=None, next_state=None, done=None, info=None).detach()
+        
+        #print(model.get_learned_align_function())
+        #print(model.get_trained_alignment_function_network())
+        
+        assert rews.shape == (len(trans1.obs),)
+        print(rews.shape)
+        rews1, rews2 = rews[0:n_fragments], rews[n_fragments:2*n_fragments]
+        
+        assert rews1.shape == (len(obs1), )
+        probs = self.probability(
+                        rews1.unsqueeze(-1), rews2=rews2.unsqueeze(-1)).detach().numpy()
+        
+        self.model = prev_model
+        self.model.mode = TrainingModes.SIMULTANEOUS
+        model.mode = TrainingModes.SIMULTANEOUS
+        model.cur_align_func = None
+        return probs
     def forward(
         self,
         fragment_pairs_per_agent_id: Dict[str, Sequence[TrajectoryWithValueSystemRewsPair]],
@@ -437,7 +502,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             else:
                 return probs_vs, probs_gr, rews_vs_per_aid, rews_gr_per_aid
 
-    def rewards(self, transitions: Transitions, only_with_alignment=False, only_grounding=False, real=False, alignment=None, grounding=None, custom_model=None) -> th.Tensor:
+    def rewards(self, transitions: Transitions, only_with_alignment=False, only_grounding=False, real=False, alignment=None, grounding=None, custom_model=None, reward_mode=None) -> th.Tensor:
         """Computes the reward for all transitions.
 
         Args:
@@ -448,6 +513,8 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             Shape - (num_transitions, ) for Single reward network and
             (num_transitions, num_networks) for ensemble of networks.
         """
+        if reward_mode is None:
+            reward_mode = self.algorithm.training_mode
         if custom_model is not None:
             prev_model = self.model
             self.model: AbstractVSLRewardFunction = custom_model
@@ -504,14 +571,14 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             next_states_i = next_state[indexes] if next_state is not None else None
 
             if only_with_alignment:
-                rews[indexes], np_rewards = self.algorithm.calculate_rewards(alignment if self.model.mode == TrainingModes.VALUE_GROUNDING_LEARNING else None,
+                rews[indexes], np_rewards = self.algorithm.calculate_rewards(alignment if reward_mode == TrainingModes.VALUE_GROUNDING_LEARNING else None,
                                                                             custom_model=self.model,
                                                                             grounding=None,
                                                                             obs_mat=states_i,
                                                                             action_mat=action_i,
                                                                             next_state_obs_mat=next_states_i,
                                                                             obs_action_mat=None,  # TODO?
-                                                                            reward_mode=self.algorithm.training_mode,
+                                                                            reward_mode=reward_mode,
                                                                             recover_previous_config_after_calculation=False,
                                                                             use_probabilistic_reward=False, requires_grad=True, forward_groundings=False,
                                                                             info=info)
@@ -533,14 +600,14 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
 
                 
             else:
-                rews[indexes], np, rews_gr[:, indexes], np2 = self.algorithm.calculate_rewards(alignment if self.model.mode == TrainingModes.VALUE_GROUNDING_LEARNING else None,
+                rews[indexes], np, rews_gr[:, indexes], np2 = self.algorithm.calculate_rewards(alignment if reward_mode == TrainingModes.VALUE_GROUNDING_LEARNING else None,
                                                                             custom_model=self.model,
-                                                                            grounding=None if self.algorithm.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else grounding,
+                                                                            grounding=None if reward_mode == TrainingModes.VALUE_GROUNDING_LEARNING else grounding,
                                                                             obs_mat=states_i,
                                                                             action_mat=action_i,
                                                                             next_state_obs_mat=next_states_i,
                                                                             obs_action_mat=None,  # TODO?
-                                                                            reward_mode=self.algorithm.training_mode,
+                                                                            reward_mode = reward_mode,
                                                                             recover_previous_config_after_calculation=False,
                                                                             use_probabilistic_reward=False, requires_grad=True, info=info, forward_groundings=True)
 

@@ -73,10 +73,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         self.debug_mode = debug_mode
         self.use_full_batch = batch_size == "full"
         # if batchsize = '5-fold' or '3-fold' or '224-fold', put the numbers in self.k_cross_validation
-        if inner_k_fold_validation_divisions_per_epoch == 1:
-            self.k_mini_folds = None # no validation set, it will be the full dataset instead.
-        else:
-            self.k_mini_folds = inner_k_fold_validation_divisions_per_epoch
+        self.k_mini_folds = inner_k_fold_validation_divisions_per_epoch  # IF 1, 30% as validation randomly selected. If null, no validation set. k = 2,3, are not supported yet.
             
         if self.use_full_batch:
             batch_size = 32  # dummy initialization
@@ -144,7 +141,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
             self.reset_training()
         
             
-        
+        total_training_steps = 0
+
         general_batch_size = self.batch_size # overriden in each val-train-split
         check_optimizer_consistency(reward_model_per_agent_id, self.optim)
         check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
@@ -190,6 +188,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             check_optimizer_consistency(reward_model_per_agent_id, self.optim)
                             check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
                             check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
+                            training_steps = self.refining_steps_after_cluster_assignment if epoch_num > 0 and starting_assignment!='start_random' else self.initial_refining_steps
+                            
                             
                             with th.no_grad():
                                 new_assignment, fragment_pairs_per_aid, preferences_per_aid, preference_grounding_per_aid, fragment_idxs_per_aid = self.cluster_assignment(
@@ -199,8 +199,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                         #iteration=global_iteration*epochs+epoch_num, max_iterations=global_iterations*epochs,
                                     running_assignment_vs = running_assignment_vs, running_assignment_gr = running_assignment_gr,
                                     value_system_network_per_cluster=value_system_per_cluster, use_assignment=starting_assignment if epoch_num == 0 else None)
-                                    
-                                    
+                            
+                            if starting_assignment is not None and starting_assignment != 'start_random':
+                                total_training_steps = starting_assignment.n_training_steps
+                            total_training_steps += training_steps      
                             end = time.time()
                             print("CLUSTER ASSIGNMENT EX TIME: ", end - st)
                             # Ensure optimizer consistency
@@ -215,7 +217,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             
                             DIDASTEP = False
                             
-                            for r in range(self.refining_steps_after_cluster_assignment if epoch_num > 0 and starting_assignment!='start_random' else self.initial_refining_steps):
+                            for r in range(training_steps):
                                 with (self.logger.add_key_prefix("train")if self.use_logger is not None else nullcontext()):
 
                                     
@@ -344,9 +346,14 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             new_assignment_copy = self.evaluate_assignment_with_dataset(new_assignment, val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, running_assignment_vs, running_assignment_gr)
                             
                         
-                                
+                        
                         copy_assignment = new_assignment_copy.copy()
                         copy_assignment.explored  =False
+
+                        print (new_assignment_copy.n_training_steps)
+                        print(new_assignment.n_training_steps)
+                        print(copy_assignment.n_training_steps)
+                        copy_assignment.n_training_steps = total_training_steps
                         #position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
                         assignment_ranking.insert_assignment(copy_assignment)
 
@@ -861,6 +868,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                     assignment_vs=vs_cluster_to_agents_assignment,
                                     )
             
+            
         else:
             
             assignment = use_assignment.copy()
@@ -1111,12 +1119,18 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                 else:
                     starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
+                    
                     if starting_assignment is None:
-                        self.reward_trainer.refining_steps_after_cluster_assignment = math.ceil(self.reward_trainer.refining_steps_after_cluster_assignment + 0.1*self.reward_trainer.refining_steps_after_cluster_assignment)
-                        self.reward_trainer.initial_refining_steps = math.ceil(self.reward_trainer.initial_refining_steps + 0.1*self.reward_trainer.initial_refining_steps)
+                        self.reward_trainer.refining_steps_after_cluster_assignment = min(
+                            math.ceil(self.reward_trainer.refining_steps_after_cluster_assignment + 0.1*self.reward_trainer.refining_steps_after_cluster_assignment), 
+                            self.reward_trainer.refining_steps_after_cluster_assignment*10)
+                        self.reward_trainer.initial_refining_steps = min(math.ceil(self.reward_trainer.initial_refining_steps + 0.1*self.reward_trainer.initial_refining_steps), 
+                                                                         self.reward_trainer.initial_refining_steps*10)
                         choosing = True
+                        use_random = True
                         continue
                     else:
+                        starting_assignment.explored  =True
                         choosing = False
                     
                     check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,

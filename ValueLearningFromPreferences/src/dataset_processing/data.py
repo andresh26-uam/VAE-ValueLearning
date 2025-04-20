@@ -341,13 +341,19 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
         Returns:
             A list of tuples, where each tuple contains a train and validation VSLPreferenceDataset.
         """
-        kf = KFold(n_splits=k, shuffle=True, random_state=42)
+
         unique_agents = np.unique(self.agent_ids)
         agent_indices = {agent: np.where(self.agent_ids == agent)[0] for agent in unique_agents}
 
-        # Create agent-specific splits
-        agent_splits = {agent: list(kf.split(agent_indices[agent])) for agent in unique_agents}
-
+        if k >= 2:
+            kf = KFold(n_splits=k, shuffle=True, random_state=42)
+        
+            # Create agent-specific splits
+            agent_splits = {agent: list(kf.split(agent_indices[agent])) for agent in unique_agents}
+        else:
+            # If k is 1, just use a single random split 
+            agent_splits = {agent: [np.array_split(np.random.permutation(len(agent_indices[agent])), 2)] for agent in unique_agents}
+        
         folds = []
         for fold_idx in range(k):
             train_indices = []
@@ -364,7 +370,6 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
                 val_dataset = VSLPreferenceDataset(self.n_values)
 
                 # Populate train dataset
-                
                 train_dataset.push(
                 [(self.l_fragments1[i], self.l_fragments2[i]) for i in train_indices],
                 self.preferences[train_indices],
@@ -380,7 +385,8 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
             agent_ids=self.agent_ids[val_indices],
             )
             folds.append((train_dataset, val_dataset))
-
+            
+        
         # Validation script to check splits
         for fold_idx, (train_dataset, val_dataset) in enumerate(folds):
             train_agents, train_counts = np.unique(train_dataset.agent_ids, return_counts=True)

@@ -194,6 +194,7 @@ class ClusterAssignment():
             
             aggregation_on_gr_scores = ClusterAssignment._default_aggr_on_gr_scores
         self.aggregation_on_gr_scores = aggregation_on_gr_scores
+        self.n_training_steps = 0
 
     @property
     def n_agents(self):
@@ -468,8 +469,12 @@ class ClusterAssignment():
                           agent_to_gr_cluster_assignments=deepcopy(self.agent_to_gr_cluster_assignments),
                           agent_to_vs_cluster_assignments=deepcopy(self.agent_to_vs_cluster_assignments),
                           aggregation_on_gr_scores=self.aggregation_on_gr_scores)
-        clust.explored = self.explored
+        clust.explored = bool(self.explored)
         clust.optimizer_state = deepcopy(self.optimizer_state)
+        if hasattr(self, "n_training_steps"):
+            clust.n_training_steps = int(self.n_training_steps)
+        else:
+            clust.n_training_steps = 0
         check_assignment_consistency(grounding_per_value_per_cluster=clust.grounding_per_value_per_cluster,
                                      value_system_network_per_cluster=clust.value_system_per_cluster,
                                      assignment_aid_to_gr_cluster=clust.agent_to_gr_cluster_assignments,
@@ -666,7 +671,7 @@ class ClusterAssignmentMemory():
         mgr_gr = self.maximum_conciseness_gr
 
         for i, assignment in enumerate(self.memory):
-            result += f"Assignment {i} (Explored: {assignment.explored}):"
+            result += f"Assignment {i} (Explored: {assignment.explored}, {assignment.n_training_steps if hasattr(assignment, 'n_training_steps') else 'unk'}):"
             result += f" VS: DI={assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr):1.4f}|RP={assignment.representativity_vs():.4f}|CN={assignment.conciseness_vs() if assignment.L > 1 else mgr:.4f}, GR: {[f"{float(g):.3f}" for g in assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)]}, K: {assignment.K}, L: {assignment.L} \n"
             result += f" GR Clusters: {assignment.active_gr_clusters()}, VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
@@ -733,18 +738,20 @@ class ClusterAssignmentMemory():
                 lexic_diff = vs_score_dif
         return lexic_diff, pareto_score
        
-    def insert_assignment(self, assignment: ClusterAssignment) -> Tuple[int, ClusterAssignment]:
+    def insert_assignment(self, assignment: ClusterAssignment, sim_threshold=0.95) -> Tuple[int, ClusterAssignment]:
 
-        self.update_maximum_conciseness(assignment)
-            
+        changes_made = self.update_maximum_conciseness(assignment)
         
+        if all([asa.explored for asa in self.memory]) and len(self.memory) >= self.max_size:
+            self.clean_memory(exhaustive=True)  
+            for i in range(len(self.memory)):  
+                self.memory[i].explored = False
         
         #lexico_diffs = []
         equivalent_assignments = []
         pareto_diffs = []
 
         dominated_indices = set()
-        changes_made = False
         is_dominated = False
         admit_insertion = True
 
@@ -752,29 +759,39 @@ class ClusterAssignmentMemory():
         k_assignment_all_1 = all(np.asarray(assignment.K) == 1)
         for i in range(len(self.memory)):
             cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[i], assignment,lexicographic_vs_first=False,) 
-            eq = self.memory[i].is_equivalent_assignment(assignment)
-            equivalent_assignments.append(eq)
+            sim = self.memory[i].cluster_similarity(assignment)
+            equivalent_assignments.append(sim >= sim_threshold)
             #lexico_diffs.append(cmp_lexico)
             pareto_diffs.append(cmp_pareto)
 
             if cmp_pareto > 0:
                 is_dominated = True
-                if eq:
+                # If it is absoloutely worse than other that is not explored, we dont insert.
+                if sim >= sim_threshold and not self.memory[i].explored :
                     admit_insertion = False
-
-            if (cmp_pareto < 0 and eq) or (cmp_pareto < 0 and self.memory[i].explored):
-                dominated_indices.add(i) # Dominated that also equivalent
-
-            if l_assignment_1 and k_assignment_all_1 and self.memory[i].L == 1 and all(np.asarray(self.memory[i].K) == 1):
+                    if not l_assignment_1: break
+            
+            elif (cmp_pareto < 0 and sim >= sim_threshold) or (cmp_pareto < 0 and self.memory[i].explored):
                 admit_insertion = True
-                if i not in dominated_indices:
-                        dominated_indices.add(i)
+                dominated_indices.add(i) # Dominated that also equivalent
+            elif (cmp_pareto <= 0 and sim >= sim_threshold and self.memory[i].explored and self.memory[i].n_training_steps < assignment.n_training_steps):
+                # if it is like a continuation of an explored one, we admit inserting
+                admit_insertion = True
+            # We always insert the assignment with 1 cluster if it has more training steps than the one in memory
+            if l_assignment_1 and k_assignment_all_1 and self.memory[i].L == 1 and all(np.asarray(self.memory[i].K) == 1):
+                self.memory[i].explored = False # Should never be explored.
+                if self.memory[i].n_training_steps <= assignment.n_training_steps:
+                    admit_insertion = True
+                    if i not in dominated_indices:
+                            dominated_indices.add(i)
                     
                  
-        # Insert the new one if all the pareto diffs are less than or equal than 0 (pareto dominates someone or is non dominated).
         pareto_diffs = np.array(pareto_diffs)
-        if admit_insertion and ((all(pareto_diffs <= 0)) or (not is_dominated) or (equivalent_assignments.count(True) == 0) or all([asa.explored for asa in self.memory])):
+        if admit_insertion or all([asa.explored for asa in self.memory]):
             changes_made = True
+            env = assignment.get_remove_env() 
+            if env is not None:
+                self.common_env = env
             self.memory.append(assignment)  
             # Eliminate the assignments in the dominated_indices
             for idx in sorted(list(dominated_indices), reverse=True):
@@ -785,10 +802,7 @@ class ClusterAssignmentMemory():
             self.sort_lexicographic(lexicographic_vs_first=True)
             if len(self.memory) > self.max_size:
                 self.clean_memory(exhaustive=False)
-        if all([asa.explored for asa in self.memory]) and len(self.memory) >= self.max_size:
-            self.clean_memory(exhaustive=True)  
-            for i in range(len(self.memory)):  
-                self.memory[i].explored = False
+        
         assignment.explored = not changes_made
 
         if __debug__:
@@ -804,7 +818,7 @@ class ClusterAssignmentMemory():
         better_grounding_precondition = all(gr_diffs <= 0.0)
         if better_grounding_precondition:
             self.maximum_grounding_coherence = assignment.gr_score
-
+        changes_made = False
         if better_grounding_precondition:
             if assignment.L > 1: 
                 new_max_c = max(self.maximum_conciseness_vs, assignment.conciseness_vs()) 
@@ -818,8 +832,9 @@ class ClusterAssignmentMemory():
                     if new_max_c != self.maximum_conciseness_gr[vi]:
                         changes_made = True
                     self.maximum_conciseness_gr[vi] = new_max_c
+        return changes_made
 
-    def clean_memory(self, exhaustive=True):
+    def clean_memory(self, exhaustive=True, sim_threshold=0.95):
         pareto_dominated_counts = [0] * len(self.memory)
         equivalent_assignments_counts = [0] * len(self.memory)
         similarity_index = [0] * len(self.memory)
@@ -842,9 +857,15 @@ class ClusterAssignmentMemory():
                     if cmp_pareto > 0:
                         
                         pareto_dominated_counts[i] += 1
-                    if sim == 1.0:
+                    #print("SIM", sim, i ,j)
+                    if sim >= sim_threshold:
                         equivalent_assignments_counts[i] += 1 
-                    if (cmp_pareto > 0 and sim==0.0) or (cmp_pareto > 0 and self.memory[i].explored): 
+                    
+                    if (cmp_pareto > 0 and 
+                        sim >= sim_threshold) or (
+                            cmp_pareto > 0 and self.memory[i].explored) or (
+                            sim >= sim_threshold and cmp_pareto>=0 and 
+                            self.memory[j].n_training_steps > self.memory[i].n_training_steps):
                         # This is always something that needs to be done.
                         # If explored and is dominated is of no interest.
                         # In any case, an equivalent assignment that is dominated is not useful.
@@ -864,9 +885,13 @@ class ClusterAssignmentMemory():
                         similarity_index.pop(i)
                         if not exhaustive:
                             return
+                        
         
+        # If exhaustive, remove the assignments that are equal up to 90%
+
         # If still too many examples:
         # Eliminate the one pareto dominated by the most others, or all if exhaustive (only at the end or under all examples explored)
+        
         if len(self.memory) > self.max_size:
             max_dominated_count = max(pareto_dominated_counts)
             while max_dominated_count > 0:
@@ -878,15 +903,20 @@ class ClusterAssignmentMemory():
                 max_dominated_count = max(pareto_dominated_counts)
                 if not exhaustive:
                     break
+        
+        
         # If still too many, remove the first assignment that is the most equivalent to any other
         if len(self.memory) > self.max_size:
             #sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: equivalent_assignments_counts[x[0]], reverse=True)]
             sorted_indices = [i[0] for i in sorted(enumerate(self.memory), key=lambda x: (similarity_index[x[0]], -x[1].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)), reverse=True)]
+            
             worst = sorted_indices[0]
+            
             if self.memory[worst].L == 1 and all(np.asarray(self.memory[worst].K) == 1):
                 self.memory.pop(sorted_indices[1])
             else:
                 self.memory.pop(worst)
+        
         return
         
     def sort_lexicographic(self, lexicographic_vs_first=False):
@@ -915,9 +945,11 @@ class ClusterAssignmentMemory():
         return self.assignment_with_env(assignment, override_explore_state)
     
     def assignment_with_env(self, assignment: ClusterAssignment, override_explore) -> ClusterAssignment:
+        if self.common_env is not None:
+            #assignment.get_remove_env()
+            assignment.set_env(self.common_env)
         if override_explore:
             assignment.explored = True
-        if self.common_env is not None:
-            assignment.set_env(self.common_env)
-        
         return assignment
+    
+    

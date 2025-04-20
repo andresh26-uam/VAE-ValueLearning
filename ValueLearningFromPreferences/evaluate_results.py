@@ -5,7 +5,7 @@ import random
 
 import numpy as np
 import torch
-
+from interpret import show
 from envs.tabularVAenv import TabularVAMDP
 from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED
 from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory
@@ -267,14 +267,52 @@ if __name__ == "__main__":
 
     # 2: plots.
     # 3: SHAP VALUES TODO
-    # 4: CONTEXT CLUSTERS TODO
+    import interpret.blackbox as b
+    from imitation.data.types import (
+    TrajectoryPair,
+    Transitions,
+)
+
+    data_test = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_test.fragments1, dataset_test.fragments2)])
+    data_train = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_train.fragments1, dataset_train.fragments2)])
     
+    print(data_test[0])
+    agent = dataset_test.agent_ids[0]
+
+    feature_names = ['Cost', 'Time', 'Headway', 'Interchanges', 'Cost2', 'Time2', 'Headway2', 'Interchanges2']
+    reward_model_per_value = []
+    obs_acts_next_obs_idxs = {'obs': list(range(4)), 'acts': [0]}
+    for value in range(test_assignment.n_values):
+        #print(data_train[0]) # [1.         0.18421053 0.09868421 0.        ], [0.90131579 0.20394737 0.19736842 0.00657895]?
+        #exit(0)
+        def obs_shap_to_fragment_pairs(obs):
+            
+            return (obs[..., :obs.shape[-1] // 2], obs[..., obs.shape[-1] // 2:])
+        reward_model_per_value.append( lambda obs: vsl_algo.preference_model.predict_proba(fragment_pairs=obs_shap_to_fragment_pairs(obs), 
+                                                                                           
+                                    obs_acts_next_obs_idxs=obs_acts_next_obs_idxs, alignment=vsl_algo.env.basic_profiles[value],
+                                    model=best_vs_then_gr_assignment.reward_model_per_agent_id[agent]))
+        
+        
+        s = b.MorrisSensitivity(data=data_test, model=reward_model_per_value[value], feature_names=feature_names)
+        # 4: CONTEXT CLUSTERS TODO
+        
+        #explanation = s.explain_local(data[0:5], y=dataset_test.preferences_with_grounding[0:5,value])
+        explanation = s.explain_global( name="test_explanation")
+        fig = explanation.visualize()
+        #os.makedirs(f"demo_images", exist_ok=True)
+        fig.write_image(f"morrisL3{value}.pdf")
+    print(a)
     print(best_gr_then_vs_assignment)
     print(best_vs_then_gr_assignment)
     print("TEST ASIGNMENT")
-    print(test_assignment)
+    
     print(len(assignment_memory))
     print(assignment_memory)
+    print(test_assignment_memory)
+
+    print(test_assignment_memory.memory[0])
+    print(test_assignment_memory.memory[-1])
 
     best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/plots/figure_clusters_vs_gr.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
