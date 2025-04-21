@@ -43,9 +43,9 @@
                 "optimizer_kwargs": {
                     "lr": 0.01,
                     "lr_grounding": 0.005,
-                    "lr_value_system": 0.003,
+                    "lr_value_system": 0.0025,
                     "lr_lambda": 0.005,
-                    "initial_lambda": 0.5,
+                    "initial_lambda": 0.2,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -55,8 +55,8 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "confident_penalty": 10.0,
-                    "cluster_similarity_penalty": 0.1,
+                    "confident_penalty": 5.0,
+                    "cluster_similarity_penalty": 0.0,
                     "lambda_decay": 0.0},
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
@@ -94,7 +94,7 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 500,
-                    "refining_steps_after_cluster_assignment": 10,
+                    "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 10,
                     "initial_exploration_rate": 0.0,

@@ -818,7 +818,8 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
 
     def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
                  
-                         vs_apply_on_misclassified_pairs_only=False, confident_penalty=0.0, cluster_similarity_penalty=0.00) -> None:
+                         vs_apply_on_misclassified_pairs_only=False, confident_penalty=0.0,
+                           label_smoothing = 0.0, cluster_similarity_penalty=0.00) -> None:
         """Create cross entropy reward loss."""
         super().__init__()
         # This is the tolerance in the probability model when in the ground truth two trajectories are deemed equivalent (i.e. if two trajectories are equivalent, the ground truth target is 0.5. The model should output something in between (0.5 - indifference, 0.5 + indifference) to consider it has done a correct preference prediction.)
@@ -827,6 +828,9 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         self.vs_apply_on_misclassified_only = vs_apply_on_misclassified_pairs_only
         self.confident_penalty = confident_penalty
         self.cluster_similarity_penalty = cluster_similarity_penalty
+
+        self.loss_object = th.nn.CrossEntropyLoss(
+            reduction='none', ignore_index=-1, weight=None, label_smoothing=label_smoothing)
 
 
     def loss_func(self, probs, target_probs, misclassified_pairs=None, apply_on_misclassified_only=False):
@@ -839,8 +843,9 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         if len(probs_l) == 0:
             return th.tensor(0.0, device=probs.device, dtype=probs.dtype)
         
-        if self.confident_penalty > 0.0:
-            s = th.sum(th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='none') - self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
+        if self.confident_penalty > 0.0 or self.loss_object.label_smoothing > 0.0:
+            
+            s = th.sum(self.loss_object.forward(probs_l, target_probs_l)- self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
         else:
             s = th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='sum')
         return s / len(probs)
@@ -1061,11 +1066,13 @@ class VSLOptimizer(th.optim.Optimizer):
 class VSLCustomLoss(BaseVSLClusterRewardLoss):
     # TODO: Use efficient version when it is known the grounding does not depend on VS
 
-    def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, vs_apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00):
-        super().__init__(model_indifference_tolerance, 
-                         gr_apply_on_misclassified_pairs_only, 
-                         vs_apply_on_misclassified_pairs_only, 
-                         confident_penalty, cluster_similarity_penalty)
+    def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, vs_apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00,
+                 label_smoothing=0.0):
+        super().__init__(model_indifference_tolerance=model_indifference_tolerance, 
+                         gr_apply_on_misclassified_pairs_only=gr_apply_on_misclassified_pairs_only, 
+                         vs_apply_on_misclassified_pairs_only=vs_apply_on_misclassified_pairs_only, 
+                         confident_penalty=confident_penalty, cluster_similarity_penalty=cluster_similarity_penalty,
+                         label_smoothing=label_smoothing)
         
 
     @abstractmethod
@@ -1127,9 +1134,10 @@ class ConstrainedOptimizer(VSLOptimizer):
 
 class ConstrainedLoss(VSLCustomLoss):
     def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
-                         vs_apply_on_misclassified_pairs_only=False, lambda_decay=1e-9, minimal_lambda=0.1, confident_penalty=0, cluster_similarity_penalty=0.00):
+                         vs_apply_on_misclassified_pairs_only=False, lambda_decay=1e-9, minimal_lambda=0.1, confident_penalty=0, cluster_similarity_penalty=0.00,
+                         **kwargs):
         super().__init__(model_indifference_tolerance, gr_apply_on_misclassified_pairs_only, 
-                         vs_apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty)
+                         vs_apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty, **kwargs)
         
         self.lagrange_multipliers = None
         self.best_gr_losses = None

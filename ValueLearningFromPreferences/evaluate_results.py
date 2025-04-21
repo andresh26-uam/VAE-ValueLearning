@@ -2,10 +2,12 @@ import argparse
 import os
 import pprint
 import random
+from typing import Dict
 
 import numpy as np
 import torch
 from interpret import show
+from envs.routechoiceApollo import RouteChoiceEnvironmentApolloComfort
 from envs.tabularVAenv import TabularVAMDP
 from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED
 from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory
@@ -15,34 +17,26 @@ from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes
 from train_vsl import load_training_results, parse_cluster_sizes, parse_optimizer_data
 from src.utils import filter_none_args, load_json_config
-
+import interpret.blackbox as b
+from imitation.data.types import (
+    TrajectoryPair,
+    Transitions,
+)
 
 import pandas as pd
 
-def generate_assignment_tables(assignment_memory: ClusterAssignmentMemory, experiment_name, output_columns, output_dir="test_results", label='train_set'):
-    """
-    Generate tables for the first, middle, and last assignments in the assignment memory.
-
-    Args:
-        assignment_memory (ClusterAssignmentMemory): The memory containing cluster assignments.
-        experiment_name (str): The name of the experiment.
-        output_columns (dict): A dictionary specifying which columns to include in the output.
-                               Example: {"value_systems": True, "num_clusters": True, ...}
-        output_dir (str): The base directory for saving the output files.
-    """
+def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str,ClusterAssignment], experiment_name, output_columns, output_dir="test_results", label='train_set'):
+    
     # Ensure output directories exist
-    csv_dir = os.path.join(output_dir, experiment_name, label, "csv")
-    latex_dir = os.path.join(output_dir, experiment_name, label, "latex")
+    csv_dir = os.path.join(output_dir, experiment_name, label, 'tables' , 'general', "csv")
+    latex_dir = os.path.join(output_dir, experiment_name, label, 'tables', 'general', "latex")
     os.makedirs(csv_dir, exist_ok=True)
     os.makedirs(latex_dir, exist_ok=True)
 
     # Select the first, middle, and last assignments
-    num_digits = len(str(len(assignment_memory.memory)))
-    assignments = [
-        (f"assign_p{str(i+1).zfill(num_digits)}_in_train", assignment_memory.memory[i]) for i in range(0, len(assignment_memory.memory))
-    ]
+    
 
-    for position, assignment in assignments:
+    for position, assignment in assignment_identifier_to_assignment:
         # Prepare data for the table
         data = []
         
@@ -137,6 +131,83 @@ def parse_args():
     
     return parser.parse_args()
 
+def contextual_feature_analysis(experiment_name, values_names, dataset_reference: VSLPreferenceDataset, assignment: ClusterAssignment, label='train_set', assignment_identifier=''):
+    all_context_features = [dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]['agent_context'] for agent_id in dataset_reference.agent_ids]
+    max_context_features = np.max(all_context_features, axis=0)
+    context_features_per_cluster = []
+
+    for clust_idx, agent_group in enumerate(assignment.assignment_vs):
+        if len(agent_group) == 0:
+            continue
+        # Extract and normalize context features for the current cluster
+        context_features_cidx = np.array([dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]['agent_context'] for agent_id in agent_group])
+        
+        context_features_per_cluster.append(context_features_cidx)
+
+        value_system = assignment.get_value_system(clust_idx)
+        #print(clust_idx, np.mean(context_features_cidx, axis=0), value_system)
+
+    # Plot all features in a single barplot with standard error bars for each cluster
+    feature_names = ["Houshold Income", "Car available", "Conmuting", "Shopping", "Business", "Leisure"]
+    cluster_data = []
+
+    for cluster_idx, cluster_features in enumerate(context_features_per_cluster):
+        value_system = assignment.get_value_system(cluster_idx)
+        
+        num_agents = len(cluster_features)
+        perc_increase_over_mean = (np.mean(cluster_features, axis=0) - np.mean(all_context_features, axis=0)) / np.mean(all_context_features, axis=0) * 100
+        means = np.mean(cluster_features, axis=0)
+        std_errors = np.sqrt(np.var(cluster_features, axis=0) / len(cluster_features) + np.var(all_context_features, axis=0) / len(all_context_features)) / np.mean(all_context_features, axis=0) * 100
+
+        # Format the value system with names and values
+        value_system_str = ", ".join(f"{name}: {value:.2f}" for name, value in zip(values_names, value_system))
+
+        plt.figure(figsize=(10, 6))
+        plt.bar(range(1, len(means) + 1), perc_increase_over_mean, yerr=std_errors, capsize=5, alpha=0.7, color='skyblue')
+        plt.xticks(range(1, len(means) + 1), [feature_names[i] for i in range(len(means))])
+        plt.ylim(-1.4 * 100, 1.4 * 100)  # Set y-axis
+        plt.yticks(np.arange(-1.4 * 100, 1.5 * 100, 0.1 * 100), rotation=45)
+        plt.title(f"Barplot of Context Features for Cluster {cluster_idx + 1} (Agents: {num_agents})\n(Value System: {value_system_str})")
+        plt.xlabel("Features")
+        plt.ylabel("Percentage increase/decrease over average")
+        plt.grid(axis='y')
+
+        # Save the plot
+        plot_dir = os.path.join('test_results', experiment_name, label, 'plots', 'context_features')
+        os.makedirs(plot_dir, exist_ok=True)
+        plot_path = os.path.join(plot_dir, f"cluster_{cluster_idx + 1}_context_features.pdf")
+        plt.savefig(plot_path)
+        plt.close()
+
+        # Add cluster data to the table
+        cluster_row = [f"{mean:.2f} \\pm{{{perc:+.2f}\\%}}" for mean, perc in zip(means, perc_increase_over_mean)]
+        cluster_data.append([f"Cluster {cluster_idx + 1}", num_agents] + cluster_row)
+
+    # Add overall mean data to the table
+    overall_means = np.mean(all_context_features, axis=0)
+    overall_row = [f"{mean:.2f}" for mean in overall_means]
+    cluster_data.append(["Overall", len(dataset_reference.agent_ids)] + overall_row)
+
+    # Save the table to CSV and LaTeX
+    table_path_csv = os.path.join('test_results', experiment_name, label, 'tables', 'context_features', 'csv')
+    table_path_latex = os.path.join('test_results', experiment_name, label, 'tables', 'context_features', 'latex')
+    os.makedirs(table_path_csv, exist_ok=True)
+    os.makedirs(table_path_latex, exist_ok=True)
+    table_path_csv = os.path.join(table_path_csv, f"context_features_{assignment_identifier}.csv")
+    table_path_latex = os.path.join(table_path_latex, f"context_features_{assignment_identifier}.tex")
+    
+    # Create DataFrame
+    df = pd.DataFrame(cluster_data, columns=["Cluster", "Number of Agents"] + feature_names)
+
+    # Save to CSV
+    df.to_csv(table_path_csv, index=False)
+
+    # Save to LaTeX
+    with open(table_path_latex, "w") as f:
+        f.write(df.to_latex(index=False, escape=False))
+
+    print(f"Saved context features table to {table_path_csv} and {table_path_latex}")
+
 if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
     # IMPORTANT: Default Args are specified depending on the environment in config.json
@@ -228,17 +299,52 @@ if __name__ == "__main__":
         alg_config['train_kwargs']['experiment_name'] = experiment_name
 
     
+    pprint.pprint(config)
 
     assignment_memory: ClusterAssignmentMemory = metrics['assignment_memory']
+    assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
+    best_vs_then_gr_assignment = assignment_memory.memory[0]
     assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
+    best_gr_then_vs_assignment = assignment_memory.memory[0]
 
+    assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
+    num_digits = len(str(len(assignment_memory.memory)))
+    assignments_identifier_to_assignment = [
+        (f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train", assignment_memory.memory[i]) for i in range(0, len(assignment_memory.memory))
+    ]
+    test_assignment_memory = ClusterAssignmentMemory(assignment_memory.max_size, n_values=assignment_memory.memory[0].n_values)
+    test_assignment_memory.maximum_conciseness_vs = assignment_memory.maximum_conciseness_vs
+    test_assignment_memory.maximum_conciseness_gr = assignment_memory.maximum_conciseness_gr # these two are train estimations.
+    for a in assignment_memory.memory:
+        test_assignment = vsl_algo.evaluate_assignment(a, dataset_test)
+        test_assignment_memory.memory.append(test_assignment) # just insert it.
+    test_assignments_identifier_to_assignment = [
+        (f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train", test_assignment_memory.memory[i]) for i in range(0, len(test_assignment_memory.memory))
+    ]
+    best_vs_then_gr_assignment_test = vsl_algo.evaluate_assignment(best_vs_then_gr_assignment, dataset_test)
+    best_gr_then_vs_assignment_test = vsl_algo.evaluate_assignment(best_gr_then_vs_assignment, dataset_test)
 
-    # 1: tables.
+    # 1: Context feature analysis
+    env: RouteChoiceEnvironmentApolloComfort
+    import matplotlib.pyplot as plt
+
+    values_names = environment_data['values_names']
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_gr_then_vs')
+    for aid, assignment in assignments_identifier_to_assignment:
+        contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
+    
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_gr_then_vs')
+    for aid, assignment in test_assignments_identifier_to_assignment:
+        contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
+    
+    # 2: tables.
     # Put for the first, middle, and last assignment in separated tables.
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
     #  Make every single column modular, i.e. to activate or deactivate it with a flag.
     # Output the tables in latex anc csv in the test_results/{experiment_name}/csv and test_results/{experiment_name}/latex folders.
-    pprint.pprint(config)
+    
     
     output_columns = {
         "value_systems": True,
@@ -250,32 +356,16 @@ if __name__ == "__main__":
     }
 
     # Generate tables
-    generate_assignment_tables(assignment_memory, experiment_name, output_columns, output_dir='test_results', label='train_set')
-
-    best_vs_then_gr_assignment = assignment_memory.memory[-1]
-    best_gr_then_vs_assignment = assignment_memory.memory[0]
-
-    test_assignment_memory = ClusterAssignmentMemory(assignment_memory.max_size, n_values=assignment_memory.memory[0].n_values)
-    test_assignment_memory.maximum_conciseness_vs = assignment_memory.maximum_conciseness_vs
-    test_assignment_memory.maximum_conciseness_gr = assignment_memory.maximum_conciseness_gr # these two are train estimations.
-    for a in assignment_memory.memory:
-        test_assignment = vsl_algo.evaluate_assignment(a, dataset_test)
-        test_assignment_memory.memory.append(test_assignment) # just insert it.
-
-    generate_assignment_tables(test_assignment_memory, experiment_name, output_columns, output_dir='test_results', label='test_set')
+    generate_assignment_tables(assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='train_set')
+    generate_assignment_tables(test_assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='test_set')
 
 
-    # 2: plots.
-    # 3: SHAP VALUES TODO
-    import interpret.blackbox as b
-    from imitation.data.types import (
-    TrajectoryPair,
-    Transitions,
-)
-
+    
+    # 3: Explainability TODO
     data_test = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_test.fragments1, dataset_test.fragments2)])
     data_train = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_train.fragments1, dataset_train.fragments2)])
-    
+    values_names = environment_data['values_names']
+    values_short_names = environment_data['values_short_names']
     print(data_test[0])
     agent = dataset_test.agent_ids[0]
 
@@ -295,13 +385,19 @@ if __name__ == "__main__":
         
         
         s = b.MorrisSensitivity(data=data_test, model=reward_model_per_value[value], feature_names=feature_names)
-        # 4: CONTEXT CLUSTERS TODO
         
         #explanation = s.explain_local(data[0:5], y=dataset_test.preferences_with_grounding[0:5,value])
         explanation = s.explain_global( name="test_explanation")
         fig = explanation.visualize()
+
+        explanations_dir = os.path.join('test_results', experiment_name, 'explanations')
+        morris_dir = os.path.join(explanations_dir, "morris")
+        os.makedirs(morris_dir, exist_ok=True)
+        path = os.path.join(morris_dir, f"morris_{values_names[value]}.pdf")
         #os.makedirs(f"demo_images", exist_ok=True)
-        fig.write_image(f"morrisL3{value}.pdf")
+        fig.write_image(path)
+
+
     print(a)
     print(best_gr_then_vs_assignment)
     print(best_vs_then_gr_assignment)
@@ -311,22 +407,40 @@ if __name__ == "__main__":
     print(assignment_memory)
     print(test_assignment_memory)
 
-    print(test_assignment_memory.memory[0])
-    print(test_assignment_memory.memory[-1])
 
-    best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/plots/figure_clusters_vs_gr.pdf", 
+
+    print(best_vs_then_gr_assignment_test)
+    print(best_gr_then_vs_assignment_test)
+
+    # 4: Plots. (PIE + HISTOGRAM + VISUALIZATION)
+    best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_vs_gr.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
     
-    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/plots/figure_clusters_gr_vs.pdf", 
+    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_gr_vs.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
     
+    best_vs_then_gr_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_vs_gr.pdf", 
+                                                   subfig_multiplier=parser_args.subfig_multiplier,
+                                                   values_color_map=environment_data['profiles_colors'], 
+                                                   values_names=environment_data['values_names'], 
+                                                   values_short_names=environment_data['values_short_names'],
+                                                   fontsize=parser_args.plot_fontsize,)
     
+    best_gr_then_vs_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_gr_vs.pdf", 
+                                                   subfig_multiplier=parser_args.subfig_multiplier,
+                                                   values_color_map=environment_data['profiles_colors'], 
+                                                   values_names=environment_data['values_names'], 
+                                                   values_short_names=environment_data['values_short_names'],
+                                                   fontsize=parser_args.plot_fontsize,)
+    
+    # 4: CONTEXT CLUSTERS TODO
+        
     

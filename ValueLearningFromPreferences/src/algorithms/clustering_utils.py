@@ -295,11 +295,16 @@ class ClusterAssignment():
     
     def _representativity(intra_cluster_distances_per_agent: Dict[str, float], cluster_to_agents: List[List[str]], aggr=np.mean):
         distances_per_cluster = ClusterAssignment._intra_cluster_discordances(intra_cluster_distances_per_agent, cluster_to_agents)
-        return 1.0 - aggr(np.asarray(distances_per_cluster)) 
+        if aggr=='weighted':
+            val = 1.0 - np.dot(np.asarray(distances_per_cluster), np.asarray([len(cluster) for cluster in cluster_to_agents]))/sum([len(cluster) for cluster in cluster_to_agents])
+            if not(val <=1.0 and val >= 0.0):
+                raise ValueError(f"val {val} is negative")
+            return val
+        else:
+            return aggr(1.0 - np.asarray(distances_per_cluster)) 
     
-    def plot_vs_assignments(self, save_path="demo.pdf", show = False,subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
-                            values_names=None, 
-                                                   values_short_names=None, fontsize=12):
+    def plot_vs_assignments(self, save_path="demo.pdf", show=False, subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
+                            values_names=None, values_short_names=None, fontsize=12):
         """
         Plots the agents-to-value-system (VS) assignments in 2D space.
         Each cluster is represented as a point, and agents are plotted around the cluster center
@@ -311,20 +316,21 @@ class ClusterAssignment():
         if self.inter_discordances_vs is None or self.intra_discordances_vs is None:
             raise ValueError("Inter-cluster and intra-cluster distances must be defined to plot VS assignments.")
 
-        # Normalize inter-cluster distances for visualization
-        
-        # Create a 2D space for clusters
-        # Define a function to calculate the total error in distances
-        cluster_idx_to_label, cluster_positions, calculated_distances = extract_cluster_coordinates(self.inter_discordances_vs_per_cluster_pair, [cid for (cid,_) in self.active_vs_clusters()])
-        # Plot clusters and agents
-        
-        cluster_colors_vs = assign_colors_matplotlib(self.L)
-        
-        fig, ax = plt.subplots(figsize=(12, 12))
-        max_intra_dist = max(max(self.intra_discordances_vs), 1.0)
-        sum_radius = 0
-        max_radius = 0
+        # Extract cluster coordinates
+        cluster_idx_to_label, cluster_positions, calculated_distances = extract_cluster_coordinates(
+            self.inter_discordances_vs_per_cluster_pair, [cid for (cid, _) in self.active_vs_clusters()]
+        )
 
+        cluster_colors_vs = assign_colors_matplotlib(self.L)
+
+        # Create the figure with two main sections
+        fig = plt.figure(figsize=(18, 12))
+        grid = fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.05)
+
+        # Left part: Clusters in space
+        ax = fig.add_subplot(grid[0, 0])
+        max_intra_dist = max(max(self.intra_discordances_vs), 1.0)
+        max_radius = 0
 
         for idx, (x, y) in enumerate(cluster_positions):
             cluster_idx = cluster_idx_to_label[idx]
@@ -332,16 +338,13 @@ class ClusterAssignment():
                 min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
             else:
                 min_inter_dist = 1.0
-            # Plot a circumference around the cluster center
             radius = min_inter_dist / 2.0
             max_radius = max(radius, max_radius)
 
         for idx, (x, y) in enumerate(cluster_positions):
             cluster_idx = cluster_idx_to_label[idx]
-            # Plot cluster center
             ax.scatter(x, y, color=cluster_colors_vs[idx], label=f"Cluster {cluster_idx}", s=100, zorder=3, marker='x')
 
-            # Plot agents around the cluster center
             agents = self.assignment_vs[cluster_idx]
             intra_distances = self.intra_discordances_vs_per_agent
             if len(calculated_distances) > 0:
@@ -349,66 +352,63 @@ class ClusterAssignment():
             else:
                 min_inter_dist = 1.0
 
-            # Plot a circumference around the cluster center
             radius = min_inter_dist / 2.0
             circle = plt.Circle((x, y), radius, color=cluster_colors_vs[idx], fill=False, linestyle='--', alpha=0.5)
             ax.add_artist(circle)
-            sum_radius = radius + sum_radius
-            
+
             for agent_idx, agent in enumerate(agents):
-                # Place agents around the cluster center based on intra-cluster distances
                 agent_angle = 2 * np.pi * agent_idx / len(agents)
                 agent_x = x + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.cos(agent_angle)
                 agent_y = y + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.sin(agent_angle)
                 ax.scatter(agent_x, agent_y, color=cluster_colors_vs[idx], s=50, zorder=2)
 
-            # Plot histogram of intra-cluster distances
-            cluster_intra_distances = [intra_distances[agent] for agent in agents]
-            
-
-            hist_ax = inset_axes(ax,
-                    width=max_radius*2*subfig_multiplier,                     # inch
-                    height=max_radius*2*subfig_multiplier,                    # inch
-                    bbox_transform=ax.transData, # data coordinates
-                    bbox_to_anchor=(x+radius +fontsize/200,y),    # data coordinates
-                    loc='center left')
-            
-            # Add the histogram at the transformed position
-            
-            # Plot histogram of intra-cluster distances
-            hist_ax.hist(cluster_intra_distances, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
-            hist_ax.set_xlim(0, 1.0)
-            hist_ax.set_ylim(0, len(self.assignment_vs[cluster_idx]))
-
-            hist_ax.tick_params(axis='both', which='major', labelsize=fontsize)
-            hist_ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
-            hist_ax.set_yticks(np.linspace(0, len(self.assignment_vs[cluster_idx]), num=8, endpoint=True, dtype=np.int64))
-            hist_ax.set_title(f"{[float('{0:.3f}'.format(t)) for t in self.get_value_system(cluster_idx)]}", fontsize=fontsize)
-
-            # Add a pie chart for value system weights
-            pie_ax: matplotlib.axes.Axes = inset_axes(ax,
-                                width=max_radius * 2 * subfig_multiplier,  # inch
-                                height=max_radius * 2 * subfig_multiplier,  # inch
-                                bbox_transform=ax.transData,  # data coordinates
-                                bbox_to_anchor=(x - radius - fontsize/200, y),  # data coordinates
-                                loc='center right')
-
-            value_system_weights = self.get_value_system(cluster_idx)
-            pie_ax.pie(value_system_weights, labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [values_short_names[i] for i in range(len(value_system_weights))],
-                       autopct='%f', 
-                       startangle=90, colors=assign_colors_matplotlib(self.n_values,color_map=values_color_map), textprops={'fontsize': fontsize})
-            pie_ax.set_title("Value System", fontsize=fontsize)  # Add labels and legend
         ax.set_title("Agents-to-VS Assignments")
         ax.set_xlabel("X-axis")
         ax.set_ylabel("Y-axis")
-        ax.set_aspect('equal', adjustable='datalim')  
-        ax.set_xlim(min(-3*max_radius*1.3 - fontsize/200, ax.get_xlim()[0]), max(3*max_radius*1.3 + fontsize/200, ax.get_xlim()[1]))
-        ax.set_ylim(min(-3*max_radius*1.0, ax.get_ylim()[0]), max(3*max_radius*1.0, ax.get_ylim()[1]))  
+        ax.set_aspect('equal', adjustable='datalim')
+        ax.set_xlim(min(-3 * max_radius * 1.3 - fontsize / 200, ax.get_xlim()[0]),
+                    max(3 * max_radius * 1.3 + fontsize / 200, ax.get_xlim()[1]))
+        ax.set_ylim(min(-3 * max_radius * 1.0, ax.get_ylim()[0]),
+                    max(3 * max_radius * 1.0, ax.get_ylim()[1]))
         ax.legend()
         ax.grid(False)
 
+        # Right part: Pie charts and histograms
+        right_ax = fig.add_subplot(grid[0, 1])
+        right_ax.axis('off')  # Hide the main axis for the right part
+
+        # Create subplots for pie charts and histograms
+        n_clusters = len(cluster_idx_to_label)
+        pie_height = 1.0 / (n_clusters) - fontsize / 200 # Adjusted height to 30% of the size of the first group
+        pie_width = 0.4  # Set width equal to the height
+        hist_height = pie_height
+        hist_width = 0.4
+
+        for idx, cluster_idx in enumerate(cluster_idx_to_label):
+            # Pie chart for value system weights
+            pie_ax = right_ax.inset_axes([0.0 + fontsize / 400, 1.0 - (idx + 1) * (pie_height) - idx* fontsize / 200, pie_width, pie_height],)
+            value_system_weights = self.get_value_system(cluster_idx)
+            pie_ax.pie(value_system_weights,
+            labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [
+            values_short_names[i] for i in range(len(value_system_weights))],
+            autopct='%f',
+            startangle=90, colors=assign_colors_matplotlib(self.n_values, color_map=values_color_map),
+            textprops={'fontsize': fontsize})
+            pie_ax.set_title(f"Cluster {cluster_idx} Value System", fontsize=fontsize)
+
+            # Histogram for intra-cluster distances
+            hist_ax = right_ax.inset_axes([pie_width + fontsize / 50, 1.0 - (idx + 1) * (hist_height) - idx*(fontsize / 200), hist_width, hist_height])
+            agents = self.assignment_vs[cluster_idx]
+            cluster_intra_distances = [self.intra_discordances_vs_per_agent[agent] for agent in agents]
+            hist_ax.hist(cluster_intra_distances, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
+            hist_ax.set_xlim(0, 1.0)
+            hist_ax.set_ylim(0, len(agents))
+            hist_ax.tick_params(axis='both', which='major', labelsize=fontsize)
+            hist_ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+            hist_ax.set_yticks(np.linspace(0, len(agents), num=8, endpoint=True, dtype=np.int64))
+            hist_ax.set_title(f"Cluster {cluster_idx} Intra Distances", fontsize=fontsize)
+
         # Save or show the plot
-       
         if save_path is not None:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, bbox_inches="tight")
@@ -502,7 +502,7 @@ class ClusterAssignment():
     @property
     def vs_score(self):
         if self.inter_discordances_vs == float('inf') or self.L == 1:
-            return self.representativity_vs()
+            return self.representativity_vs(aggr=np.mean)
         else:
             return self.combined_cluster_score_vs()
     @property
@@ -517,8 +517,8 @@ class ClusterAssignment():
     def representativity_gr_aggr(self):
         return self.aggregation_on_gr_scores(self.representativities_gr())
 
-    def representativity_vs(self):
-        return ClusterAssignment._representativity(self.intra_discordances_vs_per_agent,self.assignment_vs)
+    def representativity_vs(self, aggr=np.mean):
+        return ClusterAssignment._representativity(self.intra_discordances_vs_per_agent,self.assignment_vs, aggr=aggr)
 
     def concisenesses_gr(self):
         return [ClusterAssignment._conciseness(np.array(self.inter_discordances_gr[i]), self.K[i]) for i in range(self.n_values)]
@@ -530,7 +530,7 @@ class ClusterAssignment():
     def combined_cluster_score_gr(self, conciseness_if_K_is_1=None, normalized=False,  aggr_repr=np.mean):
         return [ClusterAssignment._combined_cluster_score(self.inter_discordances_gr[i], self.intra_discordances_gr_per_agent[i], self.K[i], self.assignment_gr[i], normalized=normalized, conciseness_if_1_cluster=conciseness_if_K_is_1[i] if conciseness_if_K_is_1 is not None else None,aggr_repr=aggr_repr) for i in range(self.n_values)]
 
-    def combined_cluster_score_vs(self,conciseness_if_L_is_1=None, normalized=False,  aggr_repr=np.max):
+    def combined_cluster_score_vs(self,conciseness_if_L_is_1=None, normalized=False,  aggr_repr=np.min):
         return ClusterAssignment._combined_cluster_score(self.inter_discordances_vs, self.intra_discordances_vs_per_agent, self.L, self.assignment_vs, normalized=normalized,conciseness_if_1_cluster=conciseness_if_L_is_1, aggr_repr=aggr_repr)
 
     def combined_cluster_score_gr_aggr(self, conciseness_if_K_is_1=None, normalized=False):
@@ -560,7 +560,9 @@ class ClusterAssignment():
             result += f"Representativities (Grounding): {self.representativities_gr()}\n"
             result += f"Concisenesses (Grounding): {self.concisenesses_gr()}\n"
             result += f"Combined Scores (Grounding): {self.combined_cluster_score_gr_aggr()}\n"
-            result += f"Representativity (Value System): {self.representativity_vs()}\n"
+            result += f"Representativity (Value System) MIN: {self.representativity_vs(aggr=np.min)}\n"
+            result += f"Representativity (Value System) AVG: {self.representativity_vs(aggr=np.mean)}\n"
+            result += f"Representativity (Value System) GLOBAL: {self.representativity_vs(aggr='weighted')}\n"
             result += f"Conciseness (Value System): {self.conciseness_vs()}\n"
             result += f"Combined Score (Value System): {self.combined_cluster_score_vs()}\n"
         except TypeError:
@@ -672,7 +674,7 @@ class ClusterAssignmentMemory():
 
         for i, assignment in enumerate(self.memory):
             result += f"Assignment {i} (Explored: {assignment.explored}, {assignment.n_training_steps if hasattr(assignment, 'n_training_steps') else 'unk'}):"
-            result += f" VS: DI={assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr):1.4f}|RP={assignment.representativity_vs():.4f}|CN={assignment.conciseness_vs() if assignment.L > 1 else mgr:.4f}, GR: {[f"{float(g):.3f}" for g in assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)]}, K: {assignment.K}, L: {assignment.L} \n"
+            result += f" VS: DI={assignment.combined_cluster_score_vs(conciseness_if_L_is_1=mgr,aggr_repr=np.min):1.4f}|RP={assignment.representativity_vs(aggr=np.min):.4f}|CN={assignment.conciseness_vs() if assignment.L > 1 else mgr:.4f}, GR: {[f"{float(g):.3f}" for g in assignment.combined_cluster_score_gr_aggr(conciseness_if_K_is_1=mgr_gr)]}, K: {assignment.K}, L: {assignment.L} \n"
             result += f" GR Clusters: {assignment.active_gr_clusters()}, VS Clusters: {assignment.active_vs_clusters()}\n"
             result += "\n"
         return result
@@ -713,7 +715,7 @@ class ClusterAssignmentMemory():
         vs_score_dif = x.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs) - y.combined_cluster_score_vs(conciseness_if_L_is_1=mcvs)
         conc_proxy = (self.maximum_conciseness_vs  if self.maximum_conciseness_vs != float('-inf') else 0.0)
         conc_dif = (x.conciseness_vs() if x.L > 1 else conc_proxy) - (y.conciseness_vs() if y.L > 1 else conc_proxy)
-        repr_dif = x.representativity_vs() - y.representativity_vs()
+        repr_dif = x.representativity_vs(aggr=np.min) - y.representativity_vs(np.min)
         #TODO: TEST PARETO TAKING INTO ACOUNT REPRESENTATIVITY TOO?
         
         pareto_score = 0.0
