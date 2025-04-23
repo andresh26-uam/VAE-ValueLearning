@@ -149,25 +149,25 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                         
         with (self.logger.accumulate_means("reward") if self.use_logger is not None else nullcontext()) :
             
-            for ie, epoch_num in enumerate(tqdm.tqdm(range(epochs), desc="Training reward model")):
-                
-                for cvi, (mini_train_dataset, mini_val_dataset) in enumerate(cross_splits):
-                    # we train a single model with K splits train_set, val_set
-                    # in the outer loop a normal K fold cross validation TODO(not working as intended, the insertion is only after averaging evaluations. These are very slow on the number of agents, need another method)
-                    # Then, the test set evaluation.
-                    self.batch_size = min(len(mini_train_dataset), general_batch_size)
-                    
-                    dataloader = self._make_data_loader(mini_train_dataset)
-                    if mini_val_dataset is not None:
-                        self.batch_size = len(mini_val_dataset)
-                        val_data_loader = self._make_data_loader(mini_val_dataset)
-                    else:
-                        self.batch_size = len(mini_train_dataset)
-                        #assert len(mini_train_dataset) == general_batch_size
-                        val_data_loader = self._make_data_loader(mini_train_dataset)
 
-                    self.batch_size = general_batch_size # recover original batch size that is used for training 
+            for cvi, (mini_train_dataset, mini_val_dataset) in enumerate(cross_splits):
+                # we train a single model with K splits train_set, val_set
+                # in the outer loop a normal K fold cross validation TODO(not working as intended, the insertion is only after averaging evaluations. These are very slow on the number of agents, need another method)
+                # Then, the test set evaluation.
+                self.batch_size = min(len(mini_train_dataset), general_batch_size)
+                
+                dataloader = self._make_data_loader(mini_train_dataset)
+                if mini_val_dataset is not None:
+                    self.batch_size = len(mini_val_dataset)
+                    val_data_loader = self._make_data_loader(mini_val_dataset)
+                else:
+                    self.batch_size = len(mini_train_dataset)
+                    #assert len(mini_train_dataset) == general_batch_size
+                    val_data_loader = self._make_data_loader(mini_train_dataset)
+
+                self.batch_size = general_batch_size # recover original batch size that is used for training 
                     
+                for ie, epoch_num in enumerate(tqdm.tqdm(range(epochs), desc="Training reward model")):
                     with (self.logger.add_key_prefix(f"ep-{epoch_num}-cv-{cvi}") if self.use_logger is not None else nullcontext()):
                         train_loss = 0.0
                         accumulated_size = 0
@@ -328,77 +328,71 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                         end_full_batch = time.time()
                         print("Epoch Training time: ", end_full_batch - st_full_batch)
                         self.logger.dump()
-                        # Clustering evaluation. Registering the best configurations.
-                        st = time.time()
-                        #aggs_permutation = np.random.permutation(list(reward_model_per_agent_id.keys()))                            
-                        with th.no_grad():
-                            assert hasattr(self.optim, 'get_state')
-                            if hasattr(self.optim, 'get_state'):
-                                
-                                new_assignment.optimizer_state = self.optim.get_state(copy=True)
-                                
-                            val_data_loader : data_th.DataLoader
-                            data = [data for data in val_data_loader]
-                            val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids = map(
-                                lambda x: np.concatenate(x, axis=0) if len(data) > 1 else x[0],
-                                zip(*data)
-                            )
-                            
-                            new_assignment_copy = self.evaluate_assignment_with_dataset(new_assignment, val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, running_assignment_vs, running_assignment_gr)
-                            
-                        
-                        
-                        copy_assignment = new_assignment_copy.copy()
-                        copy_assignment.explored  =False
-
-                        print (new_assignment_copy.n_training_steps)
-                        print(new_assignment.n_training_steps)
-                        print(copy_assignment.n_training_steps)
-                        copy_assignment.n_training_steps = total_training_steps
-                        #position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
-                        assignment_ranking.insert_assignment(copy_assignment)
-
-                        # Ensure optimizer consistency
-                        check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
-                        check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
-                        check_optimizer_consistency(reward_model_per_agent_id, self.optim)
                         starting_assignment = None # to not use it again
+                    
+                # Clustering evaluation. Registering the best configurations.
+                st = time.time()
+                #aggs_permutation = np.random.permutation(list(reward_model_per_agent_id.keys()))                            
+                with th.no_grad():
+                    assert hasattr(self.optim, 'get_state')
+                    if hasattr(self.optim, 'get_state'):
                         
-                        if train_loss > 0.0 and DIDASTEP and grad_norm >= 1e-7 and self.debug_mode:
-                            counter_fails = 0
-                            """for aid in reward_model_per_agent_id.keys():
-                                
-                                try:
-                                    th.testing.assert_close(reward_model_per_agent_id[aid].state_dict(), prev_rews[aid].state_dict()), "State dicts of rc and raid do not match"
-                                except AssertionError:
-                                    counter_fails = 0
-                                    continue
-                                counter_fails+=1
-                            if counter_fails == len(reward_model_per_agent_id.keys()):
-                                raise AssertionError("No changes in reward model???", starting_assignment, new_assignment, new_assignment_copy, "no changes in rw...")
-                            """
-                            assert all(
-                                np.allclose(
-                                    new_assignment_copy.reward_model_per_agent_id[aid].get_learned_align_function(),
-                                    reward_model_per_agent_id[aid].get_learned_align_function()
-                                )
-                                for aid in reward_model_per_agent_id.keys()
-                            ), "Not all keys satisfy the second condition."
-                        """if position == 0:
-                            
-                            print("NEW BEST", "old_scores: ", old_assignment.vs_score, old_assignment.gr_score, "new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
-                            print(assignment_ranking)
-                            if self.debug_mode:
-                                time.sleep(5)
-                        elif old_assignment is not None:
-                            print("Inserted before: ", old_assignment.vs_score, old_assignment.gr_score,"new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
-                            """
+                        new_assignment.optimizer_state = self.optim.get_state(copy=True)
+                        
+                    val_data_loader : data_th.DataLoader
+                    data = [data for data in val_data_loader]
+                    val_fragment_pairs, val_preferences, val_preferences_per_grounding, val_agent_ids = map(
+                        lambda x: np.concatenate(x, axis=0) if len(data) > 1 else x[0],
+                        zip(*data)
+                    )
+                    
+                    new_assignment_copy = self.evaluate_assignment_with_dataset(new_assignment, 
+                                                                                val_fragment_pairs, 
+                                                                                val_preferences, val_preferences_per_grounding, val_agent_ids, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, running_assignment_vs, running_assignment_gr)
+                    
+                
+                    
+                    copy_assignment = new_assignment_copy.copy()
+                    copy_assignment.explored  =False
+
+                    print (new_assignment_copy.n_training_steps)
+                    print(new_assignment.n_training_steps)
+                    print(copy_assignment.n_training_steps)
+                    copy_assignment.n_training_steps = total_training_steps
+                    #position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
+                    assignment_ranking.insert_assignment(copy_assignment)
+
+                    # Ensure optimizer consistency
+                    check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
+                    check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
+                    check_optimizer_consistency(reward_model_per_agent_id, self.optim)
+                    starting_assignment = None # to not use it again
+                    
+                    if train_loss > 0.0 and DIDASTEP and grad_norm >= 1e-7 and self.debug_mode:
+                        counter_fails = 0
+                        
+                        assert all(
+                            np.allclose(
+                                new_assignment_copy.reward_model_per_agent_id[aid].get_learned_align_function(),
+                                reward_model_per_agent_id[aid].get_learned_align_function()
+                            )
+                            for aid in reward_model_per_agent_id.keys()
+                        ), "Not all keys satisfy the second condition."
+                    """if position == 0:
+                        
+                        print("NEW BEST", "old_scores: ", old_assignment.vs_score, old_assignment.gr_score, "new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
                         print(assignment_ranking)
-                            #time.sleep(2)
-                        
-                        
-                        end = time.time()
-                        print(f"Epoch Validation time: {end-st}")
+                        if self.debug_mode:
+                            time.sleep(5)
+                    elif old_assignment is not None:
+                        print("Inserted before: ", old_assignment.vs_score, old_assignment.gr_score,"new_scores: ", new_assignment_copy.vs_score, new_assignment_copy.gr_score)
+                        """
+                    print(assignment_ranking)
+                        #time.sleep(2)
+                    
+                    
+                    end = time.time()
+                    print(f"Epoch Validation time: {end-st}")
                         
                         
 

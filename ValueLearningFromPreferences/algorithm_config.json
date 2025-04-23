@@ -60,7 +60,7 @@
                     "repr_apply_on_worst_clusters_only": false,
                     "conc_apply_on_worst_clusters_only": false,
                     "confident_penalty": 0.0,
-                    "cluster_similarity_penalty": 0.999,
+                    "cluster_similarity_penalty": 0.1,
                     "label_smoothing": 0.0,
                     "lambda_decay": 5e-9},
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
@@ -375,7 +375,7 @@
                     "lr": 0.01,
                     "lr_grounding": 0.005,
                     "lr_value_system": 0.003,
-                    "lr_lambda": 0.001,
+                    "lr_lambda": 0.002,
                     "initial_lambda": 0.1,
                     "weight_decay": 0.0000
                 },
@@ -390,7 +390,7 @@
                     "conc_apply_on_worst_clusters_only": false,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "cluster_similarity_penalty": 0.1,
+                    "cluster_similarity_penalty": 0.0,
                     "lambda_decay": 1e-9
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
@@ -428,7 +428,7 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 4,
+                    "epochs": 3,
                     "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 15,

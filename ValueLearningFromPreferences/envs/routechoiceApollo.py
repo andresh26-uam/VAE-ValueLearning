@@ -139,6 +139,8 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
         new_id = 0
 
         for idat, dataset in enumerate((train_dataset, test_dataset)):
+            if dataset is None or len(dataset) == 0:
+                continue
             for row in dataset:
                 agent_id = int(row[0])  # Assuming the first column is the ID
                 choice = int(row[1])
