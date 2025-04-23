@@ -434,7 +434,7 @@
                     "initial_refining_steps": 15,
                     "initial_exploration_rate": 0.0,
                     "batch_size": "full",
-                    "inner_k_fold_validation_divisions_per_epoch": 1
+                    "inner_k_fold_validation_divisions_per_epoch": null
                 }
             }
         }
