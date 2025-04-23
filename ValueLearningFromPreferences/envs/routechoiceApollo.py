@@ -22,13 +22,18 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
             train_data = []
             test_data = []
 
+            
             for agent_id, group in data.groupby('ID'):  # Assuming 'ID' is the column for agent IDs
-                train_group, test_group = train_test_split(group, test_size=test_size, random_state=random_state)
-                train_data.append(train_group)
-                test_data.append(test_group)
+                if test_size > 0:
+                    train_group, test_group = train_test_split(group, test_size=test_size, random_state=random_state)
+                    train_data.append(train_group)
+                    test_data.append(test_group)
+                else:
+                    train_data.append(group)
 
             train_data = pd.concat(train_data).reset_index(drop=True)
-            test_data = pd.concat(test_data).reset_index(drop=True)
+            if test_size>0:
+                test_data = pd.concat(test_data).reset_index(drop=True)
 
             # Preprocess the training dataset for classification using Scikit-learn scalers
 
@@ -47,12 +52,17 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
 
             # Apply the same transformations to the test set
             # TODO: maybe change this test_data['hh_inc_abs'] = hh_inc_scaler.transform(test_data[['hh_inc_abs']])
-            test_data[alt_columns] = alt_scaler.transform(test_data[alt_columns])
+            if test_size>0:
+                test_data[alt_columns] = alt_scaler.transform(test_data[alt_columns])
+                self.test_data = test_data.to_numpy()  # Store the test set for later use
+            else:
+                self.test_data = None
 
             self.train_val_data = train_data.to_numpy()
-            self.test_data = test_data.to_numpy()  # Store the test set for later use
-
-            self.full_dataset = np.vstack([train_data, test_data])
+            if test_size>0:
+                self.full_dataset = np.vstack([train_data, test_data])
+            else:
+                self.full_dataset = train_data
         
         self.value_columns = value_columns
         self.n_values = len(self.value_columns)

@@ -374,9 +374,9 @@
                 "optimizer_kwargs": {
                     "lr": 0.01,
                     "lr_grounding": 0.005,
-                    "lr_value_system": 0.0025,
-                    "lr_lambda": 0.005,
-                    "initial_lambda": 0.2,
+                    "lr_value_system": 0.003,
+                    "lr_lambda": 0.001,
+                    "initial_lambda": 0.1,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -390,7 +390,7 @@
                     "conc_apply_on_worst_clusters_only": false,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "cluster_similarity_penalty": 0.5,
+                    "cluster_similarity_penalty": 0.1,
                     "lambda_decay": 1e-9
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
@@ -429,7 +429,7 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 4,
-                    "refining_steps_after_cluster_assignment": 5,
+                    "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 15,
                     "initial_exploration_rate": 0.0,

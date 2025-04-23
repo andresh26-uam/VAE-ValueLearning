@@ -91,7 +91,7 @@ def parse_args():
                                help="Allow trajectories to end when the environment says an episode is done or horizon is reached, whatever happens first, instead of forcing all trajectories to have the length of the horizon")
 """
     general_group.add_argument('-tsize', '--test_size', type=float,
-                               default=0.2, help='Ratio_of_test_versus_train_preferences')
+                               default=0.0, help='Ratio_of_test_versus_train_preferences')
 
     alg_group = parser.add_argument_group('Algorithm-specific Parameters')
     pc_group = alg_group.add_argument_group(
