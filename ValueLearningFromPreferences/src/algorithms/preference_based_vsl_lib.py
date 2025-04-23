@@ -1021,7 +1021,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 conc_penalty = self.conciseness_penalty(preference_model, rews_gr_per_aid=rews_gr_per_agent, rews_vs_per_agent=rews_vs_per_agent, value_system_network_per_cluster=value_system_network_per_cluster, 
                                                       agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments)
             
-                loss_vs = loss_vs - self.cluster_similarity_penalty*conc_penalty
+                loss_vs = (1.0-self.cluster_similarity_penalty)*loss_vs - self.cluster_similarity_penalty*conc_penalty
                 #loss_vs = -conc_penalty/loss_vs
             
 
@@ -1113,21 +1113,25 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
        
             with th.no_grad():
-                conciseness_real.append(discordance(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2, indifference_tolerance=self.model_indifference_tolerance).detach().numpy())
+                conciseness_real.append(discordance(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2, indifference_tolerance=self.model_indifference_tolerance).detach())
             #conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
-        conciseness_real = np.asarray(conciseness_real)
+        
         if len(conc_penalties) == 0:
             conc_penalty = th.tensor(0.0, device=device, dtype=dtype)
         else:
+            conciseness_real = th.stack(conciseness_real)
             stacked_penalties = th.stack(conc_penalties)
         
             if self.conc_apply_on_worst_clusters_only:
-                worst_conciseness_idx_real = np.argwhere(conciseness_real == np.amin(conciseness_real)).flatten()
-                #weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
+                with th.no_grad():
+                    worst_conciseness_idx_real = th.argwhere(conciseness_real == th.amin(conciseness_real)).flatten()
+                #not needed, it is an equivalent solution. weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
                 conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])
             else:
-                weights = (1.0 - conciseness_real)/np.sum(conciseness_real) # The closer to 1, the more important the penalty.
-                conc_penalty = th.dot(stacked_penalties, weights)
+                with th.no_grad():
+                    weights = (1.0 - conciseness_real) # The closer to 1, the more important the penalty.
+                conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))
+                
             
             
         """value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
