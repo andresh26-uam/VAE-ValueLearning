@@ -819,7 +819,10 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
     def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
                  
                          vs_apply_on_misclassified_pairs_only=False, confident_penalty=0.0,
-                           label_smoothing = 0.0, cluster_similarity_penalty=0.00) -> None:
+                           label_smoothing = 0.0, cluster_similarity_penalty=0.00, 
+                           assume_number_of_examples_per_agent_is_equal=False,
+                           repr_apply_on_worst_clusters_only=False,
+                           conc_apply_on_worst_clusters_only=False) -> None:
         """Create cross entropy reward loss."""
         super().__init__()
         # This is the tolerance in the probability model when in the ground truth two trajectories are deemed equivalent (i.e. if two trajectories are equivalent, the ground truth target is 0.5. The model should output something in between (0.5 - indifference, 0.5 + indifference) to consider it has done a correct preference prediction.)
@@ -828,7 +831,9 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         self.vs_apply_on_misclassified_only = vs_apply_on_misclassified_pairs_only
         self.confident_penalty = confident_penalty
         self.cluster_similarity_penalty = cluster_similarity_penalty
-
+        self.repr_apply_on_worst_clusters_only = repr_apply_on_worst_clusters_only
+        self.conc_apply_on_worst_clusters_only =  conc_apply_on_worst_clusters_only
+        self.assume_number_of_examples_per_agent_is_equal = assume_number_of_examples_per_agent_is_equal
         self.loss_object = th.nn.CrossEntropyLoss(
             reduction='none', ignore_index=-1, weight=None, label_smoothing=label_smoothing)
 
@@ -875,7 +880,14 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_agent = preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
                                                                                               fragment_pairs_idxs_per_agent_id=fragment_idxs_per_aid, only_for_alignment_function=None, 
                                                                                               add_probs_per_agent=True, return_rewards_per_agent=True)
-
+        """
+        This might make sense too... Summin over all cluster fragments directly
+        fragments_idxs_per_cluster = [[] for _ in range(len(value_system_network_per_cluster))]
+        for aid, cidx in agent_to_vs_cluster_assignments.items(): 
+            fragments_idxs_per_cluster[cidx].extend(fragment_idxs_per_aid[aid])
+        print(f"Fragments per cluster: {fragments_idxs_per_cluster[0]}")
+        exit(0)
+        """
         """This tests forward works correctly...
         probs_vs_n, _, gt_probs_vs_n, gt_probs_gr_n  = preference_model.forward(fragment_pairs_per_agent_id={'normal_0': fragment_pairs_per_agent_id['normal_0']}, custom_model_per_agent_id={'normal_0': reward_model_per_agent_id['normal_0']}, 
                                                                                  fragment_pairs_idxs_per_agent_id = {'normal_0': list(range(len(fragment_pairs_per_agent_id['normal_0'])))},
@@ -891,7 +903,6 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         # start_time = time.time()
         accuracy_vs, accuracy_gr, missclassified_vs, missclassified_gr = calculate_accuracies(
             probs_vs, probs_gr, preferences, preferences_with_grounding, indifference_tolerance=self.model_indifference_tolerance)
-
         #accuracy_vs_per_agent, accuracy_gr_per_agent, missclassified_vs_per_agent, missclassified_gr_per_agent = {}, {}, {}, {}
         """for aid in preferences_per_agent_id.keys():
             accuracy_vs_per_agent[aid], accuracy_gr_per_agent[aid], missclassified_vs_per_agent[aid], missclassified_gr_per_agent[aid] = calculate_accuracies(
@@ -916,17 +927,104 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         # LOSS VALUE SYSTEM.
         example_model = reward_model_per_agent_id[list(
             reward_model_per_agent_id.keys())[0]]
-        if reward_model_per_agent_id[list(reward_model_per_agent_id.keys())[0]].mode == TrainingModes.VALUE_GROUNDING_LEARNING:
-            loss_vs = th.tensor(
+        loss_vs = th.tensor(
                 0.0, device=example_model.device, dtype=example_model.dtype)
+        if reward_model_per_agent_id[list(reward_model_per_agent_id.keys())[0]].mode == TrainingModes.VALUE_GROUNDING_LEARNING:
+            pass # return loss 0.
         else:
-            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+            # This is the global approach. Does not optimize for the true representativity: 
+            #loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+            # This one is:
+            loss_vs = th.tensor(0.0, device=example_model.device, dtype=example_model.dtype)
+            loss_vs_per_cluster = [th.tensor(0.0, device=example_model.device, dtype=example_model.dtype) for _ in range(len(value_system_network_per_cluster))]
+            agent_count_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
+            current_disc_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
+            for (aid, fidxs) in fragment_idxs_per_aid.items():
+                cidx_aid = agent_to_vs_cluster_assignments[aid]
+                missclassified_vs_aid = missclassified_vs[fidxs]
+                
+                current_disc_per_cluster[cidx_aid] += np.mean(missclassified_vs_aid.detach().numpy())
+                probs_aid = probs_vs_per_agent[aid]
+                assert len(fidxs) == len(missclassified_vs_aid)
+                assert len(fidxs) == len(probs_aid)
+                loss_vs_per_cluster[cidx_aid] += self.loss_func(probs_aid, preferences_per_agent_id[aid], missclassified_vs_aid, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+                agent_count_per_cluster[cidx_aid] += 1 # TODO: maybe weighting according to the number of examples of each cluster?
+            total_discordance = 0
+            for i in range(len(loss_vs_per_cluster)):
+                a = agent_count_per_cluster[i] 
+                if a> 0:
+                    current_disc_per_cluster[i]/= a
+                    total_discordance += current_disc_per_cluster[i]
+                    loss_vs_per_cluster[i] *= current_disc_per_cluster[i]
+                else:
+                    pass
+            
+            if np.allclose(current_disc_per_cluster, 0.0):
+                pass
+            else:
+                if self.repr_apply_on_worst_clusters_only:
+                    worst_cluster_idxs = np.argwhere(current_disc_per_cluster == np.amax(current_disc_per_cluster)).flatten()
+                    for iw in worst_cluster_idxs:
+                        loss_vs += loss_vs_per_cluster[iw]
+                else:
+                    for lw in loss_vs_per_cluster:
+                        loss_vs += lw
+            loss_vs/=total_discordance
+            """t1 = time.time()
+            agent_count_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
+            loss_vs_per_cluster = [0.0 for _ in range(len(value_system_network_per_cluster))]
+            
+            current_disc_per_cluster = np.zeros((len(value_system_network_per_cluster), ), dtype=np.float32)
+            
+            if self.assume_number_of_examples_per_agent_is_equal:
+                fragments_idxs_per_cluster = [[] for _ in range(len(value_system_network_per_cluster))]
+                for aid, cidx in agent_to_vs_cluster_assignments.items(): 
+                    fragments_idx_aid = fragment_idxs_per_aid[aid]
+                    fragments_idxs_per_cluster[cidx].extend(fragments_idx_aid)
+                    current_disc_per_cluster[cidx] += np.mean(missclassified_vs[fragments_idx_aid].detach().numpy())
+                    agent_count_per_cluster[cidx] += 1
+                    
+                
+                
+                if np.allclose(current_disc_per_cluster, 0.0):
+                    #this is termination condition? No, need the groundings to also be 0.0
+                    pass
+                else:
+                    tagggr = 0
+                    for cidx, fidxs in enumerate(fragments_idxs_per_cluster):
+                        ac = agent_count_per_cluster[cidx]
+                        if ac > 0:
+                            tagggr += (current_disc_per_cluster[cidx]/ac)
+                            loss_vs_per_cluster[cidx] = current_disc_per_cluster[cidx]*self.loss_func(probs=probs_vs[fidxs],target_probs=preferences[fidxs], 
+                                                                            misclassified_pairs=missclassified_vs[fidxs], 
+                                                                            apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+                    #print("AFTER", current_disc_per_cluster)
+                    
+                    #total_discordance = sum(current_disc_per_cluster)
+                    print("AFTER LOS", loss_vs_per_cluster, total_discordance, tagggr)
+                    if self.repr_apply_on_worst_clusters_only:
+                        worst_cluster_idxs = np.argwhere(current_disc_per_cluster == np.amax(current_disc_per_cluster)).flatten()
+                        for iw in worst_cluster_idxs:
+                            loss_vs += loss_vs_per_cluster[iw]
+                    else:
+                        for lw in loss_vs_per_cluster:
+                            loss_vs += lw
+                    loss_vs/= tagggr    
+                t2 = time.time()
+                print("AFTER TIME", t2-t1)
+                print(loss_vs, loss_vs_should_be)
+                if __debug__: th.testing.assert_close(loss_vs, loss_vs_should_be)   """
+                
+            
             if self.cluster_similarity_penalty > 0.0:
 
                 conc_penalty = self.conciseness_penalty(preference_model, rews_gr_per_aid=rews_gr_per_agent, rews_vs_per_agent=rews_vs_per_agent, value_system_network_per_cluster=value_system_network_per_cluster, 
                                                       agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments)
             
-                loss_vs = (1-self.cluster_similarity_penalty)*loss_vs - self.cluster_similarity_penalty*conc_penalty
+                loss_vs = loss_vs - self.cluster_similarity_penalty*conc_penalty
+                #loss_vs = -conc_penalty/loss_vs
+            
+
             metrics['loss_vs'] = loss_vs
         # LOSS GROUNDING.
         # start_time = time.time()
@@ -947,10 +1045,12 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             
             """
             # loss_gr += th.mean(th.nn.functional.binary_cross_entropy(prgvi, preferences_with_grounding[:, vi], reduce=False) -th.multiply(prgvi, self.beta*th.log(prgvi)))
-            
+            # TODO: IMPORTANT: This method works because we are assuming SAME NUMBER OF EXAMPLES PER AGENT AND 1 CLUSTER.
+            # TODO: IMPORTANT NEED TO DO AS IN LOSS VS FOR COHERENCE IN THE GENERAL CASE.
             nl = self.loss_func(probs_gr[:, vi], preferences_with_grounding[:, vi], misclassified_pairs=missclassified_gr[vi], apply_on_misclassified_only=self.gr_apply_on_misclassified_only)
             metrics['loss_per_vi'][vi] = nl
             loss_gr += nl
+        
             assert not loss_gr.isnan()
         
         metrics['loss_gr'] = loss_gr
@@ -977,7 +1077,8 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         for aid, c in agent_to_vs_cluster_assignments.items():
             agents_per_cluster[int(c)].append(aid) # TODO: EFFICIENCY!! (GET THE ASSIGNMENTS TO CLUSTERS INSTEAD??)
 
-        conc_penalty = th.tensor(1.0, device=device, dtype=dtype)
+        conc_penalties = []
+        conciseness_real = []
         for (c1, c2) in itertools.combinations(list(range(len(value_system_network_per_cluster))), 2):
             ac1 = agents_per_cluster[c1]
             ac2 = agents_per_cluster[c2]
@@ -1009,12 +1110,26 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             probabilities_vs2_in_c1_c2 = preference_model.probability(rews_vs2_f1_in_c1_c2, rews_vs2_f2_in_c1_c2)
 
             assert probabilities_vs1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0],)
-            conc_penalty = min(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2), conc_penalty) # TODO minimum?? or maybe other aggregation...
-
+            conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
+       
+            with th.no_grad():
+                conciseness_real.append(discordance(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2, indifference_tolerance=self.model_indifference_tolerance).detach().numpy())
+            #conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
+        conciseness_real = np.asarray(conciseness_real)
+        if len(conc_penalties) == 0:
+            conc_penalty = th.tensor(0.0, device=device, dtype=dtype)
+        else:
+            stacked_penalties = th.stack(conc_penalties)
+        
+            if self.conc_apply_on_worst_clusters_only:
+                worst_conciseness_idx_real = np.argwhere(conciseness_real == np.amin(conciseness_real)).flatten()
+                #weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
+                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])
+            else:
+                weights = (1.0 - conciseness_real)/np.sum(conciseness_real) # The closer to 1, the more important the penalty.
+                conc_penalty = th.dot(stacked_penalties, weights)
             
-        #print("CONCISENESS FACTOR", conc_penalty)
-        # This is a dummy weight similarity dispersion loss
-
+            
         """value_systems_in_each_cluster = th.stack([clust.get_alignment_layer()[0][0] for clust in value_system_network_per_cluster])
                 
                 # TODO. only take into account the clusters that are used in the current assignment.
@@ -1067,12 +1182,12 @@ class VSLCustomLoss(BaseVSLClusterRewardLoss):
     # TODO: Use efficient version when it is known the grounding does not depend on VS
 
     def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, vs_apply_on_misclassified_pairs_only=False, confident_penalty=0, cluster_similarity_penalty=0.00,
-                 label_smoothing=0.0):
+                 label_smoothing=0.0, assume_number_of_examples_per_agent_is_equal=False, **kwargs):
         super().__init__(model_indifference_tolerance=model_indifference_tolerance, 
                          gr_apply_on_misclassified_pairs_only=gr_apply_on_misclassified_pairs_only, 
                          vs_apply_on_misclassified_pairs_only=vs_apply_on_misclassified_pairs_only, 
                          confident_penalty=confident_penalty, cluster_similarity_penalty=cluster_similarity_penalty,
-                         label_smoothing=label_smoothing)
+                         label_smoothing=label_smoothing, assume_number_of_examples_per_agent_is_equal=assume_number_of_examples_per_agent_is_equal, **kwargs)
         
 
     @abstractmethod
@@ -1099,7 +1214,9 @@ class VSLCustomLoss(BaseVSLClusterRewardLoss):
         #th.nn.utils.clip_grad_norm_(self.params_gr, self.max_grad_norm_gr)
         #th.nn.utils.clip_grad_norm_(self.params_vs, self.max_grad_norm_vs)
 class ConstrainedOptimizer(VSLOptimizer):
-    def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, lr_value_system=None, lr_lambda=None, initial_lambda=1.0,sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
+    def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, 
+                 lr_value_system=None, lr_lambda=None, initial_lambda=1.0,
+                 sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
         super(ConstrainedOptimizer, self).__init__(params_gr=params_gr, params_vs=params_vs, n_values=n_values, lr=lr, lr_grounding=lr_grounding, lr_value_system=lr_value_system, sub_optimizer_class=sub_optimizer_class, **optimizer_kwargs)
         self.lr_lambda = lr_lambda if lr_lambda is not None else lr_value_system / 10.0
         self.initial_lambda = initial_lambda
@@ -1134,10 +1251,16 @@ class ConstrainedOptimizer(VSLOptimizer):
 
 class ConstrainedLoss(VSLCustomLoss):
     def __init__(self, model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=False, 
-                         vs_apply_on_misclassified_pairs_only=False, lambda_decay=1e-9, minimal_lambda=0.1, confident_penalty=0, cluster_similarity_penalty=0.00,
+                         vs_apply_on_misclassified_pairs_only=False, lambda_decay=1e-9, minimal_lambda=0.1, confident_penalty=0, 
+                         cluster_similarity_penalty=0.00,
+                         assume_number_of_examples_per_agent_is_equal = False,
                          **kwargs):
-        super().__init__(model_indifference_tolerance, gr_apply_on_misclassified_pairs_only, 
-                         vs_apply_on_misclassified_pairs_only, confident_penalty, cluster_similarity_penalty, **kwargs)
+        super().__init__(model_indifference_tolerance=model_indifference_tolerance, gr_apply_on_misclassified_pairs_only=gr_apply_on_misclassified_pairs_only, 
+                         vs_apply_on_misclassified_pairs_only=vs_apply_on_misclassified_pairs_only, 
+                         confident_penalty=confident_penalty, 
+                         cluster_similarity_penalty=cluster_similarity_penalty, 
+                         assume_number_of_examples_per_agent_is_equal=assume_number_of_examples_per_agent_is_equal,
+                         **kwargs)
         
         self.lagrange_multipliers = None
         self.best_gr_losses = None

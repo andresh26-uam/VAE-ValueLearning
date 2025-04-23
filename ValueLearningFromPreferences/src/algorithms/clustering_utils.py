@@ -773,7 +773,10 @@ class ClusterAssignmentMemory():
                     admit_insertion = False
                     if not l_assignment_1: break
             
-            elif (cmp_pareto < 0 and sim >= sim_threshold) or (cmp_pareto < 0 and self.memory[i].explored):
+            elif (cmp_pareto < 0 and sim >= sim_threshold) or (
+                cmp_pareto < 0 and self.memory[i].explored) or (
+                    sim == 0 and self.memory[i].n_training_steps > assignment.n_training_steps and (cmp_pareto < 0 or cmp_lexico < 0)):
+                
                 admit_insertion = True
                 dominated_indices.add(i) # Dominated that also equivalent
             elif (cmp_pareto <= 0 and sim >= sim_threshold and self.memory[i].explored and self.memory[i].n_training_steps < assignment.n_training_steps):

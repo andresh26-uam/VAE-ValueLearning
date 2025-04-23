@@ -233,6 +233,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                         preference_grounding_per_aid=preference_grounding_per_aid,
                                         agent_to_gr_cluster_assignments=new_assignment.agent_to_gr_cluster_assignments,
                                         agent_to_vs_cluster_assignments=new_assignment.agent_to_vs_cluster_assignments, 
+                                        
                                         value_system_network_per_cluster=value_system_per_cluster
                                     )
 
