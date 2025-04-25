@@ -390,7 +390,7 @@
                     "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "cluster_similarity_penalty": 1000.0,
+                    "cluster_similarity_penalty": 0.0,
                     "lambda_decay": 1e-9
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
