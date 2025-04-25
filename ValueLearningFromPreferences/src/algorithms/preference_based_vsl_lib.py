@@ -957,6 +957,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                     total_discordance += current_disc_per_cluster[i]
                     loss_vs_per_cluster[i] *= current_disc_per_cluster[i]
                 else:
+                    loss_vs_per_cluster[i] *= 0.0
                     pass
             
             if np.allclose(current_disc_per_cluster, 0.0):
@@ -1021,7 +1022,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 conc_penalty = self.conciseness_penalty(preference_model, rews_gr_per_aid=rews_gr_per_agent, rews_vs_per_agent=rews_vs_per_agent, value_system_network_per_cluster=value_system_network_per_cluster, 
                                                       agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments)
             
-                loss_vs = (1.0-self.cluster_similarity_penalty)*loss_vs - self.cluster_similarity_penalty*conc_penalty
+                loss_vs = loss_vs - self.cluster_similarity_penalty*conc_penalty
                 #loss_vs = -conc_penalty/loss_vs
             
 
@@ -1129,7 +1130,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])
             else:
                 with th.no_grad():
-                    weights = (1.0 - conciseness_real) # The closer to 1, the more important the penalty.
+                    weights = (1.0 - conciseness_real) # The closer to 0 the conciseness, the more important the penalty.
                 conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))
                 
             

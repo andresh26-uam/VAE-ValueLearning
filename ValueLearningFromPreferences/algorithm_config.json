@@ -78,7 +78,7 @@
                     "trajectory_batch_size": "full",
                     "comparisons_per_agent_per_step": null,
                     "fragment_length": "horizon",
-                    "max_assignment_memory": 10
+                    "max_assignment_memory": 6
                 },
 
                 "learner_policy_class": "PPO",
@@ -98,13 +98,13 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 5,
-                    "refining_steps_after_cluster_assignment": 3,
+                    "epochs": 1,
+                    "refining_steps_after_cluster_assignment": 2,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 6,
-                    "initial_exploration_rate": 0.5,
+                    "initial_refining_steps": 1,
+                    "initial_exploration_rate": 0.7,
                     "batch_size": "full",
-                    "inner_k_fold_validation_divisions_per_epoch": null
+                    "inner_k_fold_validation_divisions_per_epoch": 1
                 }
             }
         }
@@ -334,7 +334,7 @@
         "name": "RouteChoiceEnvironmentApolloComfort-v0",
         "n_values": 3,
         "K": 1,
-        "L": 3,
+        "L": 12,
         "horizon": 2,
 
         "is_contextual": false,
@@ -373,9 +373,9 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.005,
-                    "lr_value_system": 0.003,
-                    "lr_lambda": 0.002,
+                    "lr_grounding": 0.008,
+                    "lr_value_system": 0.005,
+                    "lr_lambda": 0.005,
                     "initial_lambda": 0.1,
                     "weight_decay": 0.0000
                 },
@@ -386,11 +386,11 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "repr_apply_on_worst_clusters_only": false,
-                    "conc_apply_on_worst_clusters_only": false,
+                    "repr_apply_on_worst_clusters_only": true,
+                    "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "cluster_similarity_penalty": 0.0,
+                    "cluster_similarity_penalty": 1000.0,
                     "lambda_decay": 1e-9
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
@@ -404,11 +404,11 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 200,
+                    "max_iter": 500,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
-                    "max_assignment_memory": 10
+                    "max_assignment_memory": 15
                 },
 
                 "learner_policy_class": "PPO",
@@ -428,11 +428,11 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 3,
+                    "epochs": 5,
                     "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 15,
-                    "initial_exploration_rate": 0.0,
+                    "initial_refining_steps": 10,
+                    "initial_exploration_rate": 0.5,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
                 }

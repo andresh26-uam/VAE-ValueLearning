@@ -25,6 +25,13 @@ from imitation.data.types import (
 
 import pandas as pd
 
+def parse_enames_for_learning_curve(learning_curve_from):
+    """
+    Parses the learning curve from the given string.
+    """
+    if not learning_curve_from:
+        return []
+    return [name.strip() for name in learning_curve_from.split(',') if name.strip()]
 def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str,ClusterAssignment], experiment_name, output_columns, output_dir="test_results", label='train_set'):
     
     # Ensure output directories exist
@@ -125,6 +132,7 @@ def parse_args():
                                help='Scales subfigs inside the plots.')
     general_group.add_argument('-pfont', '--plot_fontsize', type=int, default=12,
                                help='Font size in plots.')
+    general_group.add_argument('-lrcfrom', '--learning_curve_from', type=parse_enames_for_learning_curve, default=None,help="Generate the learning curve for the specified experiments")
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
 
@@ -298,8 +306,10 @@ if __name__ == "__main__":
     if exp_parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
 
-    
+    print(parser_args)
+    exit(0)
     pprint.pprint(config)
+
 
     assignment_memory: ClusterAssignmentMemory = metrics['assignment_memory']
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
@@ -440,7 +450,7 @@ if __name__ == "__main__":
                                                    values_names=environment_data['values_names'], 
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
-    
-    # 4: CONTEXT CLUSTERS TODO
+    # 5 learning curves
+    # 
         
     

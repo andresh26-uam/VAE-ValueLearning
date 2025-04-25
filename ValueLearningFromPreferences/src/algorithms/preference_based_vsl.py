@@ -355,17 +355,17 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     copy_assignment = new_assignment_copy.copy()
                     copy_assignment.explored  =False
 
-                    print (new_assignment_copy.n_training_steps)
-                    print(new_assignment.n_training_steps)
-                    print(copy_assignment.n_training_steps)
                     copy_assignment.n_training_steps = total_training_steps
                     #position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
+                    print("before insert")
                     assignment_ranking.insert_assignment(copy_assignment)
 
                     # Ensure optimizer consistency
                     check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
                     check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
                     check_optimizer_consistency(reward_model_per_agent_id, self.optim)
+
+                    print("After insert")
                     starting_assignment = None # to not use it again
                     
                     if train_loss > 0.0 and DIDASTEP and grad_norm >= 1e-7 and self.debug_mode:
@@ -1206,7 +1206,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         
         return best_assignments_list
 
-    def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs):
+    def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs, mutation_prob=0.01):
         example_model = list(reward_model_per_agent_id.values())[0]
         with th.no_grad():
             grounding_per_value_per_cluster_c = [[None for c in range(len(cs_per_vi))] for cs_per_vi in grounding_per_value_per_cluster]
@@ -1240,7 +1240,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     if len(assignment_gr_new[vi][cluster_vi_aid]) == 1:                        
                         for param in grounding_per_value_per_cluster_c[vi][cluster_vi_aid].parameters():
                             if param.requires_grad:
-                                mask = th.rand_like(param) < 0.01  # percentage of parameters changed.
+                                mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
                                 unifr= th.empty_like(param).uniform_(0, 1.0)
                                 param.mul_(th.where(mask, unifr, th.ones_like(param)))
                         # Assert that the original is different from the updated network
@@ -1250,6 +1250,12 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
 
                 if value_system_per_cluster_c is not None and len(assignment_vs_new[cluster_vs_aid]) == 1:
                     rc.reset_learned_alignment_function()
+                    for l in range(len(value_system_per_cluster_c)):
+                        for param in value_system_per_cluster_c[l].parameters():
+                                if param.requires_grad:
+                                    mask = th.rand_like(param) < mutation_prob # percentage of parameters changed.
+                                    unifr= th.empty_like(param).uniform_(0, 1.0)
+                                    param.mul_(th.where(mask, unifr, th.ones_like(param)))
 
                     value_system_per_cluster_c[cluster_vs_aid] = rc.get_trained_alignment_function_network()
                 rc.set_trained_alignment_function_network(value_system_per_cluster_c[cluster_vs_aid])
