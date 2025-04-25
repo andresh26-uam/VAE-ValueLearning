@@ -176,7 +176,7 @@ def likelihood_x_is_target(pred_probs, target_probs, mode='numpy', slope=1, adap
 
         probs [(probs < 0.5) & (target_probs < 0.5)] = 1.0
         
-        probs[(abs(probs - target_probs) <= indifference_tolerance) & (abs(target_probs - 0.5) <= indifference_tolerance)] = 1.0
+        probs[(abs(probs - target_probs) <= indifference_tolerance) & (target_probs == 0.5)] = 1.0
         
     return productfun(probs)
 
@@ -971,6 +971,10 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                     for lw in loss_vs_per_cluster:
                         loss_vs += lw
             loss_vs/=total_discordance
+
+            #print("TD?", total_discordance, len([ac for ac in agent_count_per_cluster if ac > 0]))
+
+            #loss_vs/=len([ac for ac in agent_count_per_cluster if ac > 0])
             """t1 = time.time()
             agent_count_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
             loss_vs_per_cluster = [0.0 for _ in range(len(value_system_network_per_cluster))]

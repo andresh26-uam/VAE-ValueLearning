@@ -240,11 +240,11 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                     # Renormalise the loss to be averaged over
                                     # the whole batch size 
                                 
-                                renormalization = len(fragment_pairs) / self.batch_size
+                                #renormalization = len(fragment_pairs) / self.batch_size
 
-                                train_loss += loss.item()*renormalization
+                                train_loss += loss.item()
 
-                                self.loss.gradients(scalar_loss = loss, renormalization = renormalization)
+                                self.loss.gradients(scalar_loss = loss, renormalization = 1.0)
                                 
                                 accumulated_size += len(fragment_pairs)
                                 if accumulated_size >= self.batch_size:
@@ -1160,7 +1160,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             
             print("BEST ASSIGNMENTS so far:", best_assignments_list)
 
-            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False)
+            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False, lexicographic_vs_first=True)
             # Save the best assignment of each iteration
             best_assignment.save(historical_assignments_save_folder, f"best_assignment_iter_{global_iter}.pkl")
 
@@ -1200,8 +1200,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 callback(self._iteration)
             self._iteration += 1
         best_assignments_list.clean_memory(exhaustive=True)
-        best_assignments_list.sort_lexicographic(lexicographic_vs_first=False)
-        best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False)
+        best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False, lexicographic_vs_first=False)
         self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments, reference_assignment=best_assignment)
         
         return best_assignments_list
@@ -1338,7 +1337,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                                                 
         return reference_assignment
 
-def load_historic_assignments(experiment_name, limit=20):
+def load_historic_assignments(experiment_name, sample=20):
     save_folder = os.path.join(ASSIGNMENT_CHECKPOINTS, experiment_name)
     if not os.path.exists(save_folder):
         parent_folder = ASSIGNMENT_CHECKPOINTS
@@ -1359,9 +1358,12 @@ def load_historic_assignments(experiment_name, limit=20):
             print("Loaded environment state:", env_state)
         file_list.remove('env_state.pkl')
 
+    total_files = len(file_list)
+    sampled_indices = np.linspace(0, total_files - 1, sample, dtype=int)
+
     for fi, file_name in enumerate(sorted(file_list, key=lambda x: int(x.split('_')[-1].split('.')[0]), reverse=True)):
-        if fi >= limit:
-            break
+        if fi not in sampled_indices:
+            continue
 
         file_path = os.path.join(save_folder, file_name)
         if os.path.isfile(file_path) and file_name.startswith('best_assignment_iter_') and file_name.endswith('.pkl'):
@@ -1642,7 +1644,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         
         assert self.training_reward_nets_per_agent.keys() == self.training_reward_nets_per_agent.keys()
         for aid in self.training_reward_nets_per_agent.keys():
-            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , assignment_memory.get_best_assignment(consider_only_unexplored=False,override_explore_state=False).reward_model_per_agent_id[aid].state_dict())
+            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , assignment_memory.get_best_assignment(consider_only_unexplored=False,override_explore_state=False,lexicographic_vs_first=False).reward_model_per_agent_id[aid].state_dict())
         self.assignment_memory = assignment_memory
     
         return self.training_reward_nets_per_agent 
@@ -1753,7 +1755,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                        'global_accvs': self.last_accuracies_vs_global, 'global_accgr': self.last_accuracies_gr_global, 'assignment_memory': self.assignment_memory})
         return metrics
     def evaluate_assignment(self, assignment: ClusterAssignment, dataset: VSLPreferenceDataset):
-        self.init_models(10, self.vsi_optimizer_cls, self.vsi_optimizer_kwargs)
+        
         self.pref_comparisons.reward_trainer.debug_mode = False
 
         self.pref_comparisons.reward_trainer.batch_size = len(dataset)

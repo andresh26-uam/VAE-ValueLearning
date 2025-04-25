@@ -45,13 +45,7 @@ def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, 
 
 def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple], Tuple], Dict[Tuple[str, Tuple], AbstractVSLRewardFunction], Dict[str, Any]], List[ClusterAssignment]]:
     # Load the training results from a file
-    file_path = os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl")
-    if not os.path.exists(file_path):
-        matching_files = [f for f in os.listdir(TRAIN_RESULTS_PATH) if f.startswith(experiment_name)]
-        if not matching_files:
-            raise FileNotFoundError(
-                f"Training results file not found: {file_path} or any file starting with {experiment_name}")
-        file_path = os.path.join(TRAIN_RESULTS_PATH, matching_files[0])
+    file_path, experiment_name = find_parse_ename(experiment_name)
     with open(file_path, 'rb') as f:
         data = dill.load(f)
     print(f"Training results loaded from {file_path}")
@@ -68,8 +62,20 @@ def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple]
             returned_tuple[3] = data[k]
     returned_tuple = tuple(returned_tuple)
     # Get the saved best assignments per iteration
-    historic_assignments, env_state = load_historic_assignments(experiment_name, limit=20)
+    historic_assignments, env_state = load_historic_assignments(experiment_name, sample=20)
     return *returned_tuple, historic_assignments, env_state
+
+def find_parse_ename(experiment_name: str):
+    
+    file_path = os.path.join(TRAIN_RESULTS_PATH, (f"{experiment_name}.pkl" if 'pkl' not in experiment_name else f"{experiment_name}"))
+    if not os.path.exists(file_path):
+        matching_files = [f for f in os.listdir(TRAIN_RESULTS_PATH) if f.startswith(experiment_name)]
+        if not matching_files:
+            raise FileNotFoundError(
+                f"Training results file not found: {file_path} or any file starting with {experiment_name}")
+        file_path = os.path.join(TRAIN_RESULTS_PATH, matching_files[0])
+        experiment_name	 = matching_files[0].strip('.pkl')
+    return file_path, experiment_name
 
 
 def parse_args():
@@ -87,7 +93,7 @@ def parse_args():
     general_group.add_argument('-ename', '--experiment_name', type=str,
                                default='test_experiment', required=True, help='Experiment name')
 
-    general_group.add_argument('-sp', '--split_ratio', type=float, default=0.2,
+    general_group.add_argument('-sp', '--split_ratio', type=float, default=0.0,
                                help='Test split ratio. If 0.0, no split is done. If 1.0, all data is used for testing.')
 
     general_group.add_argument('-dtype', '--dtype', type=parse_dtype_torch, default=torch.float32, choices=[torch.float32, torch.float64],
@@ -210,7 +216,7 @@ if __name__ == "__main__":
         'envs', parser_args.environment, GROUNDINGS_PATH)
     dataset_name = parser_args.dataset_name
     experiment_name = parser_args.experiment_name
-    experiment_name = experiment_name + '_' + str(parser_args.split_ratio)
+    experiment_name = experiment_name #+ '_' + str(parser_args.split_ratio)
 
     agent_profiles = [tuple(ag['value_system'])
                       for ag in society_data['agents']]
@@ -340,7 +346,7 @@ if __name__ == "__main__":
                                                                                                                               assumed_grounding=None, **alg_config['train_kwargs'])
 
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
-                          reward_net_pair_agent_and_vs_s, metrics_s, parser_args=parser_args)
+                          reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
     print(metrics_s['assignment'])
     target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments, env_state = load_training_results(
         experiment_name)
@@ -349,7 +355,7 @@ if __name__ == "__main__":
     
 
     assignment.plot_vs_assignments("demo.png")
-
+    
     assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
     assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
     ), "Mismatch in reward_net_pair_agent_and_vs"

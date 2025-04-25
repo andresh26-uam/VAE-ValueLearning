@@ -100,7 +100,7 @@ if __name__ == "__main__":
     dataset_name = parser_args.dataset_name
     experiment_name = parser_args.experiment_name
 
-    experiment_name = experiment_name + '_' + str(parser_args.split_ratio)
+    experiment_name = experiment_name #+ '_' + str(parser_args.split_ratio)
 
     """agent_profiles = [tuple(ag['value_system'])
                       for ag in society_data['agents']]

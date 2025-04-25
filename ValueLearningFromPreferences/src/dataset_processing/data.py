@@ -284,7 +284,8 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
                     self.data_per_agent[agent_id] = VSLPreferenceDataset(self.n_values, single_agent=True)
                 idxs_agent_id = np.where(np.asarray(agent_ids) == agent_id)[0]
                 self.data_per_agent[agent_id].push(fragments[idxs_agent_id], preferences[idxs_agent_id], preferences_with_grounding[idxs_agent_id, :], agent_ids=[agent_id]*len(idxs_agent_id), agent_data=None)
-
+        if len(fragments) == 0:
+            return
         fragments1, fragments2 = zip(*fragments)
         if preferences.shape != (len(fragments),):
             raise ValueError(
