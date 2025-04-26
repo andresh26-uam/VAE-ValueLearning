@@ -113,7 +113,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         device = self._preference_model.model.device
         return np.asarray(fragment_pairs), util.safe_to_tensor(np.array(preferences), device=device, dtype=dtype), util.safe_to_tensor(np.array(preferences_per_grounding), device=device, dtype=dtype), np.asarray(agent_ids)
 
-    def train(self, dataset: VSLPreferenceDataset, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction], grounding_per_value_per_cluster: List[List[th.nn.Module]], value_system_per_cluster: List[Any] = [], running_assignment_vs=None, running_assignment_gr=None, epoch_multiplier: float = 1.0, global_iteration=None, global_iterations=None, starting_assignment: ClusterAssignment = 'start_random', assignment_ranking: ClusterAssignmentMemory=None) -> None:
+    def train(self, dataset: VSLPreferenceDataset, reward_model_per_agent_id: Mapping[str, AbstractVSLRewardFunction], grounding_per_value_per_cluster: List[List[th.nn.Module]], value_system_per_cluster: List[Any] = [], running_assignment_vs=None, running_assignment_gr=None, epoch_multiplier: float = 1.0, global_iteration=None, global_iterations=None, starting_assignment: ClusterAssignment = 'start_random', assignment_ranking: ClusterAssignmentMemory=None, only_eval=False) -> None:
         
         
         if self.use_full_batch:
@@ -188,8 +188,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             check_optimizer_consistency(reward_model_per_agent_id, self.optim)
                             check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
                             check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
-                            training_steps = self.refining_steps_after_cluster_assignment if epoch_num > 0 and starting_assignment!='start_random' else self.initial_refining_steps
-                            
+                            if not only_eval:
+                                training_steps = self.refining_steps_after_cluster_assignment if epoch_num > 0 and starting_assignment!='start_random' else self.initial_refining_steps
+                            else:
+                                training_steps = 0
                             
                             with th.no_grad():
                                 new_assignment, fragment_pairs_per_aid, preferences_per_aid, preference_grounding_per_aid, fragment_idxs_per_aid = self.cluster_assignment(
@@ -218,6 +220,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             DIDASTEP = False
                             
                             for r in range(training_steps):
+                                if only_eval:
+                                    continue
                                 with (self.logger.add_key_prefix("train")if self.use_logger is not None else nullcontext()):
 
                                     
@@ -317,10 +321,10 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
                             print("BATCH REFINEMENT EX TIME: ", end - st)
 
-                            
-                        if accumulated_size != 0:
-                            self.optim.step()  # if there remains an incomplete batch
-                            self.optim.zero_grad()
+                        if not only_eval:    
+                            if accumulated_size != 0:
+                                self.optim.step()  # if there remains an incomplete batch
+                                self.optim.zero_grad()
                         check_assignment_consistency(grounding_per_value_per_cluster, value_system_per_cluster, assignment_aid_to_gr_cluster=running_assignment_gr, assignment_aid_to_vs_cluster=running_assignment_vs,reward_models_per_aid= reward_model_per_agent_id)
                         check_grounding_value_system_networks_consistency_with_optim(grounding_per_value_per_cluster, value_system_per_cluster, self.optim)
                         check_optimizer_consistency(reward_model_per_agent_id, self.optim)
@@ -356,6 +360,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     copy_assignment.explored  =False
 
                     copy_assignment.n_training_steps = total_training_steps
+                    print(total_training_steps)
                     #position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
                     print("before insert")
                     assignment_ranking.insert_assignment(copy_assignment)
@@ -824,6 +829,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                             rew_aid.set_mode(self.train_mode)
                             probs_vs, _ = self._preference_model.forward(fragments_aid_temp_dict, custom_model_per_agent_id=rew_aid, fragment_pairs_idxs_per_agent_id=agent_fragments_idxs_temp_dict, only_for_alignment_function=rew_aid.get_learned_align_function())
                             gt_probs = agent_preferences
+                            
                             # adaptive slope is not necessary if only want the maximum likelihood. In other contexts, though, it could be useful to better discern the probability differences.
                             aid_likelihood_per_vs_cluster[ivscluster] = likelihood_x_is_target(probs_vs.detach(), gt_probs.detach(), mode='th', slope=0.3, adaptive_slope=False, qualitative_mode=self.qualitative_cluster_assignment, indifference_tolerance=self.loss.model_indifference_tolerance)
                             
@@ -1008,6 +1014,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         callback: Optional[Callable[[int], None]] = None,
         historical_assignments_save_folder = 'training_assignments',
         try_without_replacement=True,
+        mutation_prob=0.01,
+        mutation_scale=0.01,
         max_assignment_memory = 10
     ) -> ClusterAssignmentMemory:
         """Train the reward model and the policy if applicable.
@@ -1099,53 +1107,79 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             
             self.reward_trainer: ClusteringRewardTrainerVSL
             
-            choosing = True
-            use_random = False
-            while choosing:
-                if random.random() < exploration or use_random:
-                    choosing = False
-                    starting_assignment = 'start_random'
-                    if global_iter <= int(num_iterations*0.1):
-                        reference_assignment = self.generate_random_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
-                    else:
-                        reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
+            if global_iter == 0:
+                best_assignments_list.initializing = True
+                while len(best_assignments_list) < best_assignments_list.max_size:
+                    reference_assignment = self.generate_random_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments)
                     self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
-                    assert self.reward_trainer.optim.time == 0
-                    #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
+                    
+                    
+                    prev_epochs = self.reward_trainer.epochs
+                    self.reward_trainer.epochs = 1
+                    
+                    self.reward_trainer.train(dataset_batch, reward_model_per_agent_id=reward_model_per_agent_id, grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
+                                    value_system_per_cluster=value_system_per_cluster, 
+                                    running_assignment_vs=original_agent_to_vs_cluster_assignments, running_assignment_gr=original_agent_to_gr_cluster_assignments,
+                                    epoch_multiplier=1,
+                                    global_iteration=0, global_iterations=len(schedule),
+                                    starting_assignment = 'start_random',
+                                    only_eval=True,
+                                    assignment_ranking=best_assignments_list,
+                    )
+                    self.reward_trainer.epochs = prev_epochs
+            best_assignments_list.initializing = False
+            choosing = True
+            
+            while choosing:
+                
+                starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
+                if starting_assignment is None:
+                    choosing = True
+                    for b in best_assignments_list.memory:
+                        b.explored = False
+                    use_random = True
+                    print("MUTATION PROB", mutation_prob)
                 else:
-                    starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
-                    
-                    if starting_assignment is None:
-                        self.reward_trainer.refining_steps_after_cluster_assignment = min(
-                            math.ceil(self.reward_trainer.refining_steps_after_cluster_assignment + 0.1*self.reward_trainer.refining_steps_after_cluster_assignment), 
-                            self.reward_trainer.refining_steps_after_cluster_assignment*10)
-                        self.reward_trainer.initial_refining_steps = min(math.ceil(self.reward_trainer.initial_refining_steps + 0.1*self.reward_trainer.initial_refining_steps), 
-                                                                         self.reward_trainer.initial_refining_steps*10)
-                        choosing = True
-                        use_random = True
-                        continue
+                    choosing = False
+                    grounding_deviation = 1.0-np.mean(starting_assignment.gr_score)
+                    value_system_deviation = 2.0-starting_assignment.representativity_vs(aggr=np.min)-starting_assignment.conciseness_vs()
+                    if random.random() < exploration or use_random:
+                        use_random = False
+                        starting_assignment.explored = False
+                        reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments,
+                                                                                mutation_scale=mutation_scale,
+                                                                                mutation_prob=mutation_prob,
+                                                                                grounding_deviation=grounding_deviation,
+                                                                                value_system_deviation=value_system_deviation)
+                        reference_assignment.n_training_steps = starting_assignment.n_training_steps
+                        reference_assignment.optimizer_state = starting_assignment.optimizer_state
+                        
+                        self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
+                        starting_assignment = 'start_random'
+                        # this is very inneficient...
+                        # assert self.reward_trainer.optim.time == 0
+                        #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                     else:
-                        starting_assignment.explored  =True
-                        choosing = False
-                    
+                        starting_assignment.explored = True
+                        self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, starting_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
+
+                        check_assignment_consistency(starting_assignment.grounding_per_value_per_cluster,starting_assignment.value_system_per_cluster,
+                                                    starting_assignment.agent_to_gr_cluster_assignments,
+                                                    assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
+                                                    reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
+                        
                     check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
                                                     assignment_aid_to_gr_cluster=original_agent_to_gr_cluster_assignments,
                                                     assignment_aid_to_vs_cluster=original_agent_to_vs_cluster_assignments, 
                                                     reward_models_per_aid=reward_model_per_agent_id)
-                    check_assignment_consistency(starting_assignment.grounding_per_value_per_cluster,starting_assignment.value_system_per_cluster,
-                                                    starting_assignment.agent_to_gr_cluster_assignments,
-                                                    assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
-                                                    reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
-                    assert self.reward_trainer.optim.time != 0
-                    assert starting_assignment.optimizer_state['time'] != 0
-                    #assert not np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
-                        
-                    self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, starting_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
-
+                
+                #assert not np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
+                    
+                
 
                 # Assert that the optimizer parameters are still those of the changed networks
-            exploration = self.reward_trainer.initial_exploration_rate * ((num_iterations-global_iter)/num_iterations)**4 # TODO epsilon decay?
-            print(f"ITERATION {global_iter}/{num_iterations}.", "EXPLORATION RATE", exploration)
+            exploration = self.reward_trainer.initial_exploration_rate * ((num_iterations-global_iter)/num_iterations) # TODO epsilon decay?
+            print(f"ITERATION {global_iter}/{num_iterations}.", "MUTATION RATE", exploration)
             
             best_assignments_list: ClusterAssignmentMemory = self.reward_trainer.train(
                 dataset_batch, reward_model_per_agent_id=reward_model_per_agent_id, grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
@@ -1157,7 +1191,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 assignment_ranking=best_assignments_list,
 
                 )
-            
+            assert self.reward_trainer.optim.time != 0
+            #assert starting_assignment.optimizer_state['time'] != 0
             print("BEST ASSIGNMENTS so far:", best_assignments_list)
 
             best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False, lexicographic_vs_first=True)
@@ -1205,7 +1240,10 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         
         return best_assignments_list
 
-    def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs, mutation_prob=0.01):
+    def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs, 
+                                    mutation_scale=5.0,
+                                    mutation_prob=0.1,
+                                    grounding_deviation=1.0,value_system_deviation=1.0):
         example_model = list(reward_model_per_agent_id.values())[0]
         with th.no_grad():
             grounding_per_value_per_cluster_c = [[None for c in range(len(cs_per_vi))] for cs_per_vi in grounding_per_value_per_cluster]
@@ -1239,24 +1277,25 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     if len(assignment_gr_new[vi][cluster_vi_aid]) == 1:                        
                         for param in grounding_per_value_per_cluster_c[vi][cluster_vi_aid].parameters():
                             if param.requires_grad:
+                                param: th.Tensor
                                 mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
-                                unifr= th.empty_like(param).uniform_(0, 1.0)
-                                param.mul_(th.where(mask, unifr, th.ones_like(param)))
+                                normal = th.empty_like(param).normal_(0, mutation_scale*grounding_deviation)*th.norm(param)
+                                param.add_(th.where(mask, normal, th.zeros_like(param)))
                         # Assert that the original is different from the updated network
                         #grounding_per_value_per_cluster_c[vi][cluster_vi_aid] = rc.get_network_for_value(vi)
                                     
                     rc.set_network_for_value(vi, grounding_per_value_per_cluster_c[vi][cluster_vi_aid])
 
                 if value_system_per_cluster_c is not None and len(assignment_vs_new[cluster_vs_aid]) == 1:
-                    rc.reset_learned_alignment_function()
-                    for l in range(len(value_system_per_cluster_c)):
-                        for param in value_system_per_cluster_c[l].parameters():
-                                if param.requires_grad:
-                                    mask = th.rand_like(param) < mutation_prob # percentage of parameters changed.
-                                    unifr= th.empty_like(param).uniform_(0, 1.0)
-                                    param.mul_(th.where(mask, unifr, th.ones_like(param)))
 
-                    value_system_per_cluster_c[cluster_vs_aid] = rc.get_trained_alignment_function_network()
+                    for param in value_system_per_cluster_c[cluster_vi_aid].parameters():
+                            if param.requires_grad:
+                                param: th.Tensor
+                                mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
+                                normal = th.empty_like(param).normal_(0, mutation_scale*value_system_deviation)*th.norm(param)
+                                param.add_(th.where(mask, normal, th.zeros_like(param)))
+
+                    
                 rc.set_trained_alignment_function_network(value_system_per_cluster_c[cluster_vs_aid])
                 random_reward_model[aid]  =rc
                 
@@ -1478,7 +1517,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     def train(self, max_iter=5000, mode=TrainingModes.VALUE_GROUNDING_LEARNING, assumed_grounding=None,
               trajectory_batch_size=100, use_probabilistic_reward=False, n_reward_reps_if_probabilistic_reward=10,
               resample_trajectories_if_not_already_sampled=True,max_assignment_memory=10,
-              initial_epoch_multiplier=10,comparisons_per_agent_per_step=None, experiment_name='test', **kwargs):
+              initial_epoch_multiplier=10,comparisons_per_agent_per_step=None, experiment_name='test', mutation_prob=0.1,
+              mutation_scale=1.0, **kwargs):
 
         self.resample_trajectories_if_not_already_sampled = resample_trajectories_if_not_already_sampled
         self.fragment_length = self.env.horizon
@@ -1486,6 +1526,9 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         self.max_assignment_memory = max_assignment_memory
         self.comparisons_per_agent_per_step  = comparisons_per_agent_per_step
         self.historical_assignments_save_folder  = os.path.join(ASSIGNMENT_CHECKPOINTS,experiment_name)
+        
+        self.mutation_prob = mutation_prob
+        self.mutation_scale = mutation_scale
 
         """self.gatherer = ClusteredGatherer(preferece_vs=self.dataset.preferences, preference_per_value=self.dataset.preferences_with_grounding, rng=self.rng,
                                                                  discount_factor=self.discount_factor_preferences,
@@ -1639,6 +1682,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                            value_system_per_cluster=value_system_network_per_cluster,
                            reward_nets_per_agent=self.training_reward_nets_per_agent,
                            historical_assignments_save_folder=self.historical_assignments_save_folder,
+                           mutation_prob=self.mutation_prob, mutation_scale=self.mutation_scale,
                            optim_cls=optim_cls, optim_kwargs=optim_kwargs,max_assignment_memory=self.max_assignment_memory)
         
         
@@ -1658,7 +1702,9 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                       assignment_aid_to_gr_cluster,
                       comparisons_per_agent_per_step,
                       reward_nets_per_agent, grounding_per_value_per_cluster, value_system_per_cluster=[], 
-                      starting_t=0, max_assignment_memory=10,historical_assignments_save_folder='train_assignments') -> ClusterAssignmentMemory:
+                      starting_t=0, max_assignment_memory=10,
+                      mutation_prob=0.1, mutation_scale=1.0,
+                      historical_assignments_save_folder='train_assignments') -> ClusterAssignmentMemory:
         
         self.init_models(max_iter, optim_cls, optim_kwargs)
         self.pref_comparisons.reward_trainer.reset_optimizer_with_params(
@@ -1674,6 +1720,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                                               original_agent_to_vs_cluster_assignments=assignment_aid_to_vs_cluster,
                                               comparisons_per_agent_per_step=comparisons_per_agent_per_step,
                                               try_without_replacement=True,
+                                              mutation_prob=mutation_prob,
+                                                mutation_scale=mutation_scale,
                                               historical_assignments_save_folder=historical_assignments_save_folder,
                                                 callback=lambda t: self.train_callback(t+starting_t),max_assignment_memory=max_assignment_memory)
         return assignment_memory
