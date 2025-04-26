@@ -955,7 +955,10 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 if a> 0:
                     current_disc_per_cluster[i]/= a
                     total_discordance += current_disc_per_cluster[i]
-                    loss_vs_per_cluster[i] *= current_disc_per_cluster[i]
+                    
+                    #loss_vs_per_cluster[i] /= a # NO WEIGHTS
+                    #loss_vs_per_cluster[i] *= current_disc_per_cluster[i] * a # TOTALMean over all agents
+                    loss_vs_per_cluster[i] *= current_disc_per_cluster[i] # Current paper
                 else:
                     loss_vs_per_cluster[i] *= 0.0
                     pass
@@ -970,11 +973,12 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 else:
                     for lw in loss_vs_per_cluster:
                         loss_vs += lw
-            loss_vs/=total_discordance
+            loss_vs/=total_discordance # CURRENT PAPER and TOTAL SUM
 
             #print("TD?", total_discordance, len([ac for ac in agent_count_per_cluster if ac > 0]))
 
-            #loss_vs/=len([ac for ac in agent_count_per_cluster if ac > 0])
+            #loss_vs/=len([ac for ac in agent_count_per_cluster if ac > 0]) # NO WEIGHTS
+            #loss_vs/=sum([ac for ac in agent_count_per_cluster if ac > 0]) # TOTAL SUM
             """t1 = time.time()
             agent_count_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
             loss_vs_per_cluster = [0.0 for _ in range(len(value_system_network_per_cluster))]

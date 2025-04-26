@@ -936,7 +936,7 @@ class ClusterAssignmentMemory():
                                                                                     ), reverse=True)]
         
             print("Best sorted indices", best_sorted_indices_by_grounding_then_vs, best_sorted_indices_by_vs_then_grounding)
-            exit(0)
+            
             if self.memory[worst].L == 1 and all(np.asarray(self.memory[worst].K) == 1):
                 wi+=1 # protect case L = 1.
             

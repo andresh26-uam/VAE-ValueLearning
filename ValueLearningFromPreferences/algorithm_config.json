@@ -386,7 +386,7 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "repr_apply_on_worst_clusters_only": true,
+                    "repr_apply_on_worst_clusters_only": false,
                     "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
@@ -428,11 +428,11 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 3,
-                    "refining_steps_after_cluster_assignment": 6,
+                    "epochs": 5,
+                    "refining_steps_after_cluster_assignment": 3,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 15,
-                    "initial_exploration_rate": 0.5,
+                    "initial_refining_steps": 10,
+                    "initial_exploration_rate": 0.3,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
                 }
