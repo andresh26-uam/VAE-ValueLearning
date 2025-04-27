@@ -303,120 +303,117 @@ class ClusterAssignment():
             return val
         else:
             return aggr(1.0 - np.asarray(distances_per_cluster)) 
-    
-    def plot_vs_assignments(self, save_path="demo.pdf", show=False, subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
-                            values_names=None, values_short_names=None, fontsize=12):
-        """
-        Plots the agents-to-value-system (VS) assignments in 2D space.
-        Each cluster is represented as a point, and agents are plotted around the cluster center
-        based on their intra-cluster distances. Clusters are separated by their inter-cluster distances.
+    def plot_vs_assignments(self, save_path="demo.pdf", pie_and_hist_path="pie_and_histograms.pdf", show=False, subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
+                                values_names=None, values_short_names=None, fontsize=12):
+            """
+            Plots the agents-to-value-system (VS) assignments in 2D space.
+            Each cluster is represented as a point, and agents are plotted around the cluster center
+            based on their intra-cluster distances. Clusters are separated by their inter-cluster distances.
 
-        Args:
-            save_path (str, optional): Path to save the plot. If None, the plot is shown interactively.
-        """
-        if self.inter_discordances_vs is None or self.intra_discordances_vs is None:
-            raise ValueError("Inter-cluster and intra-cluster distances must be defined to plot VS assignments.")
+            Args:
+                save_path (str, optional): Path to save the cluster plot. If None, the plot is shown interactively.
+                pie_and_hist_path (str, optional): Path to save the combined pie charts and histograms. If None, the plot is shown interactively.
+            """
+            if self.inter_discordances_vs is None or self.intra_discordances_vs is None:
+                raise ValueError("Inter-cluster and intra-cluster distances must be defined to plot VS assignments.")
 
-        # Extract cluster coordinates
-        cluster_idx_to_label, cluster_positions, calculated_distances = extract_cluster_coordinates(
-            self.inter_discordances_vs_per_cluster_pair, [cid for (cid, _) in self.active_vs_clusters()]
-        )
+            # Extract cluster coordinates
+            cluster_idx_to_label, cluster_positions, calculated_distances = extract_cluster_coordinates(
+                self.inter_discordances_vs_per_cluster_pair, [cid for (cid, _) in self.active_vs_clusters()]
+            )
 
-        cluster_colors_vs = assign_colors_matplotlib(self.L)
+            cluster_colors_vs = assign_colors_matplotlib(self.L)
 
-        # Create the figure with two main sections
-        fig = plt.figure(figsize=(18, 12))
-        grid = fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.05)
+            # Create the figure for the cluster plot
+            fig = plt.figure(figsize=(12, 8))
+            ax = fig.add_subplot(111)
+            max_intra_dist = max(max(self.intra_discordances_vs), 1.0)
+            max_radius = 0
 
-        # Left part: Clusters in space
-        ax = fig.add_subplot(grid[0, 0])
-        max_intra_dist = max(max(self.intra_discordances_vs), 1.0)
-        max_radius = 0
+            for idx, (x, y) in enumerate(cluster_positions):
+                cluster_idx = cluster_idx_to_label[idx]
+                if len(calculated_distances) > 0:
+                    min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
+                else:
+                    min_inter_dist = 1.0
+                radius = min_inter_dist / 2.0
+                max_radius = max(radius, max_radius)
 
-        for idx, (x, y) in enumerate(cluster_positions):
-            cluster_idx = cluster_idx_to_label[idx]
-            if len(calculated_distances) > 0:
-                min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
-            else:
-                min_inter_dist = 1.0
-            radius = min_inter_dist / 2.0
-            max_radius = max(radius, max_radius)
+            for idx, (x, y) in enumerate(cluster_positions):
+                cluster_idx = cluster_idx_to_label[idx]
+                ax.scatter(x, y, color=cluster_colors_vs[idx], label=f"Cluster {cluster_idx}", s=100, zorder=3, marker='x')
 
-        for idx, (x, y) in enumerate(cluster_positions):
-            cluster_idx = cluster_idx_to_label[idx]
-            ax.scatter(x, y, color=cluster_colors_vs[idx], label=f"Cluster {cluster_idx}", s=100, zorder=3, marker='x')
+                agents = self.assignment_vs[cluster_idx]
+                intra_distances = self.intra_discordances_vs_per_agent
+                if len(calculated_distances) > 0:
+                    min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
+                else:
+                    min_inter_dist = 1.0
 
-            agents = self.assignment_vs[cluster_idx]
-            intra_distances = self.intra_discordances_vs_per_agent
-            if len(calculated_distances) > 0:
-                min_inter_dist = min(d for (i, j), d in calculated_distances.items() if i == cluster_idx or j == cluster_idx)
-            else:
-                min_inter_dist = 1.0
+                radius = min_inter_dist / 2.0
+                circle = plt.Circle((x, y), radius, color=cluster_colors_vs[idx], fill=False, linestyle='--', alpha=0.5)
+                ax.add_artist(circle)
 
-            radius = min_inter_dist / 2.0
-            circle = plt.Circle((x, y), radius, color=cluster_colors_vs[idx], fill=False, linestyle='--', alpha=0.5)
-            ax.add_artist(circle)
+                for agent_idx, agent in enumerate(agents):
+                    agent_angle = 2 * np.pi * agent_idx / len(agents)
+                    agent_x = x + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.cos(agent_angle)
+                    agent_y = y + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.sin(agent_angle)
+                    ax.scatter(agent_x, agent_y, color=cluster_colors_vs[idx], s=50, zorder=2)
 
-            for agent_idx, agent in enumerate(agents):
-                agent_angle = 2 * np.pi * agent_idx / len(agents)
-                agent_x = x + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.cos(agent_angle)
-                agent_y = y + ((intra_distances[agent] / max_intra_dist) * min_inter_dist / 2) * np.sin(agent_angle)
-                ax.scatter(agent_x, agent_y, color=cluster_colors_vs[idx], s=50, zorder=2)
+            ax.set_title("Agents-to-VS Assignments")
+            ax.set_xlabel("X-axis")
+            ax.set_ylabel("Y-axis")
+            ax.set_aspect('equal', adjustable='datalim')
+            ax.set_xlim(min(-3 * max_radius * 1.3 - fontsize / 200, ax.get_xlim()[0]),
+                        max(3 * max_radius * 1.3 + fontsize / 200, ax.get_xlim()[1]))
+            ax.set_ylim(min(-3 * max_radius * 1.0, ax.get_ylim()[0]),
+                        max(3 * max_radius * 1.0, ax.get_ylim()[1]))
+            ax.legend()
+            ax.grid(False)
 
-        ax.set_title("Agents-to-VS Assignments")
-        ax.set_xlabel("X-axis")
-        ax.set_ylabel("Y-axis")
-        ax.set_aspect('equal', adjustable='datalim')
-        ax.set_xlim(min(-3 * max_radius * 1.3 - fontsize / 200, ax.get_xlim()[0]),
-                    max(3 * max_radius * 1.3 + fontsize / 200, ax.get_xlim()[1]))
-        ax.set_ylim(min(-3 * max_radius * 1.0, ax.get_ylim()[0]),
-                    max(3 * max_radius * 1.0, ax.get_ylim()[1]))
-        ax.legend()
-        ax.grid(False)
+            # Save or show the cluster plot
+            if save_path is not None:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                plt.savefig(save_path, bbox_inches="tight")
+            if show or save_path is None:
+                plt.show()
+            plt.close()
 
-        # Right part: Pie charts and histograms
-        right_ax = fig.add_subplot(grid[0, 1])
-        right_ax.axis('off')  # Hide the main axis for the right part
+            # Create the figure for combined pie charts and histograms
+            fig_combined = plt.figure(figsize=(12, 12))
+            for idx, cluster_idx in enumerate(cluster_idx_to_label):
+                # Pie chart
+                pie_ax = fig_combined.add_subplot(2, len(cluster_idx_to_label), 2 * idx + 1, aspect='equal')
+                value_system_weights = self.get_value_system(cluster_idx)
+                pie_ax.pie(value_system_weights,
+                            labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [
+                                values_short_names[i] for i in range(len(value_system_weights))],
+                            autopct='%f',
+                            startangle=90, colors=assign_colors_matplotlib(self.n_values, color_map=values_color_map),
+                            textprops={'fontsize': fontsize})
+                pie_ax.set_title(f"Cluster {cluster_idx} Value System", fontsize=fontsize)
 
-        # Create subplots for pie charts and histograms
-        n_clusters = len(cluster_idx_to_label)
-        pie_height = 1.0 / (n_clusters) - fontsize / 200 # Adjusted height to 30% of the size of the first group
-        pie_width = 0.4  # Set width equal to the height
-        hist_height = pie_height
-        hist_width = 0.4
+                # Histogram
+                hist_ax = fig_combined.add_subplot(2, len(cluster_idx_to_label), 2 * idx + 2)
+                agents = self.assignment_vs[cluster_idx]
+                cluster_representativity = [1.0 - self.intra_discordances_vs_per_agent[agent] for agent in agents]
+                hist_ax.hist(cluster_representativity, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
+                hist_ax.set_xlim(0, 1.0)
+                hist_ax.set_ylim(0, len(agents))
+                hist_ax.tick_params(axis='both', which='major', labelsize=fontsize)
+                hist_ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+                hist_ax.set_yticks(np.linspace(0, len(agents), num=8, endpoint=True, dtype=np.int64))
+                hist_ax.set_title(f"Cluster {cluster_idx} Representativity", fontsize=fontsize)
 
-        for idx, cluster_idx in enumerate(cluster_idx_to_label):
-            # Pie chart for value system weights
-            pie_ax = right_ax.inset_axes([0.0 + fontsize / 400, 1.0 - (idx + 1) * (pie_height) - idx* fontsize / 200, pie_width, pie_height],)
-            value_system_weights = self.get_value_system(cluster_idx)
-            pie_ax.pie(value_system_weights,
-            labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [
-            values_short_names[i] for i in range(len(value_system_weights))],
-            autopct='%f',
-            startangle=90, colors=assign_colors_matplotlib(self.n_values, color_map=values_color_map),
-            textprops={'fontsize': fontsize})
-            pie_ax.set_title(f"Cluster {cluster_idx} Value System", fontsize=fontsize)
-
-            # Histogram for intra-cluster distances
-            hist_ax = right_ax.inset_axes([pie_width + fontsize / 50, 1.0 - (idx + 1) * (hist_height) - idx*(fontsize / 200), hist_width, hist_height])
-            agents = self.assignment_vs[cluster_idx]
-            cluster_intra_distances = [self.intra_discordances_vs_per_agent[agent] for agent in agents]
-            hist_ax.hist(cluster_intra_distances, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
-            hist_ax.set_xlim(0, 1.0)
-            hist_ax.set_ylim(0, len(agents))
-            hist_ax.tick_params(axis='both', which='major', labelsize=fontsize)
-            hist_ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
-            hist_ax.set_yticks(np.linspace(0, len(agents), num=8, endpoint=True, dtype=np.int64))
-            hist_ax.set_title(f"Cluster {cluster_idx} Intra Distances", fontsize=fontsize)
-
-        # Save or show the plot
-        if save_path is not None:
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            plt.savefig(save_path, bbox_inches="tight")
-        if show or save_path is None:
-            plt.show()
-        plt.close()
-
+                # Ensure the pie chart and histogram have the same width
+                pie_ax.set_box_aspect(1)
+                hist_ax.set_box_aspect(1)  # Save or show the combined pie charts and histograms
+            if pie_and_hist_path is not None:
+                os.makedirs(os.path.dirname(pie_and_hist_path), exist_ok=True)
+                plt.savefig(pie_and_hist_path, bbox_inches="tight")
+            if show or pie_and_hist_path is None:
+                plt.show()
+            plt.close()  
     def _default_aggr_on_gr_scores(x):
                 return np.mean(x, axis=0)
     def copy(self):
@@ -734,12 +731,12 @@ class ClusterAssignmentMemory():
 
         if lexicographic_vs_first:
                 
-                if abs(vs_score_dif) > 0.001: 
+                if abs(vs_score_dif) > 0.00: 
                         lexic_diff = vs_score_dif
                 else:
                     lexic_diff = gr_score_dif
         else:
-            if abs(gr_score_dif) > 0.001: 
+            if abs(gr_score_dif) > 0.00: 
                 lexic_diff = gr_score_dif  
             else:
                 lexic_diff = vs_score_dif
@@ -799,8 +796,7 @@ class ClusterAssignmentMemory():
                 self.memory[last_index] = assignment
                 self.memory[last_index].explored = False
             else:
-                if last_index is not None:
-                    self.memory[last_index].explored = True
+                #if last_index is not None: self.memory[last_index].explored = True
                 self.memory.append(assignment)
                 self.memory[-1].explored = False
 
@@ -843,8 +839,8 @@ class ClusterAssignmentMemory():
         pareto_dominated_counts = [0] * len(self.memory)
         equivalent_assignments_counts = [0] * len(self.memory)
         similarity_index = [0] * len(self.memory)
-        explored_and_pareto = [0] * len(self.memory)
-        explored = [0] * len(self.memory)
+        explored_and_pareto_dominated = [False] * len(self.memory)
+        explored = [False] * len(self.memory)
         longevity = [0] * len(self.memory)
         grounding_score = [0] * len(self.memory)
         vs_score = [0] * len(self.memory)
@@ -856,8 +852,8 @@ class ClusterAssignmentMemory():
                 similarity_index[i] = 0
                 continue
             if self.memory[i].explored:
-                explored_and_pareto[i] = 1
-                explored[i] = 1
+                explored_and_pareto_dominated[i] = True
+                explored[i] = True
             longevity[i] = self.memory[i].n_training_steps
             grounding_score[i] = np.mean(self.memory[i].combined_cluster_score_gr_aggr(conciseness_if_K_is_1=self.maximum_conciseness_gr))
             vs_score[i] = self.memory[i].combined_cluster_score_vs(conciseness_if_L_is_1=self.maximum_conciseness_vs)
@@ -870,7 +866,7 @@ class ClusterAssignmentMemory():
                     if cmp_pareto > 0:
                         pareto_dominated_counts[i] += 1
                     else:
-                        explored_and_pareto[i] = 0
+                        explored_and_pareto_dominated[i] = False
                     #print("SIM", sim, i ,j)
                     if sim >= sim_threshold:
                         equivalent_assignments_counts[i] += 1 
@@ -880,17 +876,20 @@ class ClusterAssignmentMemory():
         # Eliminate the one pareto dominated by the most others, or all if exhaustive (only at the end or under all examples explored)
         explored_and_pareto_dif = [1 if explored[i] and pareto_dominated_counts[i] > 0 else 0 for i in range(len(self.memory))]
         if append_made:
-            last_assignment_and_not_pareto = [1 if self.last_selected_assignment is not None and self.last_selected_assignment == i and self.compare_assignments(self.memory[-1], self.memory[self.last_selected_assignment])[1]<=0 else 0 for i in range(len(self.memory))]
+            last_assignment_and_not_pareto = [1 if self.last_selected_assignment is not None and self.last_selected_assignment == i and self.compare_assignments(self.memory[-1], self.memory[self.last_selected_assignment])[1]>=0 else 0 for i in range(len(self.memory))]
         else:
             last_assignment_and_not_pareto = [0] * len(self.memory)
-        if (len(self.memory) > self.max_size) or (exhaustive and (max(pareto_dominated_counts) > 0 or sum(equivalent_assignments_counts) > 0)):
+        if (len(self.memory) > self.max_size) or (exhaustive and (max(pareto_dominated_counts) > 0 or sum(equivalent_assignments_counts) > 0))  or np.median(similarity_index) <= 0.0:
+            
             sorted_indices = sorted(list(range(len(self.memory))), key=lambda x: (
-                explored_and_pareto[x],
-                explored_and_pareto_dif[x],
-                last_assignment_and_not_pareto[x], # This tries to remove the last selected assignment if it is pareto equivalent or dominated by the last inserted.
+                #int(explored_and_pareto_dominated[x]),
+                #explored_and_pareto_dif[x],
                 equivalent_assignments_counts[x], 
-                pareto_dominated_counts[x], 
                 similarity_index[x], 
+                last_assignment_and_not_pareto[x], # This tries to remove the last selected assignment if it is pareto equivalent or dominated by the last inserted.
+                
+                pareto_dominated_counts[x], 
+                
                 #-longevity[x], 
                 -grounding_score[x],
                 -vs_score[x]
@@ -932,7 +931,8 @@ class ClusterAssignmentMemory():
                                 self.last_selected_assignment = None
                             elif self.last_selected_assignment > eliminated_index:
                                 self.last_selected_assignment -= 1
-            
+            if exhaustive:
+                self.clean_memory(exhaustive=exhaustive,sim_threshold=sim_threshold, append_made=False)
         return
         
     def sort_lexicographic(self, lexicographic_vs_first=False):
@@ -942,16 +942,19 @@ class ClusterAssignmentMemory():
         if self.last_selected_assignment is not None:
             self.last_selected_assignment = new_indices[self.last_selected_assignment]
         return new_indices  
-    def get_random_weighted_assignment(self, lexicographic_vs_first=True)-> ClusterAssignment:
+    def get_random_weighted_assignment(self, consider_only_unexplored=False, lexicographic_vs_first=True)-> ClusterAssignment:
         self.sort_lexicographic(lexicographic_vs_first=lexicographic_vs_first)
-        indices_non_explored = [i for i, assignment in enumerate(self.memory) if not assignment.explored]
-        
-        if len(indices_non_explored) == 0:
+        if consider_only_unexplored:
+            indices_selectable = [i for i, assignment in enumerate(self.memory) if not assignment.explored]
+        else:
+            indices_selectable = [i for i in range(len(self.memory))]
+            
+        if len(indices_selectable) == 0:
             self.clean_memory(exhaustive=True)
             return None
-        n = len(indices_non_explored)
+        n = len(indices_selectable)
         weights = [2*(n-i)/(n*(n+1)) for i in range(n)] # Linear rank selection Goldberg
-        assignment_index =  random.choices(indices_non_explored, weights=weights, k=1)[0]
+        assignment_index =  random.choices(indices_selectable, weights=weights, k=1)[0]
         assignment = self.memory[assignment_index]
         self.last_selected_assignment = assignment_index
         return self.assignment_with_env(assignment)

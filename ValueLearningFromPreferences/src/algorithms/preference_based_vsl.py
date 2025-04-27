@@ -1134,50 +1134,43 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     )
                     self.reward_trainer.epochs = prev_epochs
             best_assignments_list.initializing = False
-            choosing = True
             
-            while choosing:
+            
+            starting_assignment = best_assignments_list.get_random_weighted_assignment()
+            if starting_assignment.explored:
+                use_random = True
                 
-                starting_assignment = best_assignments_list.get_random_weighted_assignment()
-                if starting_assignment is None:
-                    choosing = True
-                    for b in best_assignments_list.memory:
-                        b.explored = False
-                    use_random = True
-                    print("MUTATION PROB", mutation_prob)
-                else:
-                    choosing = False
-                    grounding_deviation = 1.0-np.mean(starting_assignment.gr_score)
-                    value_system_deviation = 2.0-starting_assignment.representativity_vs(aggr=np.min)-starting_assignment.conciseness_vs()
-                    if (random.random() < exploration) or use_random:
-                        use_random = False
-                        starting_assignment.explored = False
-                        reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments,
-                                                                                mutation_scale=mutation_scale,
-                                                                                mutation_prob=mutation_prob,
-                                                                                grounding_deviation=grounding_deviation,
-                                                                                value_system_deviation=value_system_deviation)
-                        reference_assignment.n_training_steps = starting_assignment.n_training_steps
-                        reference_assignment.optimizer_state = deepcopy(starting_assignment.optimizer_state)
-                        reference_assignment.explored=False
-                        self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
-                        starting_assignment = 'start_random'
-                        # this is very inneficient...
-                        # assert self.reward_trainer.optim.time == 0
-                        #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
-                    else:
-                        starting_assignment.explored = True
-                        self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, starting_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
+            
+            if (random.random() < exploration) or use_random:
+                use_random = False
+                grounding_deviation = 1.0-np.mean(starting_assignment.gr_score)
+                value_system_deviation = 2.0-starting_assignment.representativity_vs(aggr=np.min)-starting_assignment.conciseness_vs()
+                reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments,
+                                                                        mutation_scale=mutation_scale,
+                                                                        mutation_prob=mutation_prob,
+                                                                        grounding_deviation=grounding_deviation,
+                                                                        value_system_deviation=value_system_deviation,prev_cs_to_agent=starting_assignment.assignment_vs)
+                reference_assignment.n_training_steps = starting_assignment.n_training_steps
+                reference_assignment.optimizer_state = deepcopy(starting_assignment.optimizer_state)
+                reference_assignment.explored=False
+                self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
+                starting_assignment = reference_assignment # now it is random. It makes sense to use it.
+                # this is very inneficient...
+                # assert self.reward_trainer.optim.time == 0
+                #assert np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
+            else:
+                starting_assignment.explored = True
+                self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, starting_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
 
-                        check_assignment_consistency(starting_assignment.grounding_per_value_per_cluster,starting_assignment.value_system_per_cluster,
-                                                    starting_assignment.agent_to_gr_cluster_assignments,
-                                                    assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
-                                                    reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
-                        
-                    check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
-                                                    assignment_aid_to_gr_cluster=original_agent_to_gr_cluster_assignments,
-                                                    assignment_aid_to_vs_cluster=original_agent_to_vs_cluster_assignments, 
-                                                    reward_models_per_aid=reward_model_per_agent_id)
+                check_assignment_consistency(starting_assignment.grounding_per_value_per_cluster,starting_assignment.value_system_per_cluster,
+                                            starting_assignment.agent_to_gr_cluster_assignments,
+                                            assignment_aid_to_vs_cluster=starting_assignment.agent_to_vs_cluster_assignments, 
+                                            reward_models_per_aid=starting_assignment.reward_model_per_agent_id)
+                
+            check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
+                                            assignment_aid_to_gr_cluster=original_agent_to_gr_cluster_assignments,
+                                            assignment_aid_to_vs_cluster=original_agent_to_vs_cluster_assignments, 
+                                            reward_models_per_aid=reward_model_per_agent_id)
                 
                 #assert not np.all(np.array([th.allclose(vti, th.zeros_like(vti)) for vti in self.reward_trainer.optim.vt]))
                     
@@ -1247,10 +1240,14 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         return best_assignments_list
 
     def generate_mutated_assignment(self, reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, assignment_gr, assignment_vs, 
+                                    prev_agent_to_gr=None, prev_cs_to_agent=None,
                                     mutation_scale=5.0,
                                     mutation_prob=0.1,
                                     grounding_deviation=1.0,value_system_deviation=1.0):
         example_model = list(reward_model_per_agent_id.values())[0]
+
+        
+
         with th.no_grad():
             grounding_per_value_per_cluster_c = [[None for c in range(len(cs_per_vi))] for cs_per_vi in grounding_per_value_per_cluster]
             value_system_per_cluster_c = None
@@ -1266,7 +1263,18 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             
             grounding_per_value_per_cluster_c = deepcopy(grounding_per_value_per_cluster)
             value_system_per_cluster_c = deepcopy(value_system_per_cluster)
-            
+
+            l_prev = [1 for pcs in prev_cs_to_agent if len(pcs) > 0]
+            expand_or_reduce = random.random() < 0.5
+
+            valid_new_clusters = [i for i in range(len(prev_cs_to_agent))  if len(prev_cs_to_agent[i]) > 0]  # The old ones
+            if expand_or_reduce is True or l_prev == 1:
+                cs = np.random.choice(len(prev_cs_to_agent))
+                valid_new_clusters.append(cs)
+            elif expand_or_reduce is False or l_prev == len(prev_cs_to_agent):
+                cs = np.random.choice(len(valid_new_clusters))
+                valid_new_clusters.pop(cs)
+
             for aid, cluster_vs_aid in assignment_vs.items():
                 agent_to_gr_cluster_assignments[aid] = {}
                 grclusterby_value_aid = assignment_gr[aid]
@@ -1275,8 +1283,18 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 rc.set_mode(example_model.mode)
                 rc.reset_learned_grounding_function()
 
-                assignment_vs_new[cluster_vs_aid].append(aid)
-                agent_to_vs_cluster_assignments[aid] = cluster_vs_aid
+                if random.random() > mutation_prob:
+                    if cluster_vs_aid not in valid_new_clusters:
+                        cs = np.random.choice(valid_new_clusters)
+                    else:
+                        cs = cluster_vs_aid
+                    assignment_vs_new[cs].append(aid)
+                    agent_to_vs_cluster_assignments[aid] = cs    
+                else:
+                    cs = np.random.choice(valid_new_clusters)
+                    assignment_vs_new[cs].append(aid)
+                    agent_to_vs_cluster_assignments[aid] = cs
+
                 for vi, cluster_vi_aid in grclusterby_value_aid.items():
                     assignment_gr_new[vi][cluster_vi_aid].append(aid)
                     agent_to_gr_cluster_assignments[aid][vi] = cluster_vi_aid
@@ -1284,9 +1302,11 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                         for param in grounding_per_value_per_cluster_c[vi][cluster_vi_aid].parameters():
                             if param.requires_grad:
                                 param: th.Tensor
-                                mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
-                                normal = th.empty_like(param).normal_(0, mutation_scale*grounding_deviation)*th.norm(param)
-                                param.add_(th.where(mask, normal, th.zeros_like(param)))
+                                #mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
+                                normal = th.empty_like(param).normal_(0, mutation_scale*grounding_deviation*th.norm(param))
+                                #param.add_(th.where(mask, normal, th.zeros_like(param)))
+                                
+                                param.add_(normal)
                         # Assert that the original is different from the updated network
                         #grounding_per_value_per_cluster_c[vi][cluster_vi_aid] = rc.get_network_for_value(vi)
                                     
@@ -1297,9 +1317,10 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     for param in value_system_per_cluster_c[cluster_vi_aid].parameters():
                             if param.requires_grad:
                                 param: th.Tensor
-                                mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
-                                normal = th.empty_like(param).normal_(0, mutation_scale*value_system_deviation)*th.norm(param)
-                                param.add_(th.where(mask, normal, th.zeros_like(param)))
+                                #mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
+                                normal = th.empty_like(param).normal_(0, mutation_scale*value_system_deviation*th.norm(param))
+                                #param.add_(th.where(mask, normal, th.zeros_like(param)))
+                                param.add_(normal)
 
                     
                 rc.set_trained_alignment_function_network(value_system_per_cluster_c[cluster_vs_aid])

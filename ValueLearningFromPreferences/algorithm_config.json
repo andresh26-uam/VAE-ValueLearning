@@ -375,8 +375,8 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.005,
-                    "lr_value_system": 0.01,
+                    "lr_grounding": 0.008,
+                    "lr_value_system": 0.03,
                     "lr_lambda": 0.005,
                     "initial_lambda": 0.01,
                     "lambda_decay": 0.0001,
@@ -393,7 +393,7 @@
                     "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "cluster_similarity_penalty": 100.0
+                    "cluster_similarity_penalty": 10.0
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
@@ -410,9 +410,9 @@
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
-                    "mutation_prob": 0.5,
-                    "mutation_scale": 0.01,
-                    "max_assignment_memory": 8
+                    "mutation_prob": 0.1,
+                    "mutation_scale": 0.05,
+                    "max_assignment_memory": 5
                 },
 
                 "learner_policy_class": "PPO",
@@ -432,10 +432,10 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 3,
-                    "refining_steps_after_cluster_assignment": 4,
+                    "epochs": 2,
+                    "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 8,
+                    "initial_refining_steps": 15,
                     "initial_exploration_rate": 0.5,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null

@@ -1,4 +1,5 @@
 import argparse
+from collections import OrderedDict
 import os
 import pprint
 import random
@@ -32,82 +33,111 @@ def parse_enames_for_learning_curve(learning_curve_from):
     if not learning_curve_from:
         return []
     return [name.strip() for name in learning_curve_from.split(',') if name.strip()]
-def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str,ClusterAssignment], experiment_name, output_columns, output_dir="test_results", label='train_set'):
+def generate_assignment_tables(assignment_identifier_to_assignment, experiment_name, output_columns, output_dir="test_results", values_names=None, label='train_set'):
     
     # Ensure output directories exist
-    csv_dir = os.path.join(output_dir, experiment_name, label, 'tables' , 'general', "csv")
+    csv_dir = os.path.join(output_dir, experiment_name, label, 'tables', 'general', "csv")
     latex_dir = os.path.join(output_dir, experiment_name, label, 'tables', 'general', "latex")
     os.makedirs(csv_dir, exist_ok=True)
     os.makedirs(latex_dir, exist_ok=True)
 
-    # Select the first, middle, and last assignments
-    
+    for position, assignments in assignment_identifier_to_assignment.items():
+        # Ensure assignments is always a list for simplicity
+        is_list = True
+        if not isinstance(assignments, list):
+            is_list = False
+            assignments = [assignments]
 
-    for position, assignment in assignment_identifier_to_assignment:
         # Prepare data for the table
         data = []
         
-        for cluster_idx, agents in enumerate(assignment.assignment_vs):
-            if len(agents) == 0:
-                continue
+        for cluster_idx in range(assignments[0].L):
             row = {}
             row["Cluster"] = cluster_idx + 1
             if output_columns.get("value_systems", False):
-                row["Value System"] = ", ".join(f"{v:.3f}" for v in assignment.get_value_system(cluster_idx))
+                value_systems = [assignment.get_value_system(cluster_idx) for assignment in assignments]
+                means = np.mean(value_systems, axis=0)
+                stds = np.std(value_systems, axis=0)
+                row["Value System"] = ", ".join(f"{mean:.3f} ± {std:.3f}" for mean, std in zip(means, stds))
             if output_columns.get("num_agents", False):
-                row["Number of Agents"] = len(agents) 
+                num_agents = [len(assignment.assignment_vs[cluster_idx]) for assignment in assignments]
+                row["Number of Agents"] = f"{np.mean(num_agents):.1f} ± {np.std(num_agents):.1f}"
             if output_columns.get("representativity", False):
-                intra_cluster_distances = [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in agents]
-                row["Representativeness"] = ClusterAssignment._representativity_cluster(intra_cluster_distances)
+                representativities = [
+                    ClusterAssignment._representativity_cluster(
+                        [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
+                    ) for assignment in assignments
+                ]
+                row["Representativeness"] = f"{np.mean(representativities):.3f} ± {np.std(representativities):.3f}"
             if output_columns.get("conciseness", False):
-                if assignment.L == 1:
-                    row['Conciseness'] = '-'
-                else:
-                    inter_cluster_distances = [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx]
-                    row["Conciseness"] = ClusterAssignment._conciseness(inter_cluster_distances, assignment.L)
+                conciseness_values = [
+                    ClusterAssignment._conciseness(
+                        [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
+                        assignment.L
+                    ) if assignment.L > 1 else '-' for assignment in assignments
+                ]
+                row["Conciseness"] = f"{np.mean(conciseness_values):.3f} ± {np.std(conciseness_values):.3f}" if assignments[0].L > 1 else '-'
             if output_columns.get("combined_score", False):
-                # Use '-' if L is 1, otherwise calculate the combined score
-                row["Combined Score"] = "-" if assignment.L == 1 else row["Conciseness"]/(1.0-row['Representativeness'])  
+                combined_scores = [
+                    assignment.conciseness_vs() / (1.0 - assignment.representativity_vs()) if assignment.L > 1 else '-'
+                    for assignment in assignments
+                ]
+                row["Combined Score"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
             if output_columns.get("grounding_coherence", False):
-                # Expand coherence array into separate columns
-                coherence_array = assignment.gr_score
-
-                for i, value in enumerate(coherence_array):
-                    intra_cluster_distances_gr = [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in agents]
-                    row[f"Coherence V{i + 1}"] = ClusterAssignment._representativity_cluster(intra_cluster_distances_gr)
+                coherence_values = [
+                    [
+                        ClusterAssignment._representativity_cluster(
+                            [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in assignment.assignment_vs[cluster_idx]]
+                        ) for i in range(len(assignment.gr_score))
+                    ] for assignment in assignments
+                ]
+                coherence_means = np.mean(coherence_values, axis=0)
+                coherence_stds = np.std(coherence_values, axis=0)
+                for i, (mean, std) in enumerate(zip(coherence_means, coherence_stds)):
+                    row[f"Coherence V{i + 1}" if values_names is None else f"Coherence {values_names[i]}"] = f"{mean:.3f} ± {std:.3f}"
             data.append(row)
-        # Assingment-level information:
+
+        # Assignment-level information
         row = {}
         row["Cluster"] = "Total"
         if output_columns.get("value_systems", False):
-            row["Value System"] = ", ".join(f"{v:.3f}" for v in assignment.average_value_system())
+            avg_value_systems = [assignment.average_value_system() for assignment in assignments]
+            means = np.mean(avg_value_systems, axis=0)
+            stds = np.std(avg_value_systems, axis=0)
+            row["Value System"] = ", ".join(f"{mean:.3f} ± {std:.3f}" for mean, std in zip(means, stds))
         if output_columns.get("num_agents", False):
-            row["Number of Agents"] = assignment.n_agents
+            num_agents = [assignment.n_agents for assignment in assignments]
+            row["Number of Agents"] = f"{np.mean(num_agents):.1f} ± {np.std(num_agents):.1f}"
         if output_columns.get("representativity", False):
-            row["Representativeness"] = assignment.representativity_vs()
+            representativities = [assignment.representativity_vs() for assignment in assignments]
+            row["Representativeness"] = f"{np.mean(representativities):.3f} ± {np.std(representativities):.3f}"
         if output_columns.get("conciseness", False):
-            if assignment.L == 1:
-                row['Conciseness'] = '-'
-            else:
-                row["Conciseness"] = assignment.conciseness_vs()
+            conciseness_values = [assignment.conciseness_vs() if assignment.L > 1 else '-' for assignment in assignments]
+            row["Conciseness"] = f"{np.mean(conciseness_values):.3f} ± {np.std(conciseness_values):.3f}" if assignments[0].L > 1 else '-'
         if output_columns.get("combined_score", False):
-            # Use '-' if L is 1, otherwise calculate the combined score
-            row["Combined Score"] = "-" if assignment.L == 1 else assignment.combined_cluster_score_vs()  
+            combined_scores = [
+                assignment.conciseness_vs() / (1.0 - assignment.representativity_vs()) if assignment.L > 1 else '-'
+                for assignment in assignments
+            ]
+            row["Combined Score"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
         if output_columns.get("grounding_coherence", False):
-            coherence_array = assignment.gr_score
-            for i, value in enumerate(coherence_array):
-                row[f"Coherence V{i + 1}"] = coherence_array[i]
-        
+            coherence_values = [assignment.gr_score for assignment in assignments]
+            coherence_means = np.mean(coherence_values, axis=0)
+            coherence_stds = np.std(coherence_values, axis=0)
+            for i, (mean, std) in enumerate(zip(coherence_means, coherence_stds)):
+                row[f"Coherence V{i + 1}" if values_names is None else f"Coherence {values_names[i]}"] = f"{mean:.3f} ± {std:.3f}"
         data.append(row)
+
         # Convert to DataFrame
         df = pd.DataFrame(data)
 
         # Save to CSV
-        csv_path = os.path.join(csv_dir, f"{position}.csv")
+        
+        csv_path = os.path.join(csv_dir, f"{position}_list.csv" if is_list else f"{position}.csv")
         df.to_csv(csv_path, index=False)
 
         # Save to LaTeX
-        latex_path = os.path.join(latex_dir, f"{position}.tex")
+        latex_path = os.path.join(latex_dir, f"{position}_list.tex" if is_list else f"{position}.tex")
         with open(latex_path, "w") as f:
             f.write(df.to_latex(index=False, escape=False))
 
@@ -287,7 +317,13 @@ if __name__ == "__main__":
     target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments, env_state = load_training_results(
         experiment_name)
     assignment_memory: ClusterAssignmentMemory = metrics['assignment_memory']
-    target_agent_and_vs_to_learned_ones_per_lre, reward_net_pair_agent_and_vs_per_lre, metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre= {}, {}, {}, {}, {}
+    assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
+    num_digits = len(str(len(assignment_memory.memory)))
+    assignments_identifier_to_assignment = OrderedDict({
+        f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
+    })
+    target_agent_and_vs_to_learned_ones_per_lre, reward_net_pair_agent_and_vs_per_lre, metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre= {}, {}, {}, {}, {},{}
+    
     if hasattr(parser_args, 'learning_curve_from') and parser_args.learning_curve_from is not None:
         # If learning curve from is specified, load the results for each experiment
         # This will be used to generate the learning curve
@@ -298,10 +334,15 @@ if __name__ == "__main__":
             ename_clean = find_parse_ename(ename)[1]
             enames_for_lr_curve.append(ename_clean)
             target_agent_and_vs_to_learned_ones_per_lre[ename_clean], reward_net_pair_agent_and_vs_per_lre[ename_clean], metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _ = load_training_results(
-            enames_for_lr_curve[-1])
+            ename_clean)
+            assignment_memories_per_lre[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
+            assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=True)
 
+        plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve, assignment_memories=assignment_memories_per_lre)
+    assignments_identifier_to_assignment_lre = {
+        key: [assignment_memories_per_lre[ename_clean].memory[ikey] for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
+    }
 
-        plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve, assignment_memories={ename: metrics['assignment_memory'] for ename, metrics in metrics_per_lre.items()})
     config = exp_parser_args_base['config']
     society_config = exp_parser_args_base['society_config']
     exp_parser_args = exp_parser_args_base['parser_args']
@@ -398,10 +439,7 @@ if __name__ == "__main__":
     best_gr_then_vs_assignment = assignment_memory.memory[0]
 
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
-    num_digits = len(str(len(assignment_memory.memory)))
-    assignments_identifier_to_assignment = [
-        (f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train", assignment_memory.memory[i]) for i in range(0, len(assignment_memory.memory))
-    ]
+    
     if plot_test:
         test_assignment_memory = ClusterAssignmentMemory(assignment_memory.max_size, n_values=assignment_memory.memory[0].n_values)
         test_assignment_memory.maximum_conciseness_vs = assignment_memory.maximum_conciseness_vs
@@ -446,13 +484,18 @@ if __name__ == "__main__":
         "combined_score": True,
         "grounding_coherence": True,
     }
+    values_names = environment_data['values_names']
+    values_short_names = environment_data['values_short_names']
 
     # Generate tables
-
-    generate_assignment_tables(assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='train_set')
+    # For the supplied assignment memory:
+    generate_assignment_tables(assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='train_set',values_names=values_short_names)
     if plot_test:
-        generate_assignment_tables(test_assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='test_set')
-
+        generate_assignment_tables(test_assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
+    # For the list of assignments with different seeds_
+    generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='train_set',values_names=values_short_names)
+    if plot_test:
+        generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
 
     
     # 3: Explainability TODO
@@ -470,8 +513,6 @@ if __name__ == "__main__":
     for i, (data_train_or_test, dataset_train_or_test) in enumerate(zip([data_train, data_test], [dataset_train, dataset_test])):
         if not plot_test and i == 1:
             continue
-        values_names = environment_data['values_names']
-        values_short_names = environment_data['values_short_names']
 
         agent = dataset_train_or_test.agent_ids[0]
 
@@ -515,6 +556,7 @@ if __name__ == "__main__":
 
     # 4: Plots. (PIE + HISTOGRAM + VISUALIZATION)
     best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_vs_gr.pdf", 
+                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters_vs_gr.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
@@ -522,6 +564,7 @@ if __name__ == "__main__":
                                                    fontsize=parser_args.plot_fontsize,)
     
     best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_gr_vs.pdf", 
+                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters_gr_vs.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
@@ -530,6 +573,7 @@ if __name__ == "__main__":
     
     if plot_test:
         best_vs_then_gr_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_vs_gr.pdf", 
+                                                            f"test_results/{experiment_name}/test_set/plots/hist_clusters_vs_gr.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
@@ -537,6 +581,7 @@ if __name__ == "__main__":
                                                    fontsize=parser_args.plot_fontsize,)
     
         best_gr_then_vs_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_gr_vs.pdf", 
+                                                            f"test_results/{experiment_name}/test_set/plots/hist_clusters_gr_vs.pdf",
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 

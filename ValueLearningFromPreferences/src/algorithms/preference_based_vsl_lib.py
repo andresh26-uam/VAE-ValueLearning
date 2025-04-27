@@ -995,7 +995,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                     for lw in loss_vs_per_cluster:
                         loss_vs += lw
             loss_vs/=total_discordance # CURRENT PAPER and TOTAL SUM
-
+            
             #print("TD?", total_discordance, len([ac for ac in agent_count_per_cluster if ac > 0]))
 
             #loss_vs/=len([ac for ac in agent_count_per_cluster if ac > 0]) # NO WEIGHTS
@@ -1286,16 +1286,16 @@ class ConstrainedOptimizer(VSLOptimizer):
         self.optimx.step()
         self.optimy.step()
         self.optim_lambdas.step()
+
+        if self.lambda_decay > 0:
+            with th.no_grad():
+                decay = th.zeros((), requires_grad=False)
+                for vi in range(len(self.lambdas)):
+                    if self.lambdas[vi] > self.initial_lambda:
+                        decay += (self.lambdas[vi].detach()*self.lambda_decay)
+                    self.lambdas[vi].data = th.clamp(self.lambdas[vi] - decay, min=self.initial_lambda)
         
-        with th.no_grad():
-            decay = th.zeros((), requires_grad=False)
-            for vi in range(len(self.lambdas)):
-                if self.lambda_decay > 0 and self.lambdas[vi] > self.initial_lambda:
-                    decay += (self.lambdas[vi].detach()*self.lambda_decay)
-                print(decay, self.initial_lambda)
-                self.lambdas[vi].data = th.clamp(self.lambdas[vi] - decay, min=self.initial_lambda)
-        
-            print("LAMBDA a", self.lambdas) 
+            #print("LAMBDA a", self.lambdas) 
         return None
 
 
@@ -1336,14 +1336,14 @@ class ConstrainedLoss(VSLCustomLoss):
         
         b = real_loss.backward()
         with th.no_grad():
-            print("LAMBDA b", self.lagrange_multipliers,  self.last_accuracy_gr, self.best_accuracies)  
+            #print("LAMBDA b", self.lagrange_multipliers,  self.last_accuracy_gr, self.best_accuracies)  
             for vi,l in enumerate(self.lagrange_multipliers):
 
                 if self.last_accuracy_gr[vi] < self.best_accuracies[vi]:
                     l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization), min=0.0).detach()
                 else:
                     self.best_accuracies[vi] = float(self.last_accuracy_gr[vi])
-                    l.grad = th.zeros((), requires_grad=False)
+                    l.grad = None
              
         return b
 class SobaOptimizer(VSLOptimizer):

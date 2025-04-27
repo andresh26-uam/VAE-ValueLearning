@@ -3,7 +3,7 @@
         "name": "RouteChoiceEnvironmentApolloComfort-v0",
         "n_values": 3,
         "K": 1,
-        "L": 3,
+        "L": 12,
         "horizon": 2,
 
         "is_contextual": false,
@@ -43,9 +43,10 @@
                 "optimizer_kwargs": {
                     "lr": 0.01,
                     "lr_grounding": 0.005,
-                    "lr_value_system": 0.003,
-                    "lr_lambda": 0.01,
-                    "initial_lambda": 0.2,
+                    "lr_value_system": 0.01,
+                    "lr_lambda": 0.005,
+                    "initial_lambda": 0.01,
+                    "lambda_decay": 0.0001,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -55,12 +56,10 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "conc_apply_on_worst_clusters_only": false,
-                    "repr_apply_on_worst_clusters_only": false,
+                    "conc_apply_on_worst_clusters_only": true,
+                    "repr_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
-                    "cluster_similarity_penalty": 0.1,
-                    "minimal_lambda": 0.01,
-                    "lambda_decay": 0.0
+                    "cluster_similarity_penalty": 10
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
@@ -97,10 +96,10 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 1000,
+                    "epochs": 500,
                     "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 10,
+                    "initial_refining_steps": 8,
                     "initial_exploration_rate": 0.0,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
