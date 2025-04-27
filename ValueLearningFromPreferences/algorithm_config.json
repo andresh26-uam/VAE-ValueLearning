@@ -389,8 +389,8 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "repr_apply_on_worst_clusters_only": false,
-                    "conc_apply_on_worst_clusters_only": false,
+                    "repr_apply_on_worst_clusters_only": true,
+                    "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
                     "cluster_similarity_penalty": 100.0
