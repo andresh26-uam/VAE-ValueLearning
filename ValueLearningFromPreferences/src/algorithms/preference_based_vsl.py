@@ -1138,7 +1138,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             
             while choosing:
                 
-                starting_assignment = best_assignments_list.get_random_weighted_assignment(override_explore=True)
+                starting_assignment = best_assignments_list.get_random_weighted_assignment()
                 if starting_assignment is None:
                     choosing = True
                     for b in best_assignments_list.memory:
@@ -1149,7 +1149,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     choosing = False
                     grounding_deviation = 1.0-np.mean(starting_assignment.gr_score)
                     value_system_deviation = 2.0-starting_assignment.representativity_vs(aggr=np.min)-starting_assignment.conciseness_vs()
-                    if random.random() < exploration or use_random:
+                    if (random.random() < exploration) or use_random:
                         use_random = False
                         starting_assignment.explored = False
                         reference_assignment = self.generate_mutated_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, original_agent_to_gr_cluster_assignments, original_agent_to_vs_cluster_assignments,
@@ -1158,8 +1158,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                                                                                 grounding_deviation=grounding_deviation,
                                                                                 value_system_deviation=value_system_deviation)
                         reference_assignment.n_training_steps = starting_assignment.n_training_steps
-                        reference_assignment.optimizer_state = starting_assignment.optimizer_state
-                        
+                        reference_assignment.optimizer_state = deepcopy(starting_assignment.optimizer_state)
+                        reference_assignment.explored=False
                         self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, reference_assignment, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments)
                         starting_assignment = 'start_random'
                         # this is very inneficient...
@@ -1201,7 +1201,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             #assert starting_assignment.optimizer_state['time'] != 0
             print("BEST ASSIGNMENTS so far:", best_assignments_list)
 
-            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False, lexicographic_vs_first=True)
+            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, lexicographic_vs_first=True)
             # Save the best assignment of each iteration
             best_assignment.save(historical_assignments_save_folder, f"best_assignment_iter_{global_iter}.pkl")
 
@@ -1241,7 +1241,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 callback(self._iteration)
             self._iteration += 1
         best_assignments_list.clean_memory(exhaustive=True)
-        best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, override_explore_state=False, lexicographic_vs_first=False)
+        best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, lexicographic_vs_first=False)
         self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments, reference_assignment=best_assignment)
         
         return best_assignments_list

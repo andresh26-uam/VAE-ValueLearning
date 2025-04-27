@@ -388,14 +388,12 @@ if __name__ == "__main__":
     if exp_parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
     vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
-    pprint.pprint(config)
+    pprint.pprint(config[exp_parser_args.environment])
     
     
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
     best_vs_then_gr_assignment = assignment_memory.memory[0]
 
-    print(assignment_memory)
-    exit(0)
     assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
     best_gr_then_vs_assignment = assignment_memory.memory[0]
 

@@ -15,7 +15,8 @@ def merge_dicts_recursive(base, update):
             if key in base and isinstance(base[key], dict) and isinstance(value, dict):
                 merge_dicts_recursive(base[key], value)
             else:
-                base[key] = value
+                if key not in base:
+                    base[key] = value
 
 
 class NpEncoder(json.JSONEncoder):
