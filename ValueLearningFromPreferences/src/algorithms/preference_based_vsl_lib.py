@@ -366,6 +366,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         only_for_alignment_function=None,
         only_grounding=False,
         return_rewards_per_agent=False,
+        return_rewards_global = True,
         add_probs_per_agent=False
     ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor], Optional[th.Tensor]]:
         """Computes the preference probability of the first fragment for all pairs.
@@ -399,10 +400,14 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         if return_rewards_per_agent:
             rews_vs_per_aid = dict()
             rews_gr_per_aid = dict()
+        rews_vs = None
+        rews_gr = None
+
         counter_idx = 0
 
         #  TODO... Fragments per agent id... But remain in the order said by fragment_pairs
         n_values = 0
+        idx_global = 0
         for aid, fragment_pairs_aid in fragment_pairs_per_agent_id.items():
             if n_values == 0:
                 n_values = fragment_pairs_aid[0][0].value_rews.shape[0]
@@ -410,16 +415,23 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             model = models_per_agent.get(aid, custom_model_per_agent_id)
             n_fragments = len(fragment_pairs_aid)
             fragment_size = len(fragment_pairs_aid[0][0])
+            if idx_global == 0:
+                if return_rewards_global:
+                    rews_vs = (th.empty(total_number_of_fragment_pairs, fragment_size, dtype=dtype), th.empty(total_number_of_fragment_pairs, fragment_size, dtype=dtype))
+                    rews_gr = (th.empty(
+                        (total_number_of_fragment_pairs, fragment_size, self.algorithm.env.n_values), dtype=dtype), th.empty(
+                        (total_number_of_fragment_pairs, fragment_size, self.algorithm.env.n_values), dtype=dtype))
+            
 
             probs_vs_per_aid[aid] = th.empty(n_fragments, dtype=dtype)
             if only_for_alignment_function is None:
                 probs_gr_per_aid[aid] = th.zeros(
-                    (len(fragment_pairs_aid), n_values), dtype=dtype)
+                    (n_fragments, n_values), dtype=dtype)
                 if return_rewards_per_agent:
                     rews_vs_per_aid[aid] = None # tuple initialized later.
                     rews_gr_per_aid[aid] = (th.empty(
-                    (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype), th.empty(
-                    (len(fragment_pairs_aid), fragment_size, n_values), dtype=dtype))
+                    (n_fragments, fragment_size, n_values), dtype=dtype), th.empty(
+                    (n_fragments, fragment_size, n_values), dtype=dtype))
             with th.no_grad():
                 all_transitions_aid = rollout.flatten_trajectories(
                     [frag for fragment in fragment_pairs_aid for frag in fragment])
@@ -427,7 +439,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             all_rews_vs_aid, all_rews_gr_aid = self.rewards(
                 all_transitions_aid, only_with_alignment=only_for_alignment_function is not None, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
             
-                
                 
 
             idx = 0
@@ -460,6 +471,12 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                 if not only_grounding:
                     rews1_vsaid_all, rews2_vsaid_all = PreferenceModelClusteredVSL._slice_all_transitions_into_pairs(
                         all_rews_vs_aid, fragment_size)
+                    if return_rewards_global:
+                        
+                        rews_vs[0][idx_global:idx_global+len(rews1_vsaid_all),:] = rews1_vsaid_all
+                        rews_vs[1][idx_global:idx_global+len(rews2_vsaid_all),:] = rews2_vsaid_all
+                        
+
                     probs_vs_per_aid[aid] = self.probability(
                         rews1_vsaid_all, rews2_vsaid_all)
                     if return_rewards_per_agent:
@@ -471,11 +488,15 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                             all_rews_gr_aid[j], fragment_size)
                         probs_gr_per_aid[aid][:, j] = self.probability(
                             rews1_graid_all_j, rews2_graid_all_j)
+                        
+                        if return_rewards_global:
+                            rews_gr[0][idx_global:idx_global+len(rews1_graid_all_j),:,j] = rews1_graid_all_j
+                            rews_gr[1][idx_global:idx_global+len(rews2_graid_all_j),:,j] = rews2_graid_all_j
                         if return_rewards_per_agent:
                             rews_gr_per_aid[aid][0][:, :, j] = rews1_graid_all_j
                             rews_gr_per_aid[aid][1][:, :, j] = rews2_graid_all_j
                             assert rews_gr_per_aid[aid][0].shape == (len(fragment_pairs_aid), fragment_size, n_values)
-                
+                idx_global += len(rews1_vsaid_all)
             with th.no_grad():    
                 if fragment_pairs_idxs_per_agent_id is not None:
                     fragment_idxs = fragment_pairs_idxs_per_agent_id[aid] #TODO optimize later to index rews_gr_per_aid
@@ -498,9 +519,9 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                 return probs_vs, probs_gr,
         else:
             if add_probs_per_agent:
-                return probs_vs, probs_gr, probs_vs_per_aid, probs_gr_per_aid, rews_vs_per_aid, rews_gr_per_aid
+                return probs_vs, probs_gr, probs_vs_per_aid, probs_gr_per_aid, rews_vs_per_aid, rews_gr_per_aid, rews_vs, rews_gr
             else:
-                return probs_vs, probs_gr, rews_vs_per_aid, rews_gr_per_aid
+                return probs_vs, probs_gr, rews_vs_per_aid, rews_gr_per_aid, rews_vs, rews_gr
 
     def rewards(self, transitions: Transitions, only_with_alignment=False, only_grounding=False, real=False, alignment=None, grounding=None, custom_model=None, reward_mode=None) -> th.Tensor:
         """Computes the reward for all transitions.

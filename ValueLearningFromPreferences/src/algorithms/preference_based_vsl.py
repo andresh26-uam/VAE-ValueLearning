@@ -441,9 +441,9 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                     
             print("Cluster assigned.")              
                                 
-            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_aid = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
+            probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_aid, rews_vs, rews_gr = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
                                                                                                 fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None, 
-                                                                                                add_probs_per_agent=True, return_rewards_per_agent=True)
+                                                                                                add_probs_per_agent=True, return_rewards_per_agent=True,return_rewards_global=True)
 
                                 
             vs_intra_dist, vs_inter_dist, vs_intra_per_agent, vs_inter_per_cluster_pair = self.vs_discordances(reward_model_per_agent_id=reward_model_per_agent_id,
@@ -452,7 +452,9 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                                                                                     fragment_pairs_per_aid=val_fragment_pairs_per_aid,
                                                                                     probs_per_aid=probs_vs_per_agent, preferences_per_aid=val_preferences_per_aid, 
                                                                                     
-                                                                                    assume_1_grounding=True,rews_gr_per_aid=rews_gr_per_aid, rews_vs_per_agent=rews_vs_per_agent)
+                                                                                    assume_1_grounding=True,
+                                                                                    rews_gr_per_aid=rews_gr_per_aid, rews_vs_per_agent=rews_vs_per_agent,
+                                                                                    rews_vs=rews_vs, rews_gr=rews_gr)
                                 
                                 # Grounding distances
             gr_intra_dist, gr_inter_dist, gr_intra_per_agent, gr_inter_per_cluster_pair = self.gr_discordances(grounding_per_value_per_cluster=grounding_per_value_per_cluster, 
@@ -529,7 +531,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                
         return gr_intra_cluster_distances, gr_inter_cluster_distances, gr_discordance_of_each_agent, gr_inter_dist_for_each_pair_of_clusters
     def vs_discordances(self, reward_model_per_agent_id, value_system_per_cluster, vs_cluster_to_agents_assignment, fragment_pairs_per_aid, preferences_per_aid, probs_per_aid, assume_1_grounding=True, rews_gr_per_aid: Dict[str, Tuple[th.Tensor, th.Tensor]] = None, 
-                            rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]] = None):
+                            rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]] = None,rews_vs: th.Tensor = None, rews_gr: th.Tensor = None):
         
         fragments_on_each_cluster_vs  = {(c1,c2): (vs_cluster_to_agents_assignment[c1], vs_cluster_to_agents_assignment[c2]) for c1,c2 in itertools.combinations(range(len(vs_cluster_to_agents_assignment)), r=2) }
         if len(fragments_on_each_cluster_vs) == 0:
@@ -550,6 +552,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
             for (ci, assigned_ci) in [(c1, assigned_c1), (c2, assigned_c2)]:
                 #print("CI", ci, fragments_on_each_cluster_per_aid.keys(), assigned_ci, vs_intra_cluster_distances_per_value_per_cluster.keys())
                 if ci not in fragments_on_each_cluster_per_aid.keys():
+                    fragments_on_each_cluster_per_aid[ci] = 0
                     if not assume_1_grounding: # TODO
                         fragments_on_each_cluster_per_aid[ci] = {aid: fragment_pairs_per_aid[aid] for aid in assigned_ci }
                         preferences_on_each_cluster_per_aid[ci] = {aid: preferences_per_aid[aid] for aid in assigned_ci }
@@ -581,8 +584,12 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     with th.no_grad():
                         vs1: ConvexAlignmentLayer = value_system_per_cluster[c1] 
                         vs2: ConvexAlignmentLayer = value_system_per_cluster[c2]
-                        rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
-                        rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
+                        if rews_vs is None:
+                            rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
+                            rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
+                        else:
+                            rews_f1_in_c1_c2 = rews_gr[0]
+                            rews_f2_in_c1_c2 = rews_gr[1]
                         rews_vs1_f1_in_c1_c2 = vs1.forward(rews_f1_in_c1_c2).squeeze(-1)
                         # TODO: optimize here: get the rews from vs1 ancd c1 from rews_vs_per_agent. Only in the misture recalculate.
                         #th.testing.assert_close(rews_vs_per_agent[agents_per_cluster[c1][0]][0] , rews_vs1_f1_in_c1_c2[0:rews_vs_per_agent[agents_per_cluster[c1][0]][0].shape[0]])
@@ -593,7 +600,6 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
                         probabilities_vs1_in_c1_c2 = self._preference_model.probability(rews_vs1_f1_in_c1_c2, rews_vs1_f2_in_c1_c2)
                         probabilities_vs2_in_c1_c2 = self._preference_model.probability(rews_vs2_f1_in_c1_c2, rews_vs2_f2_in_c1_c2)
-
                         ql_div_vs = discordance(probs=probabilities_vs1_in_c1_c2,gt_probs=probabilities_vs2_in_c1_c2, indifference_tolerance=0.0)
                                   
                 vs_inter_cluster_distances.append(ql_div_vs)
