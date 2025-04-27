@@ -749,13 +749,7 @@ class ClusterAssignmentMemory():
 
         changes_made = self.update_maximum_conciseness(assignment)
         
-        if self.initializing:
-            self.memory.append(assignment)
-            self.last_selected_assignment = None
-            if len(self.memory) == self.max_size:
-                self.initializing = False
-
-            return
+        
             
         if all([asa.explored for asa in self.memory]) and len(self.memory) >= self.max_size:
             self.clean_memory(exhaustive=True)  
@@ -777,7 +771,13 @@ class ClusterAssignmentMemory():
                         
             if not l1_exists:
                 self.memory.append(assignment)
-            
+        elif self.initializing:
+            self.memory.append(assignment)
+            self.last_selected_assignment = None
+            if len(self.memory) == self.max_size:
+                self.initializing = False
+
+            return    
         else: # general case.
             last_index = self.last_selected_assignment
             override_and_insert = False
