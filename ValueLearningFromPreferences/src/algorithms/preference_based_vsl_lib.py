@@ -1255,12 +1255,12 @@ class VSLCustomLoss(BaseVSLClusterRewardLoss):
         #th.nn.utils.clip_grad_norm_(self.params_vs, self.max_grad_norm_vs)
 class ConstrainedOptimizer(VSLOptimizer):
     def __init__(self, params_gr, params_vs,n_values, lr=0.001, lr_grounding=None, 
-                 lr_value_system=None, lr_lambda=None, initial_lambda=1.0,
+                 lr_value_system=None, lr_lambda=None, initial_lambda=1.0,lambda_decay=1e-9,
                  sub_optimizer_class=th.optim.Adam, **optimizer_kwargs):
         super(ConstrainedOptimizer, self).__init__(params_gr=params_gr, params_vs=params_vs, n_values=n_values, lr=lr, lr_grounding=lr_grounding, lr_value_system=lr_value_system, sub_optimizer_class=sub_optimizer_class, **optimizer_kwargs)
         self.lr_lambda = lr_lambda if lr_lambda is not None else lr_value_system / 10.0
         self.initial_lambda = initial_lambda
-        
+        self.lambda_decay = lambda_decay
         self.set_state({'time': 0, 'lambdas': [th.tensor(initial_lambda, requires_grad=True) for _ in range(n_values)]})
         
 
@@ -1286,6 +1286,16 @@ class ConstrainedOptimizer(VSLOptimizer):
         self.optimx.step()
         self.optimy.step()
         self.optim_lambdas.step()
+        
+        with th.no_grad():
+            decay = th.zeros((), requires_grad=False)
+            for vi in range(len(self.lambdas)):
+                if self.lambda_decay > 0 and self.lambdas[vi] > self.initial_lambda:
+                    decay += (self.lambdas[vi].detach()*self.lambda_decay)
+                print(decay, self.initial_lambda)
+                self.lambdas[vi].data = th.clamp(self.lambdas[vi] - decay, min=self.initial_lambda)
+        
+            print("LAMBDA a", self.lambdas) 
         return None
 
 
@@ -1316,29 +1326,25 @@ class ConstrainedLoss(VSLCustomLoss):
     
     def gradients(self, scalar_loss: th.Tensor, renormalization: float) -> None:
         
-        with th.no_grad():
-            if self.best_gr_losses is None:
+        if self.best_accuracies is None:
                 #self.best_gr_losses = [float('inf')]*len(self.gr_loss_per_vi)
                 self.best_accuracies = [0.0]*len(self.last_accuracy_gr)
-            for vi in range(len(self.gr_loss_per_vi)):
-                #gr_loss_vi = float(self.gr_loss_per_vi[vi].detach().numpy())* renormalization
-                gr_acc_vi = float(self.last_accuracy_gr[vi])
-
-                if gr_acc_vi > self.best_accuracies[vi]:
-                    self.best_accuracies[vi] = gr_acc_vi
+            
                     #self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
                     
         real_loss = self.vs_loss * renormalization + sum(self.lagrange_multipliers[vi] * self.gr_loss_per_vi[vi] * renormalization for vi in range(len(self.gr_loss_per_vi)))
         
         b = real_loss.backward()
         with th.no_grad():
+            print("LAMBDA b", self.lagrange_multipliers,  self.last_accuracy_gr, self.best_accuracies)  
             for vi,l in enumerate(self.lagrange_multipliers):
+
                 if self.last_accuracy_gr[vi] < self.best_accuracies[vi]:
-                    l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization), min=0.0).detach() 
+                    l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization), min=0.0).detach()
                 else:
-                    l.grad = ((self.lagrange_multipliers[vi].detach()*self.lambda_decay) if self.lagrange_multipliers[vi] > self.minimal_lambda else th.zeros(()))
-            
-        
+                    self.best_accuracies[vi] = float(self.last_accuracy_gr[vi])
+                    l.grad = th.zeros((), requires_grad=False)
+             
         return b
 class SobaOptimizer(VSLOptimizer):
     def __init__(self, params_gr, params_vs, n_values, lr=0.001, lr_grounding=None, lr_value_system=None, use_lr_decay = True, max_grad_norm_gr=1000.0, max_grad_norm_vs=1000.0, **optimizer_kwargs):

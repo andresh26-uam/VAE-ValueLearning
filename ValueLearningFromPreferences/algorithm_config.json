@@ -379,6 +379,7 @@
                     "lr_value_system": 0.01,
                     "lr_lambda": 0.005,
                     "initial_lambda": 0.01,
+                    "lambda_decay": 0.0001,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -392,9 +393,7 @@
                     "conc_apply_on_worst_clusters_only": false,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
-                    "minimal_lambda": 0.01,
-                    "cluster_similarity_penalty": 100.0,
-                    "lambda_decay": 1e-9
+                    "cluster_similarity_penalty": 100.0
                 },
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
