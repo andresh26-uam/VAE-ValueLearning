@@ -881,16 +881,17 @@ class ClusterAssignmentMemory():
         explored_and_pareto_dif = [1 if explored[i] and pareto_dominated_counts[i] > 0 else 0 for i in range(len(self.memory))]
         if append_made:
             last_assignment_and_not_pareto = [1 if self.last_selected_assignment is not None and self.last_selected_assignment == i and self.compare_assignments(self.memory[-1], self.memory[self.last_selected_assignment])[1]<=0 else 0 for i in range(len(self.memory))]
-        
+        else:
+            last_assignment_and_not_pareto = [0] * len(self.memory)
         if (len(self.memory) > self.max_size) or (exhaustive and (max(pareto_dominated_counts) > 0 or sum(equivalent_assignments_counts) > 0)):
             sorted_indices = sorted(list(range(len(self.memory))), key=lambda x: (
                 explored_and_pareto[x],
                 explored_and_pareto_dif[x],
                 last_assignment_and_not_pareto[x], # This tries to remove the last selected assignment if it is pareto equivalent or dominated by the last inserted.
-                pareto_dominated_counts[x], 
                 equivalent_assignments_counts[x], 
-                #-longevity[x], 
+                pareto_dominated_counts[x], 
                 similarity_index[x], 
+                #-longevity[x], 
                 -grounding_score[x],
                 -vs_score[x]
                 ), reverse=True)

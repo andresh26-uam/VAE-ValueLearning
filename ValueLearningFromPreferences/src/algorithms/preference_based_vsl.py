@@ -1694,7 +1694,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         
         assert self.training_reward_nets_per_agent.keys() == self.training_reward_nets_per_agent.keys()
         for aid in self.training_reward_nets_per_agent.keys():
-            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , assignment_memory.get_best_assignment(consider_only_unexplored=False,override_explore_state=False,lexicographic_vs_first=False).reward_model_per_agent_id[aid].state_dict())
+            th.testing.assert_close(self.training_reward_nets_per_agent[aid].state_dict() , assignment_memory.get_best_assignment(consider_only_unexplored=False,lexicographic_vs_first=False).reward_model_per_agent_id[aid].state_dict())
         self.assignment_memory = assignment_memory
     
         return self.training_reward_nets_per_agent 

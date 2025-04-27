@@ -375,7 +375,7 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.003,
+                    "lr_grounding": 0.005,
                     "lr_value_system": 0.01,
                     "lr_lambda": 0.005,
                     "initial_lambda": 0.01,
@@ -392,6 +392,7 @@
                     "conc_apply_on_worst_clusters_only": false,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
+                    "minimal_lambda": 0.01,
                     "cluster_similarity_penalty": 100.0,
                     "lambda_decay": 1e-9
                 },
