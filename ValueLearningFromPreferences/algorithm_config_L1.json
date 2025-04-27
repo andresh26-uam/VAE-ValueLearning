@@ -44,9 +44,9 @@
                 "optimizer_kwargs": {
                     "lr": 0.01,
                     "lr_grounding": 0.005,
-                    "lr_value_system": 0.003,
-                    "lr_lambda": 0.002,
-                    "initial_lambda": 0.1,
+                    "lr_value_system": 0.01,
+                    "lr_lambda": 0.005,
+                    "initial_lambda": 0.01,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
@@ -74,11 +74,11 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 1,
+                    "max_iter": 1000,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
-                    "max_assignment_memory": 2
+                    "max_assignment_memory": 1
                 },
 
                 "learner_policy_class": "PPO",
@@ -98,10 +98,10 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 1000,
+                    "epochs": 1,
                     "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 10,
+                    "initial_refining_steps": 8,
                     "initial_exploration_rate": 0.0,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null

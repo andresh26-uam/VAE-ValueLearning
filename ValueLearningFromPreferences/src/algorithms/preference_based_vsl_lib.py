@@ -1318,22 +1318,25 @@ class ConstrainedLoss(VSLCustomLoss):
         
         with th.no_grad():
             if self.best_gr_losses is None:
-                self.best_gr_losses = [float('inf')]*len(self.gr_loss_per_vi)
+                #self.best_gr_losses = [float('inf')]*len(self.gr_loss_per_vi)
                 self.best_accuracies = [0.0]*len(self.last_accuracy_gr)
             for vi in range(len(self.gr_loss_per_vi)):
-                gr_loss_vi = float(self.gr_loss_per_vi[vi].detach().numpy())* renormalization
+                #gr_loss_vi = float(self.gr_loss_per_vi[vi].detach().numpy())* renormalization
                 gr_acc_vi = float(self.last_accuracy_gr[vi])
 
                 if gr_acc_vi > self.best_accuracies[vi]:
                     self.best_accuracies[vi] = gr_acc_vi
-                    self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
+                    #self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
                     
         real_loss = self.vs_loss * renormalization + sum(self.lagrange_multipliers[vi] * self.gr_loss_per_vi[vi] * renormalization for vi in range(len(self.gr_loss_per_vi)))
         
         b = real_loss.backward()
         with th.no_grad():
             for vi,l in enumerate(self.lagrange_multipliers):
-                l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization - self.best_gr_losses[vi]), min=0.0).detach() + ((self.lagrange_multipliers[vi].detach()*self.lambda_decay) if self.lagrange_multipliers[vi] > self.minimal_lambda and self.last_accuracy_gr[vi] >= self.best_accuracies[vi] else 0.0)
+                if self.last_accuracy_gr[vi] < self.best_accuracies[vi]:
+                    l.grad = -th.clamp((self.gr_loss_per_vi[vi] * renormalization), min=0.0).detach() 
+                else:
+                    l.grad = ((self.lagrange_multipliers[vi].detach()*self.lambda_decay) if self.lagrange_multipliers[vi] > self.minimal_lambda else th.zeros(()))
             
         
         return b
