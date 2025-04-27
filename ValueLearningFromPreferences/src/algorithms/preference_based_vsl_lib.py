@@ -898,9 +898,9 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         """Computes the loss. Same as Cross Entropy but does not overfit to class certainty, i.e. does not consider examples that are already correct."""
         # start_time = time.time()
 
-        probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_agent = preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
+        probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_agent, rews_vs, rews_gr= preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
                                                                                               fragment_pairs_idxs_per_agent_id=fragment_idxs_per_aid, only_for_alignment_function=None, 
-                                                                                              add_probs_per_agent=True, return_rewards_per_agent=True)
+                                                                                              add_probs_per_agent=True, return_rewards_per_agent=True,return_rewards_global=True)
         """
         This might make sense too... Summin over all cluster fragments directly
         fragments_idxs_per_cluster = [[] for _ in range(len(value_system_network_per_cluster))]
@@ -1049,7 +1049,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             if self.cluster_similarity_penalty > 0.0:
 
                 conc_penalty = self.conciseness_penalty(preference_model, rews_gr_per_aid=rews_gr_per_agent, rews_vs_per_agent=rews_vs_per_agent, value_system_network_per_cluster=value_system_network_per_cluster, 
-                                                      agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments)
+                                                      agent_to_vs_cluster_assignments=agent_to_vs_cluster_assignments, rews_vs=rews_vs, rews_gr=rews_gr)
             
                 loss_vs = loss_vs - self.cluster_similarity_penalty*conc_penalty
                 #loss_vs = -conc_penalty/loss_vs
@@ -1094,8 +1094,9 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
     def conciseness_penalty(self, preference_model: PreferenceModelClusteredVSL, 
                             rews_gr_per_aid: Dict[str, Tuple[th.Tensor, th.Tensor]], 
                             rews_vs_per_agent: Dict[str, Tuple[th.Tensor, th.Tensor]],
+                            
                             value_system_network_per_cluster: List[LinearAlignmentLayer], 
-                            agent_to_vs_cluster_assignments: Dict[str, int]):
+                            agent_to_vs_cluster_assignments: Dict[str, int],rews_vs: th.Tensor = None, rews_gr: th.Tensor = None):
         ex_model = list(rews_gr_per_aid.values())[0][0]
         device = ex_model.device
         dtype = ex_model.dtype
@@ -1119,27 +1120,32 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             
             vs1 = value_system_network_per_cluster[c1]
             vs2 = value_system_network_per_cluster[c2]
-
-            rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
-            rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
-            assert rews_f1_in_c1_c2.shape == rews_f2_in_c1_c2.shape
-            assert rews_f1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1], value_system_network_per_cluster[0].in_features), rews_f1_in_c1_c2.shape
-
+            if rews_gr is None:
+                rews_f1_in_c1_c2 = th.cat([rews_gr_per_aid[aid][0] for aid in agents_in_c1_c2], dim=0)
+                rews_f2_in_c1_c2 = th.cat([rews_gr_per_aid[aid][1] for aid in agents_in_c1_c2], dim=0)
+                assert rews_f1_in_c1_c2.shape == rews_f2_in_c1_c2.shape
+                assert rews_f1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1], value_system_network_per_cluster[0].in_features), rews_f1_in_c1_c2.shape
+            else:
+                rews_f1_in_c1_c2 = rews_gr[0]
+                rews_f2_in_c1_c2 = rews_gr[1]
+               
             rews_vs1_f1_in_c1_c2 = vs1.forward(rews_f1_in_c1_c2).squeeze(-1)
             # TODO: optimize here: get the rews from vs1 ancd c1 from rews_vs_per_agent. Only in the misture recalculate.
-            th.testing.assert_close(rews_vs_per_agent[agents_per_cluster[c1][0]][0] , rews_vs1_f1_in_c1_c2[0:rews_vs_per_agent[agents_per_cluster[c1][0]][0].shape[0]])
+            if rews_gr is None:
+                th.testing.assert_close(rews_vs_per_agent[agents_per_cluster[c1][0]][0] , rews_vs1_f1_in_c1_c2[0:rews_vs_per_agent[agents_per_cluster[c1][0]][0].shape[0]])
             rews_vs1_f2_in_c1_c2 = vs1.forward(rews_f2_in_c1_c2).squeeze(-1)
 
             rews_vs2_f1_in_c1_c2 = vs2.forward(rews_f1_in_c1_c2).squeeze(-1)
             rews_vs2_f2_in_c1_c2 = vs2.forward(rews_f2_in_c1_c2).squeeze(-1)
-
-            assert rews_vs1_f1_in_c1_c2.shape == rews_vs2_f2_in_c1_c2.shape
-            assert rews_vs2_f2_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1])
+            if rews_vs is None:
+                assert rews_vs1_f1_in_c1_c2.shape == rews_vs2_f2_in_c1_c2.shape
+                assert rews_vs2_f2_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0], rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[1])
 
             probabilities_vs1_in_c1_c2 = preference_model.probability(rews_vs1_f1_in_c1_c2, rews_vs1_f2_in_c1_c2)
             probabilities_vs2_in_c1_c2 = preference_model.probability(rews_vs2_f1_in_c1_c2, rews_vs2_f2_in_c1_c2)
 
-            assert probabilities_vs1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0],)
+            if rews_vs is None:
+                assert probabilities_vs1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0],)
             conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
        
             with th.no_grad():

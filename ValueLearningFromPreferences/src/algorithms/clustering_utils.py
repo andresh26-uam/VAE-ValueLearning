@@ -788,10 +788,10 @@ class ClusterAssignmentMemory():
                 override_and_insert = False    
             else:
                 # try to override the last one.
-                cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[last_index], assignment,lexicographic_vs_first=True,)
+                cmp_lexico, cmp_pareto = self.compare_assignments(self.memory[last_index], assignment,lexicographic_vs_first=False,)
                 #self.memory[last_index].is_equivalent_assignment
                 
-                if (cmp_pareto < 0):#or (cmp_lexico < 0 and cmp_pareto <= 0):
+                if (cmp_pareto < 0) or (cmp_lexico < 0 and cmp_pareto <= 0):
                     override_and_insert = True
                     
             if override_and_insert:
