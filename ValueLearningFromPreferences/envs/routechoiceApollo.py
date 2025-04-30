@@ -227,7 +227,7 @@ class RouteChoiceEnvironmentApolloComfort(RouteChoiceEnvironmentApollo):
     
     def compare_groundings(self,first_obs, second_obs, vi):
         if vi < 2:
-            ret = 1.0 if -first_obs[vi] + second_obs[vi] > 0 else 0.0 # This is the default rule: smaller cost/time/headway/interchanges the better
+            ret = 1.0 if -first_obs[vi] + second_obs[vi] > 0 else 0.0 # This is the default rule: smaller time/cost/headway/interchanges the better
         else:
             case1better = -first_obs[2] + second_obs[2] > 0 and -first_obs[3] + second_obs[3] >= 0.0 
             case1better2 = -first_obs[2] + second_obs[2] >= 0 and -first_obs[3] + second_obs[3] > 0.0
@@ -239,5 +239,5 @@ class RouteChoiceEnvironmentApolloComfort(RouteChoiceEnvironmentApollo):
     
     
     def _reward_ground_truth(self, obs_preprocessed, value_idx):
-        return -obs_preprocessed[value_idx] if value_idx < 2 else -abs(obs_preprocessed[2]*(obs_preprocessed[3] + 1)) # this is confort
+        return -obs_preprocessed[value_idx] if value_idx < 2 else -abs(obs_preprocessed[2]*(obs_preprocessed[3] + 1)) # this is comfort, overriden by the previous method!
     

@@ -1233,7 +1233,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             if callback:
                 callback(self._iteration)
             self._iteration += 1
-        best_assignments_list.clean_memory(exhaustive=True)
+        #best_assignments_list.clean_memory(exhaustive=True)
         best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, lexicographic_vs_first=False)
         self.reward_trainer.update_training_networks_from_assignment(reward_model_per_agent_id, grounding_per_value_per_cluster, value_system_per_cluster, prev_agent_to_gr=original_agent_to_gr_cluster_assignments, prev_agent_to_vs=original_agent_to_vs_cluster_assignments, reference_assignment=best_assignment)
         
@@ -1267,13 +1267,16 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             l_prev = [1 for pcs in prev_cs_to_agent if len(pcs) > 0]
             expand_or_reduce = random.random() < 0.5
 
-            valid_new_clusters = [i for i in range(len(prev_cs_to_agent))  if len(prev_cs_to_agent[i]) > 0]  # The old ones
-            if expand_or_reduce is True or l_prev == 1:
-                cs = np.random.choice(len(prev_cs_to_agent))
-                valid_new_clusters.append(cs)
-            elif expand_or_reduce is False or l_prev == len(prev_cs_to_agent):
-                cs = np.random.choice(len(valid_new_clusters))
-                valid_new_clusters.pop(cs)
+            if len(value_system_per_cluster) >1:
+                valid_new_clusters = [i for i in range(len(prev_cs_to_agent))  if len(prev_cs_to_agent[i]) > 0]  # The old ones
+                if expand_or_reduce is True or l_prev == 1:
+                    cs = np.random.choice(len(prev_cs_to_agent))
+                    valid_new_clusters.append(cs)
+                elif expand_or_reduce is False or l_prev == len(prev_cs_to_agent):
+                    cs = np.random.choice(len(valid_new_clusters))
+                    valid_new_clusters.pop(cs)
+            else: 
+                valid_new_clusters = [0]
 
             for aid, cluster_vs_aid in assignment_vs.items():
                 agent_to_gr_cluster_assignments[aid] = {}
@@ -1440,7 +1443,7 @@ def load_historic_assignments(experiment_name, sample=20):
             for aid, r in a.reward_model_per_agent_id.items():
                 r.set_env(env_state)
     print(f"Historic assignments loaded from {save_folder}")
-    return historic_assignments, env_state
+    return historic_assignments, env_state, total_files
 
 class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     

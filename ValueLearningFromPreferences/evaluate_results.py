@@ -6,8 +6,8 @@ import random
 from typing import Dict, List
 
 import numpy as np
+import shap
 import torch
-from interpret import show
 from envs.routechoiceApollo import RouteChoiceEnvironmentApolloComfort
 from envs.tabularVAenv import TabularVAMDP
 from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED
@@ -33,7 +33,7 @@ def parse_enames_for_learning_curve(learning_curve_from):
     if not learning_curve_from:
         return []
     return [name.strip() for name in learning_curve_from.split(',') if name.strip()]
-def generate_assignment_tables(assignment_identifier_to_assignment, experiment_name, output_columns, output_dir="test_results", values_names=None, label='train_set'):
+def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str, ClusterAssignment]|Dict[str,List[ClusterAssignment]], experiment_name, output_columns, output_dir="test_results", values_names=None, label='train_set'):
     
     # Ensure output directories exist
     csv_dir = os.path.join(output_dir, experiment_name, label, 'tables', 'general', "csv")
@@ -41,12 +41,16 @@ def generate_assignment_tables(assignment_identifier_to_assignment, experiment_n
     os.makedirs(csv_dir, exist_ok=True)
     os.makedirs(latex_dir, exist_ok=True)
 
-    for position, assignments in assignment_identifier_to_assignment.items():
+    for pi, (position, assignments) in enumerate(assignment_identifier_to_assignment.items()):
         # Ensure assignments is always a list for simplicity
         is_list = True
         if not isinstance(assignments, list):
             is_list = False
             assignments = [assignments]
+
+        # If is_list is True and position is over 2, skip processing
+        if is_list and pi > 1:
+            continue
 
         # Prepare data for the table
         data = []
@@ -65,41 +69,53 @@ def generate_assignment_tables(assignment_identifier_to_assignment, experiment_n
             if output_columns.get("representativity", False):
                 representativities = [
                     ClusterAssignment._representativity_cluster(
-                        [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
+                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
                     ) for assignment in assignments
                 ]
                 row["Representativeness"] = f"{np.mean(representativities):.3f} ± {np.std(representativities):.3f}"
             if output_columns.get("conciseness", False):
                 conciseness_values = [
                     ClusterAssignment._conciseness(
-                        [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
-                        assignment.L
+                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
+                    assignment.L
                     ) if assignment.L > 1 else '-' for assignment in assignments
                 ]
                 row["Conciseness"] = f"{np.mean(conciseness_values):.3f} ± {np.std(conciseness_values):.3f}" if assignments[0].L > 1 else '-'
             if output_columns.get("combined_score", False):
+                representativities = np.array([
+                    ClusterAssignment._representativity_cluster(
+                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
+                    ) for assignment in assignments
+                ])
+                conciseness_values = np.array([
+                    ClusterAssignment._conciseness(
+                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
+                    assignment.L
+                    ) if assignment.L > 1 else '-' for assignment in assignments
+                ])
                 combined_scores = [
-                    assignment.conciseness_vs() / (1.0 - assignment.representativity_vs()) if assignment.L > 1 else '-'
+                    conciseness_values / (1-representativities) if assignment.L > 1 else '-'
                     for assignment in assignments
                 ]
-                row["Combined Score"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
+                row["Dunn Index"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
             if output_columns.get("grounding_coherence", False):
                 coherence_values = [
                     [
-                        ClusterAssignment._representativity_cluster(
-                            [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in assignment.assignment_vs[cluster_idx]]
-                        ) for i in range(len(assignment.gr_score))
+                    ClusterAssignment._representativity_cluster(
+                        [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in assignment.assignment_vs[cluster_idx]]
+                    ) for i in range(len(assignment.gr_score))
                     ] for assignment in assignments
                 ]
-                coherence_means = np.mean(coherence_values, axis=0)
-                coherence_stds = np.std(coherence_values, axis=0)
-                for i, (mean, std) in enumerate(zip(coherence_means, coherence_stds)):
-                    row[f"Coherence V{i + 1}" if values_names is None else f"Coherence {values_names[i]}"] = f"{mean:.3f} ± {std:.3f}"
+            coherence_means = np.mean(coherence_values, axis=0)
+            coherence_stds = np.std(coherence_values, axis=0)
+            for i, (mean, std) in enumerate(zip(coherence_means, coherence_stds)):
+                row[f"Coherence V{i + 1}" if values_names is None else f"Coherence {values_names[i]}"] = f"{mean:.3f} ± {std:.3f}"
             data.append(row)
 
         # Assignment-level information
         row = {}
         row["Cluster"] = "Total"
+        
         if output_columns.get("value_systems", False):
             avg_value_systems = [assignment.average_value_system() for assignment in assignments]
             means = np.mean(avg_value_systems, axis=0)
@@ -109,17 +125,17 @@ def generate_assignment_tables(assignment_identifier_to_assignment, experiment_n
             num_agents = [assignment.n_agents for assignment in assignments]
             row["Number of Agents"] = f"{np.mean(num_agents):.1f} ± {np.std(num_agents):.1f}"
         if output_columns.get("representativity", False):
-            representativities = [assignment.representativity_vs() for assignment in assignments]
+            representativities = [assignment.representativity_vs(aggr='weighted') for assignment in assignments]
             row["Representativeness"] = f"{np.mean(representativities):.3f} ± {np.std(representativities):.3f}"
         if output_columns.get("conciseness", False):
             conciseness_values = [assignment.conciseness_vs() if assignment.L > 1 else '-' for assignment in assignments]
             row["Conciseness"] = f"{np.mean(conciseness_values):.3f} ± {np.std(conciseness_values):.3f}" if assignments[0].L > 1 else '-'
         if output_columns.get("combined_score", False):
             combined_scores = [
-                assignment.conciseness_vs() / (1.0 - assignment.representativity_vs()) if assignment.L > 1 else '-'
-                for assignment in assignments
+            assignment.conciseness_vs() / (1.0 - assignment.representativity_vs()) if assignment.L > 1 else '-'
+            for assignment in assignments
             ]
-            row["Combined Score"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
+            row["Dunn Index"] = f"{np.mean(combined_scores):.3f} ± {np.std(combined_scores):.3f}" if assignments[0].L > 1 else '-'
         if output_columns.get("grounding_coherence", False):
             coherence_values = [assignment.gr_score for assignment in assignments]
             coherence_means = np.mean(coherence_values, axis=0)
@@ -178,6 +194,7 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
 
     for clust_idx, agent_group in enumerate(assignment.assignment_vs):
         if len(agent_group) == 0:
+            context_features_per_cluster.append(None)
             continue
         # Extract and normalize context features for the current cluster
         context_features_cidx = np.array([dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]['agent_context'] for agent_id in agent_group])
@@ -191,7 +208,10 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
     feature_names = ["Houshold Income", "Car available", "Conmuting", "Shopping", "Business", "Leisure"]
     cluster_data = []
 
-    for cluster_idx, cluster_features in enumerate(context_features_per_cluster):
+    for cluster_idx, agent_group in enumerate(assignment.assignment_vs):
+        if len(agent_group) == 0:
+            continue
+        cluster_features = context_features_per_cluster[cluster_idx]
         value_system = assignment.get_value_system(cluster_idx)
         
         num_agents = len(cluster_features)
@@ -213,14 +233,14 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
         plt.grid(axis='y')
 
         # Save the plot
-        plot_dir = os.path.join('test_results', experiment_name, label, 'plots', 'context_features')
+        plot_dir = os.path.join('test_results', experiment_name, label, 'plots', 'context_features', assignment_identifier)
         os.makedirs(plot_dir, exist_ok=True)
         plot_path = os.path.join(plot_dir, f"cluster_{cluster_idx + 1}_context_features.pdf")
         plt.savefig(plot_path)
         plt.close()
 
         # Add cluster data to the table
-        cluster_row = [f"{mean:.2f} \\pm{{{perc:+.2f}\\%}}" for mean, perc in zip(means, perc_increase_over_mean)]
+        cluster_row = [f"{mean:.2f} ({{{perc:+.2f}\\%}})" for mean, perc in zip(means, perc_increase_over_mean)]
         cluster_data.append([f"Cluster {cluster_idx + 1}", num_agents] + cluster_row)
 
     # Add overall mean data to the table
@@ -249,7 +269,7 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
     print(f"Saved context features table to {table_path_csv} and {table_path_latex}")
 
 
-def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[ClusterAssignment]], experiment_names, assignment_memories: Dict[str, ClusterAssignmentMemory]):
+def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[ClusterAssignment]], experiment_names, assignment_memories: Dict[str, ClusterAssignmentMemory], n_iterations_real=500):
     """
     Plots conciseness, representativity, and combined score vs for each assignment in historic assignments
     of each experiment. Each experiment has a different color, and each metric is a different line shape.
@@ -258,41 +278,52 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
     line_styles = {
     "Conciseness": "--",
     "Representativity": "-.",
-    "Combined Score": "-x"
-    }
-    opacity = {
-    "Conciseness": 0.5,
-    "Representativity": 0.5,
-    "Combined Score": 1.0
+    "Dunn Index": "-x",
+    "Grounding Coherence": "-o",
     }
 
     plt.figure(figsize=(10, 6))
 
+    # Calculate mean and standard error
+    metrics = {
+        "Conciseness": [],
+        "Representativity": [],
+        "Dunn Index": [],
+        "Grounding Coherence": [],
+    }
+    
     for idx, ename in enumerate(experiment_names):
         assignment_memory = assignment_memories[ename]
         historic_assignments = historic_assignments_per_lre[ename]
-        conciseness = [min(assignment.conciseness_vs(), assignment_memory.maximum_conciseness_vs) for assignment in historic_assignments]
-        representativity = [assignment.representativity_vs(aggr=np.min) for assignment in historic_assignments]
-        combined_score = [assignment.combined_cluster_score_vs(aggr_repr=np.min) for assignment in historic_assignments]
-        grounding_scores = [np.mean(assignment.gr_score) for assignment in historic_assignments]
-        isl1= [assignment.L == 1 for assignment in historic_assignments]
 
-        x = list(reversed(list(range(1, len(historic_assignments) + 1))))
+        # Calculate metrics
+        conciseness_ename = [min(assignment.conciseness_vs(), assignment_memory.maximum_conciseness_vs) for assignment in historic_assignments]
+        representativity_ename = [assignment.representativity_vs(aggr=np.min) for assignment in historic_assignments]
+        combined_score_ename = [assignment.combined_cluster_score_vs(aggr_repr=np.min) for assignment in historic_assignments]
+        grounding_scores_ename = [np.mean(assignment.gr_score) for assignment in historic_assignments]
+        isl1 = [assignment.L == 1 for assignment in historic_assignments]
+        metrics['Dunn Index'].append(combined_score_ename)
+        metrics['Conciseness'].append(conciseness_ename)
+        metrics['Representativity'].append(representativity_ename)
+        metrics['Grounding Coherence'].append(grounding_scores_ename)
+        
 
-        plt.plot(x, conciseness, line_styles["Conciseness"], color=colors[idx % len(colors)],
-            alpha=opacity["Conciseness"], label=f"{ename} - Conciseness")
-        plt.plot(x, representativity, line_styles["Representativity"], color=colors[idx % len(colors)],
-            alpha=opacity["Representativity"], label=f"{ename} - Representativity")
-        plt.plot(x, combined_score, line_styles["Combined Score"], color=colors[idx % len(colors)],
-            alpha=opacity["Combined Score"], label=f"{ename} - Combined Score")
-        plt.plot(x, grounding_scores, '-o', color=colors[idx % len(colors)],
-            alpha=0.5, label=f"{ename} - Grounding Score")
-        plt.plot(x, isl1, '-|', color=colors[idx % len(colors)],
-            alpha=0.5, label=f"{ename} - Is L1 Score")
+        
+    for idx_color, (metric_name, values) in enumerate(metrics.items()):
+        x = list(reversed(list(range(1, np.array(values).shape[-1] + 1))))
 
-    plt.xlabel("Assignment Index")
+        mean_values = np.mean(np.array(values), axis=0)
+        std_error = np.std(np.array(values), axis=0) / np.sqrt(len(experiment_names))
+
+        plt.plot(x, mean_values, line_styles[metric_name], color=colors[idx_color % len(colors)],
+                    alpha=0.5, label=f"{metric_name}")
+        plt.fill_between(x, mean_values - std_error, mean_values + std_error, color=colors[idx_color % len(colors)],
+                            alpha=0.2)
+
+    plt.xlabel("Iteration")
+    plt.xticks(x, labels = [int(xi/len(x)*n_iterations_real) for xi in x])
     plt.ylabel("Metric Value")
-    plt.title("Conciseness, Representativity, and Combined Score vs for Assignments")
+    plt.title("Learning curves")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -302,7 +333,6 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
     os.makedirs(plot_dir, exist_ok=True)
     plot_path = os.path.join(plot_dir, "metrics_plot.pdf")
     plt.savefig(plot_path)
-    plt.show()
     plt.close()
 
     print(f"Saved metrics plot to {plot_path}")
@@ -314,7 +344,7 @@ if __name__ == "__main__":
     parser_args = filter_none_args(parse_args())
     
     _, experiment_name = find_parse_ename(parser_args.experiment_name)
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments, env_state = load_training_results(
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments, env_state, _ = load_training_results(
         experiment_name)
     assignment_memory: ClusterAssignmentMemory = metrics['assignment_memory']
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
@@ -322,6 +352,8 @@ if __name__ == "__main__":
     assignments_identifier_to_assignment = OrderedDict({
         f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
     })
+    
+
     target_agent_and_vs_to_learned_ones_per_lre, reward_net_pair_agent_and_vs_per_lre, metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre= {}, {}, {}, {}, {},{}
     
     if hasattr(parser_args, 'learning_curve_from') and parser_args.learning_curve_from is not None:
@@ -333,20 +365,21 @@ if __name__ == "__main__":
         for ename in parser_args.learning_curve_from:
             ename_clean = find_parse_ename(ename)[1]
             enames_for_lr_curve.append(ename_clean)
-            target_agent_and_vs_to_learned_ones_per_lre[ename_clean], reward_net_pair_agent_and_vs_per_lre[ename_clean], metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _ = load_training_results(
+            target_agent_and_vs_to_learned_ones_per_lre[ename_clean], reward_net_pair_agent_and_vs_per_lre[ename_clean], metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
             ename_clean)
             assignment_memories_per_lre[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
             assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=True)
 
-        plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve, assignment_memories=assignment_memories_per_lre)
-    assignments_identifier_to_assignment_lre = {
-        key: [assignment_memories_per_lre[ename_clean].memory[ikey] for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
-    }
-
+        plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve, assignment_memories=assignment_memories_per_lre, n_iterations_real=n_iterations_real)
+        assignments_identifier_to_assignment_lre = {
+            key: [assignment_memories_per_lre[ename_clean].memory[ikey] if len(assignment_memories_per_lre[ename_clean].memory) > ikey else None for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
+        }
+    
     config = exp_parser_args_base['config']
     society_config = exp_parser_args_base['society_config']
     exp_parser_args = exp_parser_args_base['parser_args']
 
+    pprint.pprint(config)
     # This will look again into the config files to see if there are new fields (wont update the old ones)
     config_actual = load_json_config(exp_parser_args.config_file)
     society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
@@ -454,20 +487,19 @@ if __name__ == "__main__":
         best_gr_then_vs_assignment_test = vsl_algo.evaluate_assignment(best_gr_then_vs_assignment, dataset_test)
 
     # 1: Context feature analysis
-    if isinstance(env, RouteChoiceEnvironmentApolloComfort):
-        env: RouteChoiceEnvironmentApolloComfort
-        import matplotlib.pyplot as plt
+    env: RouteChoiceEnvironmentApolloComfort
+    import matplotlib.pyplot as plt
 
-        values_names = environment_data['values_names']
-        contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
-        contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_gr_then_vs')
-        for aid, assignment in assignments_identifier_to_assignment:
-            contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
-        if plot_test:
-            contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
-            contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_gr_then_vs')
-            for aid, assignment in test_assignments_identifier_to_assignment:
-                contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
+    values_names = environment_data['values_names']
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_gr_then_vs')
+    for aid, assignment in assignments_identifier_to_assignment.items():
+        contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
+    if plot_test:
+        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
+        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_gr_then_vs')
+        for aid, assignment in test_assignments_identifier_to_assignment.items():
+            contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
         
     # 2: tables.
     # Put for the first, middle, and last assignment in separated tables.
@@ -493,9 +525,10 @@ if __name__ == "__main__":
     if plot_test:
         generate_assignment_tables(test_assignments_identifier_to_assignment, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
     # For the list of assignments with different seeds_
-    generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='train_set',values_names=values_short_names)
-    if plot_test:
-        generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
+    if hasattr(parser_args, 'learning_curve_from') and parser_args.learning_curve_from is not None: 
+        generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='train_set',values_names=values_short_names)
+        if plot_test:
+            generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
 
     
     # 3: Explainability TODO
@@ -516,7 +549,7 @@ if __name__ == "__main__":
 
         agent = dataset_train_or_test.agent_ids[0]
 
-        feature_names = ['Cost', 'Time', 'Headway', 'Interchanges', 'Cost2', 'Time2', 'Headway2', 'Interchanges2']
+        feature_names = ['Time T1', 'Cost T1', 'Headway T1', 'Interchanges T1', 'Time T2', ' Cost T2', 'Headway T2', 'Interchanges T2']
         reward_model_per_value = []
         obs_acts_next_obs_idxs = {'obs': list(range(4)), 'acts': [0]}
         for value in range(dataset_train.n_values): 
@@ -541,6 +574,29 @@ if __name__ == "__main__":
             print("Saving morris explanation to", path)
             #os.makedirs(f"demo_images", exist_ok=True)
             fig.write_image(path)
+
+            # Create a SHAP explainer for the reward model
+            """explainer = shap.explainers.KernelExplainer(reward_model_per_value[value], data_train_or_test)"""
+
+            # Generate global SHAP values
+            """shap_values = explainer(data_train_or_test[0:10])
+
+            # Visualize the global feature importance
+            explanations_dir = os.path.join('test_results', experiment_name, 'explanations')
+            shap_dir = os.path.join(explanations_dir, "shap")
+            os.makedirs(shap_dir, exist_ok=True)
+            path_summary = os.path.join(shap_dir, f"shap_summary_{values_names[value]}.pdf")
+            path_bar = os.path.join(shap_dir, f"shap_bar_{values_names[value]}.pdf")
+
+            print("Saving SHAP summary explanation to", path_summary)
+            shap.summary_plot(shap_values, data_train_or_test[0:10], feature_names=feature_names, show=False)
+            plt.savefig(path_summary)
+            plt.close()
+
+            print("Saving SHAP bar explanation to", path_bar)
+            shap.summary_plot(shap_values, data_train_or_test, feature_names=feature_names, plot_type="bar", show=False)
+            plt.savefig(path_bar)
+            plt.close()"""
 
 
     print(best_gr_then_vs_assignment)

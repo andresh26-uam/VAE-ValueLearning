@@ -1,0 +1,638 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% LaTeX Template for ECAI Papers 
+%%% Prepared by Ulle Endriss (version 1.0 of 2023-12-10)
+
+%%% To be used with the ECAI class file ecai.cls.
+%%% You also will need a bibliography file (such as mybibfile.bib).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Start your document with the \documentclass{} command.
+%%% Use the first variant for the camera-ready paper.
+%%% Use the second variant for submission (for double-blind reviewing).
+
+\documentclass{ecai} 
+%\documentclass[doubleblind]{ecai} 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Load any packages you require here. 
+
+\usepackage{latexsym}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{color}
+
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\usepackage{multirow}%
+\usepackage[title]{appendix}%
+\usepackage{xcolor}%
+%%%%
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{ragged2e}
+\usepackage{enumitem} 
+
+% New ones:
+\usepackage{todonotes}
+\usepackage{dsfont}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Define any theorem-like environments you require here.
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{fact}[theorem]{Fact}
+\newtheorem{definition}{Definition}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Define any new commands you require here.
+
+\newcommand{\BibTeX}{B\kern-.05em{\sc i\kern-.025em b}\kern-.08em\TeX}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\newcommand{\R}{\mathbb{R}} 
+\newcommand{\C}{\mathbb{C}} 
+\newcommand{\N}{\mathbb{N}} 
+\newcommand{\Z}{\mathbb{Z}} 
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\Rv}{{\pmb{R}}}
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\T}{\mathcal{T}}
+%\newcommand{\\A_V}{\mathcal{\A_V}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\ind}[1]{{\mathds{1}\left(#1\right)}}
+\newcommand{\abs}[1]{{\left|#1\right|}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\newcolumntype{Y}{>{\Centering\arraybackslash}X}
+%\newcolumntype{Y}{>{\RaggedLeft\arraybackslash}X}
+
+
+\sloppy
+
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frontmatter}
+
+%%% Use this command to specify your submission number.
+%%% In doubleblind mode, it will be printed on the first page.
+
+\paperid{123} 
+
+%%% Use this command to specify the title of your paper.
+
+\title{Learning the value systems of societies from preferences}
+
+%%% Use this combinations of commands to specify all authors of your 
+%%% paper. Use \fnms{} and \snm{} to indicate everyone's first names 
+%%% and surname. This will help the publisher with indexing the 
+%%% proceedings. Please use a reasonable approximation in case your 
+%%% name does not neatly split into "first names" and "surname".
+%%% Specifying your ORCID digital identifier is optional. 
+%%% Use the \thanks{} command to indicate one or more corresponding 
+%%% authors and their email address(es). If so desired, you can specify
+%%% author contributions using the \footnote{} command.
+
+\author[A]{\fnms{Andrés}~\snm{Holgado-Sánchez}\orcid{0000-0001-8853-1022}\thanks{Corresponding Author. Email: andres.holgado@urjc.es.}\footnote{Equal contribution.}}
+\author[A]{\fnms{Holger}~\snm{Billhardt}\orcid{0000-0001-8298-4178}\footnotemark}
+\author[A]{\fnms{Sascha}~\snm{Ossowski}\orcid{0000-0003-2483-9508}\footnotemark} 
+\author[B]{\fnms{Sara}~\snm{Degli-Esposti}\orcid{0000-0003-0616-8974}}
+\address[A]{CETINIA, Universidad Rey Juan Carlos, 28933 Madrid, Spain}
+\address[B]{CSIC, Consejo Superior de Investigaciones Científicas, 28006 Madrid, Spain}
+%%% Use this environment to include an abstract of your paper.
+
+\begin{abstract}
+TODO (200 words max!!)
+
+Aligning AI systems with human values and the value systems of various stakeholders is key in ethical AI. Some works suggest implicit alignment through imitation, while others advocate for explicit computational representations of values to enhance model trustworthiness. The latter ones, however, face the challenge of manual instatiation, which can lead to misspecification. To address this, the so-called \textit{value learning} approaches enable automatically learning these models instead.
+
+On the other hand, human values are inherently social and shared among groups, leading to diverse value systems, something which is often disregarded in the literature. Representing the diversity of value systems in a society while remaining concise is complex. This paper proposes a formalization of the problem of learning computational representations of social value systems in decision-making, and a solution consisting of a EM-based clustering algorithm that produces a clustering from agents to a certain maximum number of value systems (described through value-based utility functions). We rely on observing stated qualitative pairwise preferences among alternatives based on value alignment and on the personal value systems of a sample of agents.
+
+Testing with a real case on train choice shows that the alignment functions for values like efficiency and comfort are accurately learned. Additionally, the social value systems distinguish groups of agents with different preferences that align with the agents' decision-making mindsets.
+
+%\textbf{I could not find any interesting dataset on other topic than choice modeling. Praticipatory bugdgets need text analysis and politics (elections/values survey) lack examples of what are values (we need to invent them or interpret from other data). The others that I told you a month ago require also inventive in rather values, decisions, or both.}
+%Value alignment in AI deals with the problem of aligning AI systems with human values and the value systems of different stakeholders. Though some works in the literature propose an implicit way to achieve value alignment (e.g. through imitation), others propose the use of explicit computational representations of value systems to increase the trustworthiness of the alignment process. However, the latter presents the challenge of manually instantiating these components by hand, which is prone to misspecification. As a pertinent solution, the problem of value learning has been introduced as learning these computational models through automatic processes.
+%On the other hand, often disregarded in the literature is the social nature of human values, i.e., that they are shared among groups of humans (societies). Also, naturally, different humans will hold different value systems based on their values. A problem that arises here is being able to concisely represent the value system of a society as a whole without sacrificing representation of every viewpoint.
+%Building upon a proposed framework for learning values and value systems from examples, and inspired by the social nature of values, in this paper we propose a model for computationally representing the value system of a society of agents in decision-making problems, desirable properties for such value systems, and a novel algorithm integrating model-based clustering and preference learning to determine the value system that better represents an observed society while remaining concise in its complexity. Our learning approach is based on learning what in the alignment literature has been called \textit{value alignment functions} (translated into reward/utility functions in decision-making) by observing examples of qualitative pairwise comparisons between alternatives from a relatively small sample of agents and choices in the society, and only supplying a maximum feasible number of clusters as a key hyperparameter, together with a given set of human value labels (without knowing their specific grounding in the domain). 
+%We test the usability of the approach with two route choice datasets, one in the context of train trip choice, the other in the flight choice domain. We observe two aspects of the solutions obtained. First, that the alignment functions of alternatives with the given human value labels such as sustainability or comfort are correctly learned. Second, that the value systems of the society (built on top of the learned groundings) clearly distinguish groups of agents with different value preferences, and remain fairly consistent with the stated decision mindset of the agents in each dataset.
+
+\end{abstract}
+
+\end{frontmatter}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Introduction}\label{sec:introduction}
+Value alignment in AI~\cite{Russell2022alignmentDefinition} deals with the problem of aligning the objectives and functioning of AI systems with human values. Defining human values and value systems is a challenging task because values vary across time and cultures. At the time of acting, human preferences may be incomplete due to incommensurable values and context-specificity. As humans, we expect software agents to be locally coherent and to develop some ability of normative reasoning \cite{zhi2024beyond}. As a result, relevant works in the literature propose an implicit way to achieve value alignment through deep learning~\cite{christiano2023deeprlpreferences,deep}, for example by imitating human preferences~\cite{dpoLLM2023,proportionalityRLHFAggregationChandakGoelPeters2024,trexpreferences2019}, or through cooperation~\cite{hadfieldCIRL} or teaching~\cite{Barnett2023LearningRLTeacher}. However, other authors argue that any value-aligned AI system shall be able to explicitly reason about the consequences of its behaviour (or the ones from other agents) based on specific human values~\cite{valueengineeringAutonomous2023}, in order to increase the trustworthiness and adaptability of the system to the \textit{value systems} of different stakeholders at different moments~\cite{andres2024vecompPaper}. \textbf{In the following, by \textit{value system} we understand value-based preferences over different options}. This explicitness of value alignment (value awareness) has been achieved through classical multicriteria decision making setups~\cite{AaronAgreementTOPSIS,Karanik2024}, with reward modelling in reinforcement learning~\cite{andres2023vae,rodriguez2023reinforcementEthicalEmbedingWeightsRewardRL}, or via semantic representations such as taxonomies~\cite{Osman2024} or ontologies~\cite{andres2024icaart,de2022basicValueNet}. 
+
+However, despite the obvious advantages over implicit alignment representations, the previous \textit{value awareness} works present the challenge of instantiating these components correctly. If done through manual design, the process is prone to misspecification~\cite{Sumers2022InstructionsAndDescriptions}. As a pertinent solution, the problem of value learning~\cite{Soares2018ValueLearningProblem} has been introduced as learning these computational models through automatic processes from demonstrations of (value-aligned) behaviour. 
+
+Value learning with explicit value representations is limited. The most common concern is value identification~\cite{wilson2018valueidentificationtext,Liscio2021Axies,understandingValuesSocialMedia}, which refers to the problem of identifying stakeholders' value preferences or the set of values specific to a certain context (from texts, stakeholder opinions, etc.), together with value system estimation~\cite{Serramia2018,liscio-etal-2022-cross,Liscio2023InferringHybridValues}. Value identification and value system estimation do not necessarily require finding a proper computational representation of values, though. This makes the approaches less useful for value-aware systems, that would require computational value representations for value reasoning. Good expressions of true value learning are: GenEth~\cite{Anderson2018GenEthILP}that learns ethical principles through explicit prima-facie duties; Mechergui et al.~\cite{Mechergui2023goalAlignment} can learn specifications of human goals from queries in the context of planning; and Pesch et al.~\cite{Peschl2022LearnPreferencesFromExperts} learn norm-compliant rewards and policies with adversarial IRL~\cite{AIRLFu2018} and then, actively learn particular preferences over trajectories reflecting different value systems based on the previous rewards. More recently, value system learning~\cite{andres2024vecompPaper} has been proposed to solve the value learning problem by extending it with value system estimation via reward functions from human behavior demonstrations. 
+
+Despite the contribution of these studies, the fact that values are social, which means that they are shared among groups of humans (societies)~\cite{Osman2024}, tends to be disregarded in the literature. For example, in hospitals, doctors abide by bioethical principles and comply with the same medical protocols~\cite{towardsAwarenessMedicalField2024}. Even though humans are different and hold different value systems based on their  values~\cite{Serramia2018}, it is undeniable that they grow up in a society full of values and norms that shape their preferences. 
+
+Thus, the fundamental problem is how to concisely represent the value system of a society as a whole, considering all the nuances given by individual decisions. Given the value systems of a set of agents in a certain group, value aggregation~\cite{leraleri2024aggregation,leraleri2024aggregation,eaa24AaronTOPSISValueAggregation} consists of estimating the value system that better represents the values of all agents. The existing methods demand heavy human moderation, namely, that the agents give a numerical estimation of the alignment of every possible decision in the world with all values considered. Also, as punctuated by the very same authors in this domain, aggregating preferences into a single value system for a society might misrepresent preferences in certain contexts, making it impossible to reflect possible value-based preferences that different groups in a society may have.
+
+Given all these limitations, in this paper, we propose a \textit{value system learning} method that extends and improves previous work~\cite{andres2024vecompPaper}) to better model a society of agents taking different decisions. Our contribution is three-fold:
+\begin{itemize}
+    \item A definition of a computational representation of the ``value system of a society'', pertaining (I) a socially-agreed value grounding model that measures the level of alignment of each decision alternative with each value from a given set of value labels\footnote{We assume we have already identified a set of value labels (i.e. values without an unknown grounding) in a decision context through value identification (e.g. ~\cite{Liscio2023axiesContextSpecificValueIdentification}).}; and (II) a clustering of agents in terms of the similarity of their value preferences, stated in terms of the previous grounding. We also enunciate desirable properties for such a social value system, namely the \textit{grounding coherency, representativeness and conciseness}.
+    \item A formulation of the problem of learning an instantiation of the value system of a given society based on a structured optimization of the previous properties, tackled through observing stated pairwise comparisons between alternatives by different agents based on values and individual preferences.
+    \item A clustered preference learning algorithm based on existing works~\cite{trexpreferences2019,pmlr-v235-chakraborty24b} that approximates a solution for the social value system learning problem.
+\end{itemize}
+To evaluate our contributions, we consider two real-world use cases in route choice modelling~\cite{routechoicemodelingPRATO2009}, one about train route choice~\cite{apollochoicepublication} and another one about flight choice~\cite{flightChoiceDataset2019}. Apart from demonstrating the capability of the algorithm to solve the enunciated problem description, we evaluate the degree to which the learned clusters of agents are truly aligned with human intentions or with other contextual factors present as a ground truth in different ways in each case.
+
+The paper is organized as follows. In Section~\ref{sec:stateofart}, we overview related works in value-aware systems, value learning, and (clustered) preference learning. In Section~\ref{sec:background}, the necessary notions for modelling value systems from previous work are presented. In Section~\ref{sec:proposal}, we describe our first and second contributions, namely, the proposed definition of the value system of a society, its desirable properties, and the formulation of the learning problem. Section~\ref{sec:value-system-learning-algorithms} explains our third contribution, the algorithmic solution of the problem. In Section~\ref{sec:eval}, we describe the details of the evaluation methodology, the use case and dataset descriptions, and the results of the evaluation. Section~\ref{sec:conclusion} presents concluding remarks, limitations and some suggestions for future work.
+\todo[inline]{Introduction revised by Sara.}
+%Building upon a proposed framework for learning values and value systems from examples, and inspired by the social nature of values, in this paper we propose a model for computationally representing the value system of a society of agents in decision-making problems, desirable properties for such value systems, and a novel algorithm integrating model-based clustering and preference learning to determine the value system that better represents an observed society while remaining concise in its complexity. Our learning approach is based on learning what in the alignment literature has been called \textit{value alignment functions} (translated into reward/utility functions in decision-making) by observing examples of qualitative pairwise comparisons between alternatives from a relatively small sample of agents and choices in the society, and only supplying a maximum feasible number of clusters as a key hyperparameter, together with a given set of human value labels (without knowing their specific grounding in the domain). 
+%We test the usability of the approach with two route choice datasets, one in the context of train trip choice, the other in the flight choice domain. We observe two aspects of the solutions obtained. First, that the alignment functions of alternatives with the given human value labels such as sustainability or comfort are correctly learned. Second, that the value systems of the society (built on top of the learned groundings) clearly distinguish groups of agents with different value preferences, and remain fairly consistent with the stated decision mindset of the agents in each dataset.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{State of the art}\label{sec:stateofart}
+\todo[inline]{State of the art}
+%The aforementioned learning and modelling approaches are limited in applicability due to the imposed design restrictions and the intensive human moderation required. Thus, other techniques were put forward to obtain aligned behaviour that assume very little to inexistent modelling of values and preferences. 
+
+The need for developing AI systems aligned with people's values~\cite{Russell2022alignmentDefinition} and with a diverse array of value systems~\cite{leraleri2024aggregation} (human-specific value-based preferences) is widely recognized. Previous works contribute to the so-called human alignment goal by relying on imitation-based techniques such as inverse reinforcement learning~\cite{hadfieldCIRL,Barnett2023LearningRLTeacher,christiano2023deeprlpreferences}, sometimes applied with interactive human feedback~\cite{Schmidt2020interactiveAI}. Learning reinforcement learning (RL) rewards from human feedback has also been proposed as an alternative way to ensure human value alignment~\cite{Leike2018ScalableAA,leike2020,kaufmann2024survey}. Another stream of works focuses on fine-tuning large language models (LLM) to reach human value alignment~\cite{Watson2024,Praveen2024}. These works use versions of RLHF (Reinforcement Learning from Human Preferences)~\cite{dpoLLM2023,Song2024PROLLM} to tune the LLM reward functions and policies to steer the behaviour towards safer or acceptable outcomes~\cite{Dong2023AlternativeToRLHF,Dai2024}. Unfortunately, these approaches have some  limitations in terms of interpretability and explainability. Thus, some authors propose ways to explain the resulting learned beliefs~\cite{Sanneman2023TransparentVA} and RL policies~\cite{Veronese2023,Veronese2024}. However, approaches that achieve alignment through imitation or reinforcement learning do not easily adapt when specific human values and value systems change. 
+
+The field of Value Awareness Engineering (VAE)\cite{values2021nardineold} advocates for the development of intelligent agents capable not only of remaining aligned but also able to provide value reasoning. To achieve that, researchers argue for the need to explicitly model value meaning or alignment in a computational manner; an approach called by some authors \textit{operationalizing} values~\cite{Shahin2022OperationalizingvaluesSurveySoftwareengineering}. Most of these models are based on mathematical functions that measure the degree by which agent-based or system-based states~\cite{montes2022synthesis}, actions/decisions~\cite{serramia2023EncodingValueAlignedNorms,Karanik2024} or both~\cite{rodriguez2023reinforcementEthicalEmbedingWeightsRewardRL,Veronese2024,andres2023vae} are effectively aligned with values, or their meaning \textit{grounded} in a particular domain. On top of explicit models of values, and in order to provide solutions for value-based decision-making and negotiation, some authors model also the value systems of the humans, either quantitatively (assuming a set of value weights~\cite{negotiationOfNormsvalues2021,Karanik2024,andres2024vecompPaper}) or qualitatively (via order relations between values~\cite{bench2012using,Serramia2020valuesystem,Beauchamp2019valuesystemasorderedvalues}. Apart from producing autonomous behavior explicitly aligned with values and value systems~\cite{rodriguez2023reinforcementEthicalEmbedingWeightsRewardRL,andres2023eumas,andres2024vecompPaper}, other important applications for this value operationalization process are value-based norm/policy selection~\cite{montes2022synthesis,Serramia2018,negotiationOfNormsvalues2021}, social simulation~\cite{montes2022synthesis,aguilera2024poverty}, or value aggregation~\cite{leraleri2024aggregation,AaronAgreementTOPSIS}. Value aggregation is particularly important as it enables to creation of a funded value system of a complex society.
+
+
+\subsection{Value identification and value learning}
+
+If done through manual design, the process of value operationalization is prone to misspecification~\cite{Sumers2022InstructionsAndDescriptions}. Structured ways to extract the values and value systems of stakeholders in specific domains are, therefore, needed. 
+
+The first step is thus \emph{value identification}, which was initially proposed by~\cite{Liscio2021Axies} as the process of identifying the set of values relevant to stakeholders. Value identification is a pivotal element of the normative alignment problem in \cite{Gabriel2020}. It is typically performed by using surveys such as the European Values Survey~\cite{EuropeanValuesStudySEETHIS}~\cite{schwartz2005schwartz,Ranganathan2021,Hecht2023}, or interviews ~\cite{Leitner2008interviewToValueIdentification} or experiments with humans ~\cite{Janssen2021,Iqbal2024ValuesFromGoalModels,googleVeilOfIgnorance2023}; data-driven methods such as classification~\cite{QiuZhaoLiLuPengGaoZhu2022ValueNetDataset} and text processing~\cite{wilson2018valueidentificationtext} have also been used. A second task has been called \emph{value system estimation}~\cite{Liscio2023Sociotechnical}, inferring the value systems of the agents. This can be done in combination with the first task via hybrid processes~\cite{Liscio2022Axies2}.
+
+An overlooked aspect that is overlooked by the previous two tasks is that for an autonomous system to achieve value awareness, value meaning and preferences need to be \textit{grounded} in the specific application domains, i.e. make them ready for computational use. According to Soares~\cite{Soares2018ValueLearningProblem}, learning these computational models from demonstrations of (value-aligned) behavior is called \textit{value learning}. For instance, Anderson et al.~\cite{Anderson2018GenEthILP} propose \textit{prima facie} duty learning, a method to learn ethical principles in propositional logic. Also, the work of ~\cite{userStudyLearningValues} learns alignment models based on user studies in the healthcare domain. By learning value-related preferences instead of value models, Chaput et al.~\cite{Chaput2023CONTEXTUALpreferenceToSettleDilemmas} can settle ethical dilemmas in multiobjective problems. In previous work, we originally attempted to explicitly solve the value learning problem from traces of behaviour~\cite{andres2024vecompPaper}, together with a way to estimate the value systems of multiple agents. 
+
+     
+\subsection{Learning alignment through preferences}\label{sec:stateoftheartIRL}
+
+In this work we employ a learning approach based on learning a reward model that assigns alignment value to decisions from pairwise comparisons. Leike et al.~\cite{Leike2018ScalableAA,leike2020} supports that value alignement can indeed be achieved through careful reward modeling. Our approach is then heavily influenced by preference-based reinforcement learning (PbRL)~\cite{surveyRLFromPreferencesPbRL,kaufmann2024survey}, focused on learning an expert's preferences by observing pairwise comparisons between trajectories in a Markov decision processes, in particular the ones solving the inverse reinforcement learning problem~\cite{ng2000algorithms} (i.e. that a reward model explaining examples). Influential works in this domain are Christiano et al.~\cite{christiano2023deeprlpreferences} and TREX~\cite{trexpreferences2019,brown2019betterthandemonstratorimitationlearningautomaticallyranked}. 
+
+Approaches that make use of this technique in value alignment are Loreggia et al.~\cite{Loreggia2019MetricPreferencesAlignment}, that learns a quantitative metric from a given partial order between alternatives with neural networks; Kalimeri et al.~\cite{Kalimeri2019}, which can use demographic and smartphone behavioral data to establish connections to value theories to learn value preferences; and RLHF-based works for LLM alignment~\cite{dpoLLM2023}.
+
+
+\subsection{Value Aggregation}
+
+Outside of computer science, authors consider the problem of value system alignment~\cite{Macedo2007ValueSystemInCollaborativeNetworks,Camarinha-Matos2008ANALYSISOFCORE-VALUESinColaborativeNetworks,Macedo2013ValueSystemAlignmentICollaborativeEnvironments}, which refers to finding the degree of alignment between the value systems of agents in society, considering the compatibility of the values of different agents. Under cases where a certain degree of compatibility exists, the problem of value preference aggregation~\cite{Liscio2023} in societies of agents is a natural problem to address, i.e. finding a value system that represents a group of agents through negotiation or social choice. For instance, \cite{eaa24AaronTOPSISValueAggregation,AaronAgreementTOPSIS} utilizes TOPSIS ranking systems to reach conflict-free or agreed value systems, while \cite{leraleri2024aggregation} relies on l$p$-regression to reach a consensus-based value system aligned with ethical principles varying from maximum utility to maximum fairness. These very same authors have admitted the limitations of obtaining a single value system representing a heterogeneous society.
+
+Although not based on specific values, PbRL works gather preferences from many agents implicitly aggregated values, especially large-scale applications in LLM agents fine-tuned with RLHF~\cite{Song2024PROLLM}. Introducing ways for enhancing group representation through the social welfare approaches, for example, value aggregation has been identified as a key future line of work~\cite{proportionalityRLHFAggregationChandakGoelPeters2024}.
+\textcolor{red}{SARA: TEXT REVISED UNTIL HERE}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Representing values and value systems}\label{sec:background}
+TODO: summarize this a lot, and rephrase.
+We first introduce the notion of \textit{value}. We adopt Osman and D'Inverno's notion of values as ``human abstract concepts that guide behaviour''~\cite{Osman2024}, which is a sufficiently abstract definition that is shared by most value representation frameworks~\cite{andres2024icaart}.  %It should be general enough to be able to capture key aspects of common value theories (e.g. Schwartz's~\cite{schwartz1992universals} or Curry's~\cite{Curry2022}), but also sufficiently explicit to account for a computational operationalization. In particular, we adopt Osman and D'Inverno's notion of values as ``human abstract concepts that guide behaviour''~\cite{osman2024computationalNUEVO}, which is a sufficiently abstract definition that is shared among many value representation frameworks~\cite{andres2024icaart}. 
+
+In our setting, we set out from a set of values $V$. Each value $v \in V$ constitutes essentially a label that gives a name to a value. When \textit{grounded} in a particular domain, a value label acquires a specific meaning. We model this meaning in terms of a value alignment function that allows us to measure the alignment of \textit{entities} present in this domain with a given value $v$. Depending on the domain of analysis, the set of entities might be the set of alternatives or actions in a classical decision-making stance, or rather, the outcomes that these alternatives provoke at the system/agent level. For instance, in route choice analysis, the entities of study are the paths or routes that the agent can traverse; whereas in government policy-making, the set of entities could consist of the outcomes that these policies provoke in society. Then, the notion of value alignment constitutes a (quantitative) measure as to how much an entity of these kinds promotes (or demotes) a value $v$.
+
+\begin{definition}[Value Alignment Function]\label{def:value-alignment-function}
+     Given a value $v$, the function $\A_v: E \to \R$ is a \textbf{value alignment function} for $v$. 
+\end{definition}
+
+A value alignment function $\A_v$ induces a preference relation $\preccurlyeq_v$ over entities with respect to value $v$. That is, for all $e,e' \in E$, if  $e'$ is weakly preferred over $e$ it holds that:
+    $$e \preccurlyeq_v e' \iff \A_v(e) \leq \A_v(e') $$
+
+
+To specify the semantics of a set of values, we define the notion of \textit{grounding}.
+
+\begin{definition}[Grounding]\label{def:grounding}
+     Given a set of values $V$. We define a set of value alignment functions for $V$ as a \textbf{grounding} of $V$: $G_V=\{\A_{v} | v \in V\}$. 
+\end{definition}
+
+Agents build their individual value systems on top of a grounding, i.e. taking into account the alignment functions of the values $v \in V$ that are relevant within a certain domain. 
+
+\begin{definition}[Value system]\label{def:value-system}
+Let $V = \{v_1, ..., v_m\}$ be a finite set of values, and $G_V=\{\A_{v_1},..., \A_{v_m}\}$ be a grounding for $V$. The \textbf{value system} of an agent $j$ is a weak order $\preccurlyeq^j_{G_V}$ over $E$ 
+that is derived from the grounding $G_V$. When $e\preccurlyeq^j_{G_V} e'$ is asserted, we say that $e$ is equally or more aligned as $e'$ with the value system of the agent. 
+
+\end{definition}
+This weak order also defines strict preference relations: e.g. $e\prec e'$, which means $e$ is strictly better aligned than $e$ with the value system, occurs when it is asserted that $e \preccurlyeq e'$ but also $\neg (e\succcurlyeq e')$. Also, if we have both $e \preccurlyeq e'$ and $e \succcurlyeq e'$, we have a notion for strict equivalence, i.e. $e$ and $e'$ are similarly aligned with the value system.
+
+Notice that an agent's value system aggregates grounded values, based on the importance that different values have for that agent. 
+Given a grounding, a value system of an agent can be represented employing a value system function.
+
+\begin{definition}[Value System Function]\label{def:value-system-alignment-function}
+Let $V$ be a set of values, and $j$ an agent with value system $\preccurlyeq_{j,G_V}$. The function $\A_{f_j,{G_V}} : E \to \R$ with $\A_{f_j,{G_V}}(e) = f_j(\A_{v_1}(e), \dots, \A_{v_m}(e))$ is a \textbf{value system function} for agent $j$ if it represents $\preccurlyeq_{j,G_V}$ over $E$, i.e. for all $e,e' \in E$:
+$$\A_{f_j,{G_V}}(e) \leq \A_{f_j,{G_V}}(e') \iff e \preccurlyeq_{j,G_V} e'$$ where $f_j: {\R}^m \to \R$ is the \textit{value system aggregation function} that $j$ applies to combine the alignments of $e$ with respect to each value $v \in V$. 
+\end{definition} 
+
+We argue that for value system functions to remain simple and interpretable they can be restricted to linear scalarization functions, frequently studied in multiobjective decisio-making. Formally, we restrict the possible functions $f_j$ to a weighted linear combination of the groundings (with normalize weights), saying that $W_j = (w_1, \dots, w_m)$ are the weights of the value system induced by $\A_{f_j,{G_V}}(e) = \sum_{i=1}w_i\A_{v_i}(e)= W_j\cdot G_V(e)$.
+
+
+
+%Notice that in our model a value system function need not be the result of a hierarchical application of values in line with their importance for an agent $j$. For example, consider two alternative potential investments $e_1$ and $e_2$, and an agent $j$ driven by Schwartz's values of \emph{achievement} ($v$), measured in kEUR of expected profit, and \emph{universalism} ($v'$), expressed as the expected number new jobs derived from the investment. Furthermore, assume the following alignments: $\A_v(e_1) = 500$ kEUR and $\A_v(e_2) = 400$ jobs, as well as $\A_{v'}(e_1) = 300$ kEUR and $\A_{v'}(e_2) = 1000$ jobs. In addition, given these units of measurement, suppose that for agent $j$ the value of achievement is twice as important as universalism, which is expressed by the value system aggregation function $f_j(x,y) = 2x + y$. Therefore, $A_{f_j,{G_V}}(e_1) = 1400$ and $A_{f_j,{G_V}}(e_2) = 1600$, which means that in agent $j$'s value system investment $e_2$ is preferred over investment $e_1$ ($e_1 \preccurlyeq_{j,G_V} e_2$), even though investment $e_2$ would be preferred over investment $e_1$ if only the ``most important'' value (achievement, $v$) was considered ($e_1 \succcurlyeq_v e_2$). This example also shows that value system aggregation functions must be interpreted with care, as their result is dependent on the units of measurement of its arguments (i.e. the value alignment functions).
+
+
+
+
+\section{Representing the value system of a society}
+
+As explained in Section~\ref{sec:introduction}, values are inherently socially relevant notions~\cite{schwartz1992universals,valueengineeringAutonomous2023,Osman2024}, and different agents hold different value systems~\cite{AaronAgreementTOPSIS,leraleri2024aggregation,Serramia2018}. In the following, we assume that for a given application domain, there is a society of agents $J$, where each agent has a different value system $\preccurlyeq_{G^j_V}^j$ based on a grounding $G^j_V = \left(\A_{v_1},\dots, \A_{v_m}\right)$. If we propose a value grounding function, we need to elicit whether it is coherent with the groundings of the agents, if it respects their value mindset.
+
+
+We propose making this coherence explicit from agent demonstrations. In particular, we can use examples constituted by pairs of entities, on which the agents state, qualitatively, the difference in the alignment of each entity with each value. Formally, the demonstrations consist of the following dataset for each agent $j$: $D_V^j = \{(e_i, e'_i, (y_i^{v_1,j}, \dots,y_i^{v_m, j}))|\ i\in I_V\}$, where $y^{v,j}_i \in [0,1]$ captures the relative degree in which agent $j$ believes that entity $e_i$ is more aligned than $e'_i$ with value $v$. For instance, a value of $y^{v,j}_i=1$ indicates that the alignment of $e_i$ with value $v$ is clearly superior to that of $e_i$ (i.e. $\mathcal{A}^j_v(e') > \mathcal{A}^j_v(e)$; a value of $y^{v}_j=0$ indicates the contrary case; and a value of $y^{v}_j=0.5$ indicates that both options are equally aligned. We can divide $D_V^j$ in one dataset for each value $\{D_v^j = \{e_i,e_i',y^{v,j}_i|\} \ |\  v\in V\}$. 
+
+Also, for a known alignment function $\A_v$, we define a quantitative transformation that can represent the relative alignment difference of two entities. Following previous work~\cite{andres2024vecompPaper}, we employ the well-known Bradley-Terry model~\cite{bradleyTerryModel1952}, frequently used for preference modelling on tasks from pairwise comparisons datasets~\cite{trexpreferences2019,christiano2023deeprlpreferences,dpoLLM2023} for learning reward models (Equation~\ref{eq:comparisonquantity}).
+\begin{equation}\label{eq:comparisonquantity}
+p(e,e'|\A_v) = \frac{\exp{\A_{v}(e)}}{\exp{\A_{v}(e)}+ \exp{\A_{v}(e')}}
+\end{equation}
+Notice that, effectively, $p(e,e'|\A_v) = 0.5$ only if $\A_{v}(e) = \A_{v}(e)$ and tends to $1$ or $0$ if their difference in alignment is very high. With this model, we can formally define the coherence of a value alignment function $\A_v$ with that of a set of agents if manifested through the $D_v$ datasets.
+
+
+
+
+%For each agent in the studied society $j \in J$ we observe a dataset $\mathcal{D}_j = \{(e_i,e'_i,y^j_i)\}_{i\in I_j}$, where $y^j_i \in [0,1]$ captures $j$'s relative preference for entity $e_i$ over $e'_i$ according to $j$'s value system. We consider also another dataset from domain experts (or from the very same agents), namely, $\mathcal{D}_V = \{(e_i,e'_i,y^{v_1}_i,\dots, y^{v_m}_i)\}_{i\in I_V}$ where $y^{v_l}_i \in [0,1]$ for all $l\in \{1,\dots,m\}$. Though they are defined generally as quantitative measures in $[0,1]$, both $y_l^{v_k}$ and $y_i^{j}$ may represent qualitative preferences if they are restricted to the values $\{0,1,0.5\}$, to indicate that $e'_i$ is preferred over $e_i$, the inverse relation, or indifference, respectively. 
+
+\begin{definition}[Coherence of a value alignment function/grounding]
+
+Let $J$ be a collection of agents (society). Let $\alpha \geq 0$ be some relative alignment tolerance error. The coherence of a value alignment function $\mathcal{A}_v$ for value $v$ over a dataset of agent-based alignment preferences $D_v = \{D_v^j|j\in J\}$, is given by:
+
+
+\begin{align*}
+    chr_{D_v}(\mathcal{A}_v) =\frac{1}{\abs{J}} \sum_{j\in J}\frac{1}{\abs{D_v^j}}\sum_{i=1}^\abs{D_v} ch_\alpha(e,e'|\A_v, y_i^{v_i,j})
+\end{align*}
+where
+
+$$
+ch_\alpha(e,e'|\A_v,y) = \begin{cases}
+1 \ \text{if} \begin{cases}
+    \abs{p(e,e'|\A_v)-y} < \frac{1}{2}\ \text{if}\ y \in \{0,1\}\\
+    \abs{p(e,e'|\A_v)-y} \leq \alpha\ \text{if}\ y =0.5
+    \end{cases}\\
+    0 \ \text{otherwise}
+\end{cases},
+    $$
+
+\iffalse
+
+\begin{align*}
+     C^{G_V}_{\{G_V^j, j\in J\}}(P) &= \min_{v\in V} \frac{1}{\abs{P}\abs{J}} \sum_{\substack{j\in J\\e,e'\in P}}C^{G_V,G^j_V}_{v, j}(e,e')\\
+    C^{G_V,G^j_V}_{v,j}(e,e') &=  \mathds{1}\left[(\A_{v}(e) - \A_{v}(e'))\cdot (\A^j_{v}(e) - \A^j_{v}(e')) > 0\right]
+\end{align*}
+
+    
+
+    A grounding is \textbf{maximally coherent} if:
+    $$G_V^* \in \argmax_{G_V}C^{G_V}_{\{G_V^j, j\in J\}}(P)$$
+
+    A grounding $G^*_V = (\A_{v_1}, \dots, \A_{v_m})$ is \textbf{totally coherent} if $C^{G^*_V}_{\{G_V^j, j\in J\}}(P) = 1$.
+\fi
+\end{definition}
+For clarity, the function $ch_\alpha(e,e'|\A_v,y)$ estimates whether it is correct to estimate $y$ through $\A_v$ over the pair $e,e'$. Simply put, if $y=1$, it describes whether the probability estimated from $\A_v$ is closer to $1$ than to $0.5$ (indicating that it effectively states that $e$ is strictly better aligned than $e'$ with the value). The case for $y=0$ is analogous. The case for $y=0.5$, when the agent manifests indifference is more problematic. Assuming a continuous estimation of $\A_v$, for it to yield an exact value of $0.5$ might be unfeasible with e.g. a neural network approach. Also, usually, when a user states indifference between options, it is not always the case that she is stating this indifference with absolute precision. Thus, we introduce a (small) ``indifference tolerance'' factor $0\leq \alpha\leq0.5$ that controls the closeness to $0.5$ that we consider the model should be to estimate the given indifference statements, i.e. when $p = 0.5\pm\alpha$. Setting $\alpha = 0$ indicates the model must strictly predict $\A(e) = \A(e')$, and if $\alpha=0.5$, we let the model decide freely.
+
+\todo[inline]{Resorting to qualitative groundings... DOWN}
+Returning to the conceptualization, we should explain why we resort to a qualitative preference approach despite the alignment functions being defined as scalar functions. This is due, as explained before, to the fact that agents might not be able to consistently give a quantitative assessment of value alignment, but can still rank pairs of alternatives~\cite{Serramia2020valuesystem}\todo{mas Referencia?}. Moreover, qualitative datasets require much less human moderation and are easily scalable.
+
+In previous work, however, we argued that quantitative information on value alignment is key for a correct value system comprehension~\cite{andres2024vecompPaper}. The quantitative assumption is also present in related works on value aggregation, where authors assume that agents are able to provide a quantitative assessment of value alignment functions directly, via analogous judgement functions~\cite{Serramia2018} or action promotion schemes~\cite{Karanik2024}, which also present quantitative analogous for our coherence notion (based on welfare functions). Despite the advantages, our model for coherence is much less strict, which allows in principle to have many maximally coherent grounding functions that qualitatively represent value alignment. In the following we will propose ways to restrict the number of feasible alternatives to the grounding functions that can reflect the people's choices while respecting these datasets.
+
+\todo[inline]{Resorting to qualitative groundings... UP}
+
+\todo[inline]{Assumption of having a single grounding ... DOWN}
+
+An important assumption that we make in this work though, is that there is a consensus on the grounding of the values \textcolor{blue}{within a society}, i.e. we can find at least a grounding function $G_V$ that is totally coherent with the groundings of \textit{all} of the agents in a society, in the sense that the alignment of each entity according to each grounding is similar. \textcolor{blue}{Saying that the grounding of a value is \textit{socially agreed} \cite{andres2024vecompPaper} is a way of recognizing the role culture plays in human societies. Morality is universal, yet culturally variable \cite{haidt2007new}. All humans have moral intuitions, which are fast processes in which an evaluative feeling of good-bad or like-dislike (about the actions or character of a person) appears in consciousness and is later followed by moral reasoning. We are prepared neurologically, psychologically, and culturally to link our consciousness with other humans to build moral communities evolving across generations.” }
+\textcolor{blue}{Simmel, Durkheim, Parsons and other authors used the word \emph{socialization} to refer to the mechanism that enables social reproduction, that is, the survival over time of value systems \cite{guhin2021whatever}. The idea of grounding reflects this tradition of studies and serves to acknowledge that we grow up in a social milieu full of values, and we decide which of these values to endorse or abandon.} This assumption is not limiting in many application domains. For instance, beneficence, nonmaleficence, autonomy, and justice are ethical principles that all doctors must follow no matter in which hospital they work %where as part defined in medical protocols that all hospitals agree upon
+~\cite{clinicalValues2020}. The aggregation of groundings from different agents across the same actions is also done in value aggregation works with clear success~\cite{leraleri2024aggregation,AaronAgreementTOPSIS}, suggesting a global value grounding approximation is feasible.
+
+We can relax the assumption slightly, though, admitting that there can be small discrepancies in the perceived alignment of edge-case alternatives. An example of such an edge case is the perceived sustainability of making a car trip with 4 people versus taking an almost empty train. Here, agents might have different perspectives, but as stated in other examples, they consider a train a more sustainable choice. In conclusion, in general, we assume that the maximally coherent groundings that we can find have a very close to $1$ or an \textit{acceptable} level of coherency (e.g. $0.95$).
+
+The assumption has important technical implications. On top of a grounding that is totally coherent, we can build value systems that are much more meaningful, in the sense that they are more true to the prior value understandings. Also, different value systems of different agents can be more easily compared with one another if we use the same groundings of values as reference. 
+
+\todo[inline]{Assumption of having a single grounding ... UP}
+
+
+We now define our notion of the value system of a society, consisting on a (should-be-coherent) grounding together with a set of diverse value systems and a function that assigns each agent to one of these value systems.
+
+\begin{definition}[Value system of a society]\label{def:society-value-system}
+Let $V = \{v_1, ..., v_m\}$ be a finite set of values, and $G_V=\{\A_{v_1},..., \A_{v_m}\}$ be a grounding for $V$. Let $J$ a group of agents (society). 
+
+A \textbf{value system of the society} $J$ , $VS^{J,K\beta}_{G_V}$, is a family of $\abs{J} \geq K\geq 1$ value systems $\left\{\preccurlyeq^k_{G_V} \middle| k \in \{1, \dots, K\}\right\}$  derived from $G_V$  over the entities in $E$, together with an injective assignment function $\beta : J \to \{1,\dots, K\}$ that assigns each agent to one of the individual value systems of the society.
+
+We refer to the group of agents assigned to the $k$-th value system ($\preccurlyeq^k_{G_V}$) as $C_k = \{j \in J | \beta(j) = k\} = \beta^{-1}(k)$, as the $k$-th \textit{cluster} of the society.
+\end{definition}
+
+As per Definition~\ref{def:society-value-system}, a value system of the society can be both a single one shared by the population (with $K=1$) ---e.g. the view of most value aggregation works~\cite{Liscio2023BlueskyTrackValueInference}---; and a different one for each of the agents (when $K=\abs{J}$), with all intermediate groupings possible. The first option clearly has the advantage of being the most \textit{concise} representation, while the latter is the most \textit{representative}, i.e. respects every single of the agents viewpoints. 
+We would like, though, to characterize the quality of a given value system of the society for all values of $K$ and assignments $\beta$, balancing a trade off between the aforementioned two goals. To mathematically model this trade-off, we find a natural parallelism with clustering analysis~\cite{Kettenring2006clusteringinterintra}, technique which consists in finding a set of clusters that groups a set of elements in a sensible manner, by balancing a trade-off between what is called intra-cluster and intra-cluster distances. The first comprises the similarity or distance between the elements assigned to each cluster, while the second involves maximizing the differences between each group so they are meaningful on there own. 
+In our case, each agent plays the role of an element that is assigned to a cluster, i.e. a value system, that represents its own value system the most (maximizing the intra-cluster similarity). At the same time, we want the set of value systems (clusters) to be small, and yet as different and diverse as possible (maximizing their \textit{inter-cluster} distance).
+
+We propose then a mathematical way of representing these two cluster-analysis-inspired goals. First, we define a key concept, the \textit{discordance} between value systems, a proxy for the clustering \textit{distance}. 
+
+\begin{definition}[Discordance between value systems]
+    Let $\preccurlyeq_{G_V^1}^1$ and $\preccurlyeq_{G_V^2}^2$ two value systems with maybe different groundings. The discordance between these over a set of pairs of entities $D\subset E\times E$ is defined as:
+
+$$d_{P}\left(\preccurlyeq^1_{G_V^1}, \preccurlyeq^2_{G_V^2}\right) = \frac{1}{\abs{P}}\sum_{\substack{(e,e')\in P}}\abs{\mathds{1}\left({e \preccurlyeq^1_{G_V^1} e'}\right)-\mathds{1}\left( e \preccurlyeq^2_{G_V^2} e'\right)}$$    
+where $\mathds{1}(a)$ is an indicator function that yields 1 when a logical condition $a$ holds, and $0$ otherwise.
+\end{definition}
+
+The discordance is a normalized version of the Kemeny-Snell distance \cite{kemeny1962preference}, which is suitable for quantifying preference disagreement in the context of social choice. If the discordance is 1, it means the value systems are totally apart from each other, ranking entities in the totally opposite way. If it is 0, though, it means the value systems agree in this ranking.
+
+Again, we seek to utilize this metric in a practical learning scenario. Mimicking the grounding case, we assume access to a qualitative preference comparisons dataset for each agent $D_{VS}^j = \{(e_i, e'_i, y^j_i) |\ i=1, \dots, I_{j}\}$, that grounds the value systems of agents as a set of stated preferences between entities. Again, we have $y_i^j \in \{0,0.5,1\}$ where $y_i^j = 1$ indicates that the agent believes the entity $e_i$ is strictly preferred over $e_i'$, i.e. $e_i \prec_{G^j_V}^j e'_i$; $y_i^j=0.5$ indicates that both options are similar, i.e. we have both $e_i \preccurlyeq_{G^j_V}^j e'_i$ and $e_i \succcurlyeq_{G^j_V}^j e'_i$; and $y_i^j=0$ when $e_i'$ is strictly preferred over $e_i$, i.e.  $e_i \prec_{G_V}^j e'_i$. 
+
+The discordance of a value system $\preccurlyeq_{G_V}$ with a dataset of this kind is given by:
+$$d_{D_{VS}^j}\left(\preccurlyeq_{G_V}\right) = \frac{1}{\abs{D_{VS}^j}}\sum_{i=1}^\abs{D_{VS}^j}ch\left(e_i,e_i'\middle|\preccurlyeq_{G_V},y_i^j\right),$$ 
+where
+$$ch(e,e'|\preccurlyeq,y) = \begin{cases}
+    1 \text{ if }\{\mathds{1}\left(e \succcurlyeq e'\right)-\mathds{1}\left(e \preccurlyeq e'\right)=2y-1\}\\
+    0 \text{ otherwise}
+\end{cases}$$
+
+
+The discordance metric in Definition~\ref{def:representativeness} allows to define our parallel notion with intra-cluster similarity, the \textit{representativeness} of a value system. Representativeness is a score that measures the degree by which a social value system \textit{represents} the value systems of the individuals. We define it generally in terms of abstract value systems, the adaptation for datasets is straightforward.
+
+\begin{definition}[Representativeness of the value system of a society]\label{def:representativeness}
+    Let $VS^{J,K,\beta}_{G_V}$ a value system of the society $J$ with $K$ value systems and assignment function $\beta$. Let the set of all value systems of the individual agents $\left\{\preccurlyeq^j_{G^j_V} \middle| j \in J\right\}$. Let, for each agent $j\in J$, some set $P_j \subset E\times E$. Let $P = \bigcup_{j\in J} P_j$ and $P_k = \bigcup_{j\in \beta^{-1}(k)}P_j$ (the set of pairs compared by all the agents assigned to the $k$-th cluster). The representativeness of the $k$-th cluster of the society is: 
+    $$repr_{P_k}\left(\preccurlyeq_{G_V}^k|\ C_k\right) = \frac{1}{\abs{C_k}}\sum_{j\in C_k} \left(1 - d_{P_j}\left(\preccurlyeq_{G_V}^{k}, \preccurlyeq_{G^j_V}^{j}\right)\right)$$
+    
+    And the representativeness of the full value system $VS_{J,(K,\beta,G_V)}$ is the minimum among that of all clusters:
+
+    $$repr_P\left(VS^{J,K,\beta}_{G_V}\right) = \min_{k=1,\dots,K} repr_{P_k}\left(\preccurlyeq_{G_V}^k|\ C_k\right)$$
+
+   
+\end{definition}
+
+ Notice that the representativeness of both the clusters and the full social value system is bounded in $[0,1]$, with $1$ indicating a maximum level of representation and $0$ a minimum. As it is defined, the representativeness score can be viewed as the accuracy of the task of getting the individual preferences of each agent represented by their assigned value system. The aggregation over all the value systems is the minimum over each cluster representativeness, which ensures representation fairness among the different groups. 
+
+A \textit{maximally} representative social value system is one that, if it replaced the individual value systems of the agents in the society, their preferences would still be represented to the highest possible extent. Note that (in our abstraction) a trivial maximally representative value system that may achieve a maximum representativeness always exist: the one formed by the $K=\abs{J}$ original value systems of the agents. Of course this situation is not desirable at all as it would provide no useful information about the values of the society. Besides, having two or more individual value systems having the same preferences (redundancy) is not penalized in this score. As explained before, we need to consider a trade off with the second clustering goal, that is, maximizing somehow the inter-cluster distances, the discordance between the value systems conforming the society. To model this we employ a notion of value system \textit{conciseness}.
+
+\begin{definition}[Conciseness of the value system of a society]
+Let $VS_{G_V}^{J,K,\beta}$ a value system of the society $J$ with $K$ value systems and assignment function $\beta$. Let $P = \bigcup_{j\in J}P_j$. The conciseness of $VS_{\{J, G_V,K\}}$ over $P$ is a distance:
+
+    %$$conc_P(VS_{G_V}^{J,K,\beta} = \frac{1}{\binom{K}{2}}\sum_{1\leq k<k'\leq K} d_{P_k\cup P_{k'}}(\preccurlyeq_{G_V}^{k}, \preccurlyeq_{G_V}^{k'}) $$
+    $$conc_P\left(VS_{G_V}^{J,K,\beta}\right) = \min_{1\leq k<k'\leq K} d_{P}(\preccurlyeq_{G_V}^{k}, \preccurlyeq_{G_V}^{k'}) $$
+
+
+\end{definition}
+
+The conciseness score is the minimum of the discordance between each pair of value systems, calculated by counting (and averaging) the differences in the ranking that each value system assigns to same set of certain set of preferences (the set obtained from mixing every comparison made by the agents assigned to each cluster). The closer the conciseness to $1$, the better separation between the value systems is achieved. If it is $0$, the value systems are equivalent for all agents in both clusters, meaning they should not be considered as different in the first place. \textcolor{blue}{ANDRES: Aquí hay una cosilla que igual también se puede motivar desde tu campo, Sara. Aunque cada agente tenga su propio VS, se puede asumir que hay muchos agentes que comparten el mismo o parecido VS... Se puede simplemente citar que esto es lo que asumen los papers de value aggregation, pero bueno, da para quizá decir algo más?:} Note that incrementing conciseness discourages the situation where each agent is assigned a different cluster, \textit{in the ``probable case?'' when at least two agents have similar preferences}, which is indicative that these should be in the same cluster, indirectly impeding that they are in different ones, because then the conciseness would be lower.
+
+Notice that when $K = 1$, conciseness is not defined. We consider that in this case a good ``clustering'' is simply described by its representativeness (i.e. the accuracy with which the single value system represents every agent). When comparing against another social value system that has $K > 1$, though, we assume the alternative with $K=1$ has the conciseness of the best possible assignment that can be made with a given current dataset and model restrictions. Thus, if with an assignment with $K=1$ we have good enough representativeness, we might as well use $K=1$ instead of proceeding to divide the population into clusters.
+
+%There is still a factor that is not controlled, i.e. is it preferred to have smaller number of clusters $K$ to improve the conciseness score? or higher to improve representativeness? This tradeoff, common in the clustering literature, TODO...
+\todo[inline]{Hasta aquí, la sección 4 está explicada a la manera de Andrés (muy extendido, luego vamos recortando)}
+
+\subsection{Problem formulation}
+With the representation approach for both individual and social value systems specified in the previous sections, we now in position to characterize the social value system learning problem addressed in this article. It is based on the following assumptions:
+\begin{itemize}
+    \item A process of \emph{value identification} has been performed \cite{Liscio2023BlueskyTrackValueInference} beforehand and a set $V = \{v_1, \dots, v_m\}$ of labels $v_i$ for all relevant values in a particular domain is available. Several value identification approaches from literature can be used for this (e.g.~\cite{wilson2018valueidentificationtext,Liscio2023,QiuZhaoLiLuPengGaoZhu2022ValueNetDataset}).
+    %\item The grounding of the values in $V$ in the domain is shared by all agents. Notice that, in general, this need not be the case. For instance, depending on context, the value of fairness can be grounded in preferences that favour ``balanced give \& take'' or ``equal distribution of workload'' \cite{osman2024computationalNUEVO}. However, it is not uncommon for societies that in certain contexts value groundings are effectively socially agreed upon, e.g. some values in the medical domain~\cite{towardsAwarenessMedicalField2024,userStudyLearningValues}. By contrast, value systems are specific for each agent. From a practical point of view, this assumption makes it easier to establish meaningful comparisons among the various value systems learnt for different agents.
+    \item Furthermore, in the specific domain at hand, we have access to human-provided examples about preferences between pairs of entities with respect to their alignment to a each value $v$, and about examples of rational choices over entities based on the value system of each agent that we want to analyze. After collecting this information, we obtain datasets such as the ones presented, namely $D_V$, and $D_{VS}$ respectively.
+    
+\end{itemize}
+
+% Already explained during Section 4. The second assumption can be written more formally. For each agent in the studied society $j \in J$ we observe a dataset $\mathcal{D}_j = \{(e_i,e'_i,y^j_i)\}_{i\in I_j}$, where $y^j_i \in [0,1]$ captures $j$'s relative preference for entity $e_i$ over $e'_i$ according to $j$'s value system. We consider also another dataset from domain experts (or from the very same agents), namely, $\mathcal{D}_V = \{(e_i,e'_i,y^{v_1}_i,\dots, y^{v_m}_i)\}_{i\in I_V}$ where $y^{v_l}_i \in [0,1]$ for all $l\in \{1,\dots,m\}$. Though they are defined generally as quantitative measures in $[0,1]$, both $y_l^{v_k}$ and $y_i^{j}$ may represent qualitative preferences if they are restricted to the values $\{0,1,0.5\}$, to indicate that $e'_i$ is preferred over $e_i$, the inverse relation, or indifference, respectively. 
+
+The \textit{social value system learning problem} addressed would consist of solving the following bi-level optimization problem.
+
+\begin{definition}[Maximally-aligned value system of a society]\label{def:maximally-aligned-vs-problem}
+     A maximally-aligned value aligned value system of $J$ over datasets $D_{VS}^J = \bigcup_{j\in J} D_{VS}^J$ and $D_V$ is a social value system $VS_J^{K^*,\beta^*,G^*_V}$ satisfying:
+     
+    %$$K^*, \beta^* \in \argmax_{K, \beta} \frac{conc_P\left(VS_{G_V}^{J,K,\beta}\right)}{\max_{j\in J} d_{P_j}(\preccurlyeq^{\beta(j)}_{G^*_V},\preccurlyeq^{j}_{G^j_V})}$$
+    $$K^*, \beta^* \in \argmax_{K, \beta} \frac{conc_{D_{VS}^J}\left(VS_J^{K,\beta,G^*_V}\right)}{1-repr_{D_{VS}^J}\left(VS_J^{(K,\beta,G^*_V}\right)}$$
+    subject to:
+    $$G^*_V \in \argmax_{G_V}\ ch_{D_V}(G_V)$$
+    
+    %where $G_V = (\A_{v_1}, \dots, \A_{v_m})$ and $G^j_V = (\A^j_{v_1}, \dots, \A^j_{v_m})$ .
+\end{definition}
+This problem formulation promotes for a social value system to scope for two goals in a hierarchichal manner. First, it must be established upon a grounding that is maximally coherent, accounting for the restrictions of the used models and the dataset consistency. Second, while guaranteeing the maximum grounding coherency, we maximize a tradeoff between conciseness and representativeness. In particular, we propose a ratio inspired by the commonly used Dunn Index~\cite{Dunn01011974}, which comprises the ratio of the minimum inter cluster distance among every pair of clusters --in our case, this corresponds to the conciseness score-- divided by the maximum intra-cluster distance/minimum intra-cluster similarity --in our case, the negated representativeness, $1-repr_{D_{VS}^J}$--. %In our case, the numerator is the same as in the original index, the way conciseness is defined as a minimum between cluster distances. The denominator is softened to minimizing the representativeness, i.e. the \textit{average} intra-cluster similarity, instead of the original maximum, but the intentionality is the same. As explained before, other aggregation methods can be proposed: depending on the application domain, if misrepresenting preferences in certain clusters is not acceptable, we should consider the minimum cluster representativeness, while if this not an issue, the current averaging formulation suffices. 
+
+Definition~\ref{def:maximally-aligned-vs-problem} also applies with $K=1$ with a subtle modification. When a candidate to maximally-aligned value system of a society comprises a single value system ($K=1$), the first goal is reduced to maximum representativeness, by making the conciseness of this candidate equal to the best found-so-far clustering with $K > 1$. 
+
+\textcolor{blue}{Para HOLGER}. Notice that the bi-level optimization setup is needed instead of first estimating a coherent grounding, and then trying to learn a value system for each agent. Consider the following example. Let a problem with $2$ values $v_1,v_2$, 3 entities $e_1,e_2,e_3$ and one agent. Consider that the value dataset for this agent indicates through pairwise comparisons that $\A_{v_1}(e_1) > \A_{v_1}(e_3) > \A_{v_1}(e_2)$ and also $\A_{v_1}(e_2) > \A_{v_1}(e_3) > \A_{v_1}(e_1)$. A candidate value grounding that satisfies these restrictions completely (thus being totally coherent) is the following: $G_{v_1,v_2}(e_1)=(1,0)$, $G_{v_1,v_2}(e_2)=(0,1)$ and $G_{v_1,v_2}(e_3)=(0.7,0.3)$. Additionally, the agent indicates that $e_3 \prec e_2 \prec e_1$ according to its value system.   For this grounding, there is at least one value system that can reproduce these preferences, namely $w_1 = 0.5$, $w_2=0.5$. However, another possible totally coherent grounding over the same set of grounding preferences is the one changing the alignments with $e_3$ to $\A_{v_1}(e_3) = 0.3$ and $\A_{v_2}(e_3) = 0.7$. In this case, as $e_1 \succ e_2$ then we need $w_1 > w_2$, and as $e_2 > e_3$, $w_2 > 0.3\cdot w_1 + 0.7 \cdot w_2 $, which yields a contradiction $w_2 > w_1$, making impossible to find a possible value system for this agent obtainable through a linear combination. This is why a joint optimization approach is needed to mitigate these issues. 
+
+\section{Algorithm}
+%\textbf{Option 1}: Learn a value system of each agent (estimating $\preccurlyeq^{j}_{G^j_V}$), subject to grounding correctness. Then clustering.
+
+%\textbf{Option 2}: Learn all on the fly with a bi-level optimization approach 
+
+%\textbf{Clustering approach: Hierarchical / EM approach}
+%Hierarchical: can try each K very easily.
+%EM approach
+%\textbf{Clustering static or dynamic: }
+%\textbf{Static}: clustering estimating on the fly $\preccurlyeq_{G_V}^{\beta(j)}$ as the formal aggregation of the rewards of all agents inside a cluster. Then train networks to recreate the resulting aggregation. More complexity, time consumption, but much clearer debugging process... Not clear that an aggregation is good. Only applicable in with option 1, option 2 would be overkill
+
+%\textbf{Dynamic}: \textbf{EM approach with exploration}. Simpler, faster probably.
+
+
+In our deep learning approach we will consider two kind of networks. First, the network $G^\Phi_V : \Phi \to \R^m$ with parameters $\theta_V$, that accounts for a representation of a socially-agreed grounding $G_V$. We also consider up to $\abs{J}$ neural networks that represent each agents' value systems $A_j : \R^m \to \R^m$, with weights $\omega$. These are convex combination linear networks with no bias, i.e. it is given by $A_j (a_1, \dots, a_m) = \sum_{i=1}^m w_j^{v_i}\cdot a_i$ where the weights are calculated from its parameters through $\frac{\exp \omega}{\sum \omega} = (w_j^{v_1}, \dots, w_j^{v_m})$ to ensure they are all bigger than 0 and their sum normalized to 1. In the algorithm, given an assignment $(K,\beta)$ we only consider at each iteration $K$ different networks, each estimating one value system: $A_{VS}^\omega =\{A_{k}\}_{k=1}^{K_{max}}$ and $G_V^\theta$, one per possible cluster. At every moment, we set $A_j \equiv A_{\beta({j})}$.
+
+
+The algorithm is based on a EM clustering approach mimicking~\cite{pmlr-v235-chakraborty24b} (Algorithm 2). The approach was used to learn a clustering of agents in terms of their preferences regarding pairs of options. To do so, it performs an iterative cycle of two steps. In the first step of each cycle, the algorithm assigns each agent to the cluster (a preference model) that represents its preferences better (E-step). In the second step (M-Step), the preference model of each cluster is trained to better fit the preferences of each agent. 
+
+The M-step from~\cite{pmlr-v235-chakraborty24b} is based on fitting a reward model $R^\theta(e)$ minimizing a cross-entropy-like loss on the training data: 
+
+$$\mathcal{L}(e,e',y|R^\theta) = -y\log(p(e,e|R^\theta)-(1-y)\log(p(e,e'|R^\theta))$$. 
+
+In our case, we have to fit $m$ reward models, one per value: $G_V^\theta=\{\A_{v_i}^\theta| i=1,\dots, m\}$, and up to $K_{max}$ different value system weights from the reward models $A^\omega_k\circ G^\theta_V$, $k=1,\dots, K_{max}$. Moreover, these two reward models need to be fitted in a hierarchical manner (bi-level optimization). That implies two loss calculations, one for the value system dataset ($\mathcal{L}_{VS}(D_{VS}^J)$ (Equation~\ref{eq:loss_vs}) and another for each value of the grounding dataset $\mathcal{L}_{V}(D_V)$ (Equation~\ref{eq:loss_gr}).
+
+\iffalse
+\todo[inline]{Muy probablemente este sistema no funcionaba}
+\begin{align}\label{eq:loss_vs}
+    \mathcal{L}_{VS}(D_{VS}^J|\beta) &= \mathcal{L}_{r}(D_{VS}^J|\beta) - \sigma\mathcal{L}_{c}(D_{VS}^J|\beta),\text{where} \\
+    \label{eq:loss_vs1}\mathcal{L}_r(D|\beta) &=\frac{1}{\sum r_k}\sum_{k=1}^K r_k \sum_{j\in C_k}\sum_{i_j=1}^{\abs{D^j}}\frac{\mathcal{L}(e_i,e_i',y_i^j|A_k^\omega)}{\abs{D^j}\abs{C_k}}\\
+    \label{eq:loss_vs2}\mathcal{L}_c(D) &=\frac{1}{\sum c_k^{k'}}\sum_{k<k'} c_k^{k'} \sum_{i=1}^{\abs{D^J}}\frac{D(e_i,e'_i|A_k^\omega,A_{k'}^\omega)}{{\abs{D^J}}}
+\end{align}
+The ``value system loss'' in Equation \ref{eq:loss_vs} features two terms. First, the representativeness loss in Equation~\ref{eq:loss_vs1}, which objective, upon minimization, is maximizing the representativeness of all agents in each cluster, focusing on those clusters that are relatively less representative (thus inclining to maximize the global representativeness, affected by the worst cluster). To do this, we multiply the part of the loss corresponding to each cluster $k$ by a proportional factor $r_k = 1-repr_{\cup_{j\in C_k}D_{VS}^j}\left(\preccurlyeq_{A_k \circ G^\theta_V}|C_k\right)$ --where $\preccurlyeq_{A_j \circ G^\theta_V}$ is the preorder relation induced by the function $A_j \circ G^\theta_V$-- is the negated representativeness of cluster $k$ according to our current models $A^\omega_k\circ G^\theta_V$. The second term of the loss, in Equation~\ref{eq:loss_vs2}, is a penalty term weighted by a penalty factor $\sigma \geq 0$. It penalizes solutions with low discordance between clsuters, i.e., tries to increase conciseness by separating the preference models of the current clusters. Though the conciseness is mostly limited by the quality of the cluster assignment $\beta$, we hypothesize this factor can aid the system to keep improving conciseness of the subsequent assignments by forcing clustering separation to a certain extent. 
+
+In a similar fashion to the first term of the loss, we define for each compared pair of clusters the weighting factor $c_k^{k'} = 1-d_{D_{VS}^{J}}(\preccurlyeq_{A_k^\omega \circ G_V^\theta},\preccurlyeq_{A_{k'}^\omega\circ G_V^\theta})$, that is the negated discordance between the value systems $A_k$ and $A_{k'}$. The weights $c_k$ penalize the clusters that are actually less discordant, which leads to a more directed increase in conciseness (given it is defined as the minimum over these discordances). As the conciseness is not differentiable, we introduce as the differentiable part the term $D(e,e'|A_1,A_2)$, which is the Jensen Shannon Divergence between the Bernoulli probability distributions of parameters $p(e,e'|A_1)$ and $p(e,e'|A_2)$. This metric can be viewed as the quantitative version of the inter-cluster discordance (Equation~\ref{eq:discordance-inter}). This metric has been used in the opposed problem of searching the centroid of probability distributions~\cite{jensenfordistancebetweenprobscentroid}, by minimizing the metric, now we penalize it (with a factor $\sigma>0$), so to maximize the discordance between each pair of clusters, and thus, tending to increasing conciseness. 
+
+\fi
+
+\begin{align}\label{eq:loss_vs}
+    \mathcal{L}_{VS}(D_{VS}^J|\beta) &= \mathcal{L}_{r}(D_{VS}^J|\beta) - \sigma\mathcal{L}_{c}(D_{VS}^J|\beta),\text{where} \\
+    \label{eq:loss_vs1}\mathcal{L}_r(D|\beta) &=\max_{k}\sum_{i_j=1}^{\abs{D^j}}\frac{\mathcal{L}(e_i,e_i',y_i^j|A_k^\omega)}{\abs{D^j}\abs{C_k}}\\
+    \label{eq:loss_vs2}\mathcal{L}_c(D) &=\min_{k < k} \sum_{i=1}^{\abs{D^J}}\frac{D(e_i,e'_i|A_k^\omega,A_{k'}^\omega)}{{\abs{D^J}}}
+\end{align}
+The ``value system loss'' in Equation \ref{eq:loss_vs} features two terms. First, the representativeness loss in Equation~\ref{eq:loss_vs1}, which objective, upon minimization, is maximizing the representativeness of all agents in each cluster, focusing on those clusters that are relatively less representative (thus inclining to maximize the global representativeness, affected by the worst cluster). To do this, we multiply the part of the loss corresponding to each cluster $k$ by a proportional factor $r_k = 1-repr_{\cup_{j\in C_k}D_{VS}^j}\left(\preccurlyeq_{A_k \circ G^\theta_V}|C_k\right)$ --where $\preccurlyeq_{A_j \circ G^\theta_V}$ is the preorder relation induced by the function $A_j \circ G^\theta_V$-- is the negated representativeness of cluster $k$ according to our current models $A^\omega_k\circ G^\theta_V$. The second term of the loss, in Equation~\ref{eq:loss_vs2}, is a penalty term weighted by a penalty factor $\sigma \geq 0$. It penalizes solutions with low discordance between clsuters, i.e., tries to increase conciseness by separating the preference models of the current clusters. Though the conciseness is mostly limited by the quality of the cluster assignment $\beta$, we hypothesize this factor can aid the system to keep improving conciseness of the subsequent assignments by forcing clustering separation to a certain extent. 
+
+In a similar fashion to the first term of the loss, we define for each compared pair of clusters the weighting factor $c_k^{k'} = 1-d_{D_{VS}^{J}}(\preccurlyeq_{A_k^\omega \circ G_V^\theta},\preccurlyeq_{A_{k'}^\omega\circ G_V^\theta})$, that is the negated discordance between the value systems $A_k$ and $A_{k'}$. The weights $c_k$ penalize the clusters that are actually less discordant, which leads to a more directed increase in conciseness (given it is defined as the minimum over these discordances). As the conciseness is not differentiable, we introduce as the differentiable part the term $D(e,e'|A_1,A_2)$, which is the Jensen Shannon Divergence between the Bernoulli probability distributions of parameters $p(e,e'|A_1)$ and $p(e,e'|A_2)$. This metric can be viewed as the quantitative version of the inter-cluster discordance (Equation~\ref{eq:discordance-inter}). This metric has been used in the opposed problem of searching the centroid of probability distributions~\cite{jensenfordistancebetweenprobscentroid}, by minimizing the metric, now we penalize it (with a factor $\sigma>0$), so to maximize the discordance between each pair of clusters, and thus, tending to increasing conciseness. 
+
+\begin{equation}\label{eq:loss_gr}
+    \mathcal{L}_{V}(D_{v_i}) = \left\{\frac{1}{\abs{J}}\sum_{j\in J}\frac{1}{\abs{D^j_{v_i}}}\sum_{i=1}^\abs{D_{v_i}^j} \mathcal{L}(e_i,e_i',y_i^{v_i,j}|\A_{v_i}^\theta)\right\}_{i=1}^m
+\end{equation}
+
+The grounding losses (one per value), on the other hand are simply the cross-entropy loss on the value examples for the value $v_i$ in the dataset ($D_{v_i}$), aggregating by agent examples and clusters, in that order. It provides a quantitative penalty for improving the grounding coherence of the system (minimizing the discordances that affect it).  
+
+The grounding and value system loss functions need to be minimized in the hierarchy of Definition~\ref{def:maximally-aligned-vs-problem}. We treat the problem as a constrained optimization problem. The constraints to satisfy here are maximizing the coherence with each values, i.e. we need to restrain the feasible grounding network parameters to be such that $ chr_{D_v}(G^{\theta}_{v}) = C^*_v$, with $C^*_v = \max_{\theta' \in \Theta}ch_{D_v}(G^{\theta'}_v)$. We do not know the value of each $C^*_v$ in advance, although we would like to achieve $C^*_v \to 1$, it might be unfeasible do to agent inconsistencies and the capabilities of the model $G_V^\theta$ used. To make sure the coherence achieved is close to $C^*_v$, the constraint to satisfy in terms of our loss function is $\mathcal{L}_V(D_V) \leq \mathcal{L}^*_V$, where $\mathcal{L}^*_V$ is the maximum loss that guarantees $C^*_V$. With $m$ Lagrange multipliers $\lambda_1, \dots, \lambda_m > 0$ our objective is transformed to:
+
+\begin{align}\label{eq:lagrange}
+    \min_{\theta,\omega} \max_\lambda\mathcal{L}_{VS}(D_{VS}^J|\beta) &- \sum_{i=1}^m\lambda_i \mathcal{L}_V(D_V)\\
+\end{align}
+We seek a Nash equilibrium of jointly minimizing the lagrangian  (Equation~\ref{eq:lagrange}) over $\theta,\omega$ (subject to the current assignment $\beta$) and maximizing over $\lambda \in \R^m$~\cite{pmlrv98cotter19aLagrangianNash}. This is done via successive iterations of improving the lagrangian (via typical gradient descent,\textcolor{red}{ Lines 12,13 }) and then incrementing the lagrange multipliers $\lambda$ through gradient ascent (\textcolor{red}{Line 17}). Through this process we would optimize for the constraint $\mathcal{L}_V(D_V) = 0$, which is not strictly necessary to achieve a totally coherent grounding. To mitigate this effect we only increment the multipliers with a learning rate $\alpha_\lambda$ if the coherence is behind the optimal one  $C^*_V$. To avoid overestimating it, we decrement the multipliers using a decay factor $\gamma_\lambda$ if the coherence remains at $C_V^*$ (to facilitate the minimization of the value system loss). As we do not initially know the values of $C^*_V$, we estimate $C_V^*$ as the maximum coherence found in the optimization loop. The only assumption for this algorithm to work is that $\lambda_0$ must be big enough to increase the initial coherency.
+
+
+The EM approach often gets stuck in local optima or stationary points~\cite{emlocalconvergence}. This is not a relevant issue in the reference publication~\cite{pmlr-v235-chakraborty24b}, as they depart from a previous ``good enough'' model (a non-socially aware LLM). In our case we have no prior solution, though.
+
+To mitigate that issue, we propose a simple exploitation-exploration outer loop to the basic E-M procedure to more throughly explore different clustering approaches, inspired by evolutionary algorithms. We maintain a list of candidate value systems of the society, described ultimately by a specific instantiation of the network parameters and the assignment function $\beta$ (with the corresponding $K$ derivable through Line 19). Each E-M procedure is now changed to the following: at each training iteration, we select one item from the candidate list (with a certain probability distribution), mutate it (with a mutation probability $\epsilon > 0$) \and then perform the M-step. \todo[inline]{Posiblemente cambiar algoritmo a Holger version...} Otherwise, we generate a random initialization of new network parameters (for groundings and value systems), followed by the E step. In any case, we then loop over E-M steps for a certain number of \textit{epochs}. Afterwards, we evaluate the obtained value system of the society and insert it in the candidate list. 
+%PREV: Each E-M procedure is now changed to the following: at each training iteration, with probability $1-\epsilon_t$, we select one item from the candidate list (with a certain probability distribution), mutate it (with a mutation probability $\epsilon > 0$) \and then perform the M-step. \todo[inline]{Posiblemente cambiar algoritmo a Holger version...} Otherwise, we generate a random initialization of new network parameters (for groundings and value systems), followed by the E step. In any case, we then loop over E-M steps for a certain number of \textit{epochs}. Afterwards, we evaluate the obtained value system of the society and insert it in the candidate list.
+
+The candidate list has a limited size, $L>0$. It needs to maintain a balance between maintaining ``good'' solutions while allowing for cluster assignment variety, which ultimately leads to better exploration performance. Providing the E-M step solves the problem at Definition~\ref{def:maximally-aligned-vs-problem}, a ``good'' solution in this list does not necessarily follow strictly the lexicographic order implied by Definition~\ref{def:maximally-aligned-vs-problem}. Instead, to favor the exploration of high quality cluster assignments, we order the options (regarding selection) first by the outer objective (value system quality) and then on the inner objective (grounding quality). We do this inverse ordering knowing that the Lagrange multiplier solution would ultimately perform the necessary changes in the groundings to improve them in any situation, while finding clusters requires this exploration mechanism. In practice, we show this method does not end with grave incoherency in the learned groundings of any option in the final candidate list after not so many iterations.
+
+A new assignment obtained after selecting one from the list is inserted in the list always, overriding the original one unless it is pareto dominated by it. Pareto dominance in this context is considered over the coherence, conciseness and representativity of each assignment together with the learned networks. A new random assignment is always inserted in the candidate list. When the candidate limit size is surpassed, a clustering gets eliminated, being the worst in the following lexicographic order: bigger $K$ value, number of equivalent clusters, assignment similarity ratio, number of solutions that pareto dominate the clustering, and, ultimately, the lexicographic order implied by the bi-level problem in Definition~\ref{def:maximally-aligned-vs-problem} (first considering the coherence $ch_{D_V}({G_V^\theta})$ and secondly, the outer criteria). Note that the elimination order is inverse to the selection order (for which it ultimately responds to the outer criterion, which is unlikely to have repeated values). We always keep the clusters with unique in the $K$ value, so to provide more options to the user.
+
+
+%convert the clustering problem in a multi-armed bandit (MAB) problem with multiple goals. Each possible assignment of agents to clusters together with a certain combination of networks $G_V^\theta$ and $\{\hat{A}_{k}\}_{k=1}^{K}$ is an action, and the rewards associated with an action are two-fold (one per objective in Definition~\ref{def:maximally-aligned-vs-problem}). The episode length is 1, then the reward is also an estimation of the q-values. As the space of actions is unbounded, we only look at a maximum number of actions that are ``interesting'', according to two insertion and elimination rules. 
+
+\begin{algorithm}[H]
+\caption{Value System Learning of a society with exploration}\label{alg:algorithm2}
+\hspace*{\algorithmicindent} \textbf{Input:}. All the initialization parameters from Algorithm~\ref{alg:algorithm1}. Number of training steps $T$. Assignment exploration rate $\epsilon_0 < 1$. Memory of candidate solutions size $N$.
+
+
+\textbf{Output:} An assignment of agents into $K$ clusters $\beta$, and trained grounding networks $G_V^\theta$ and the cluster-specific value system networks $\{A_{k}\}_{k=1}^{K}$.
+
+
+ \begin{algorithmic}[1]
+    \State Initialize Algorithm~\ref{alg:algorithm1}
+    \State Generate value system network parameters $\omega_0 = \{\omega_{k}\}_{k=1}^{K_{max}}$, one for each network in $A_{VS}^\omega$; and parameters $\theta_0$. 
+    \State Repeat previous line $N$ times to fill memory $M$.
+    \For{training step $t = 1\dots T$}
+    \If{Rand$() < \epsilon$}
+    \State $\theta_t,\omega_t  \gets$ \textproc{GenerateRandomParams}($M$)
+    \State Set $\lambda_t = \lambda_0$
+    \Else
+    \State $K_t,\beta_t,\theta_t,\omega_t,\lambda_t \gets$\textproc{SelectAssignment}($M$)
+    \EndIf
+    \State $\beta'_{t},\omega'_{t},\theta'_t\gets$Algorithm~\ref{alg:algorithm1}($\beta_t, \omega_t,\theta_t,n$)    
+    \State \textproc{InsertInMemory($K'_t,\beta'_t,\theta'_t,\omega'_t,\lambda'_t$, $M$)}
+    \State If $M$ is full: \textproc{EliminateWorstAssignment(M)}
+    \EndFor
+     
+ \State $\beta$, $G_V^\theta$, $A_k^\omega$$\gets$ \textproc{SelectsBestAssigment(M)} 
+ \State \textbf{return} $\beta_t$, $G_V^\theta$, $A_k^\omega$
+ \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Value system learning of a society}\label{alg:algorithm1}
+\hspace*{\algorithmicindent} \textbf{Initialization:} Datasets $D_{VS}^J$ and $D_V$. A learning rate $\alpha_\theta$ for $G_V^\theta$ and $\alpha_\omega$ for every $A_k$. A maximum number of clusters $K_{max}$. Initial Lagrange multipliers $\lambda_0 = \{\lambda^i_0\}_{i=1}^m$, $\lambda^i_0 > 0$, with learning rate $\alpha_\lambda$ a decay factor $\gamma_\lambda > 0$. Set maximum achievable coherence $chr^* = 0$.%, and minimum needed grounding loss $L_V^* = \infty$.
+
+\hspace*{\algorithmicindent} \textbf{Input (at a given step of Algorithm~\ref{alg:algorithm2}):} 
+Assignment $\beta_0$ (optional), Value system network parameters $\omega_0$, Grounding network parameters $\theta_0$, Number of epochs $n$. Previous Lagrange multiplier state $\lambda_0 = \{\lambda^i_0\}_{i=1}^m$ (optional, otherwise use initialization).
+
+\hspace*{\algorithmicindent} \textbf{Output:} An assignment of agents into clusters $\beta$, updated network parameters $\theta_n$ $\omega_n$ during $n$ iterations and new Lagrange multiplier state $\{\lambda_i\}_{i=1}^m$ .
+
+
+ \begin{algorithmic}[1]
+    \State Set networks in $A_{VS}^\omega$ with params $\omega_{0}$
+    \State Set $G_V^\theta$ with params $\theta_{0}$
+    \For{epoch $r=0,\dots,n-1$}
+    \State \textproc{E-Step} (omit if $\beta_0$ is supplied and $r=0$):
+     \For{$j\in J$}
+        \State $$k^*_j = \argmin_{k<K_{max}} \prod_{i=1}^\abs{D^j_{VS}} \left(\abs{y^j_i - p(e_i,e_i'|A_k\circ G^\Phi_V)}\right)$$
+        \State Set $\beta_r(j) \equiv k^*_j$.
+    \EndFor
+    \State $K_r \gets \#\{\beta_r(j)|j\in J\}$
+    \State \textproc{M-Step}:
+    
+    \State $\mathcal{L}_{global} =  \mathcal{L}_{VS}(D_{VS}^J|\beta_r) + \sum_{i=1}^m\lambda^i_r \mathcal{L}_V(D_V) $
+    \State $\theta_{r+1} \gets \theta_{r} - \alpha_\theta\nabla_\theta\mathcal{L}_{global}  $
+    \State $\omega_{r+1} \gets \omega_{r} - \alpha_\omega\nabla_\omega\mathcal{L}_{global}  $
+    
+    \If{$chr_{D_V}(G_V^\phi) > chr^*_{D_V}(G_V^\phi)$}
+    \State $chr^*_{D_V}(G_V^\phi) \gets chr_{D_V}(G_V^\phi)$ %$\mathcal{L}^*_V \gets min(\mathcal{L}_V(D_V), \mathcal{L}^*_V)$
+    \Else 
+    \State $\lambda_{r+1} \gets (1-\gamma_\lambda)\lambda_{r} + \alpha_{\lambda} \mathcal{L}_V(D_V)$
+    \EndIf
+    \EndFor
+    \State \textbf{Return} $\beta$, $\omega_{n}$, $\theta_{n}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Evaluation}\label{sec:evaluation}
+We explore a real-data route choice case of train route choice~\cite{apollochoicepublication} in Switzerland where a set of 388 agents where asked to provide their preferred choice between 7 pairs of train route options for the same origin and destination. In total, it has 3,492 pairwise comparisons between trajectories based on 16 variables. Each route is described by 4 factors, namely expected travel \textit{time}, associated \textit{cost}, number of \textit{interchanges} to achieve the destination and total \textit{headway} time (the time between train departures). The other 8 variables are agent-specific features obtained by asking them for aspects about their current contextual situation that would affect his or her choices, namely: \textit{household income}, \textit{car availability}, whether it is choosing a \textit{conmmuting} trip, whether it is for \textit{shopping}, \textit{business} or \textit{leisure} (or none of them). The last three options are mutually exclusive. 
+
+Adapted to our formalism, each single route presented as an option to the agent is an entity of the application domain of train choice, the society $J$ consists of all the 388 surveyed agents, and the stated choice between each pair of routes given by each agent constitute the value system dataset $D_{VS}^J$. For instance, if agent $j$ with assumed value system $\preccurlyeq^j$ chooses route $r_i$ over $r'_i$, we assume $r_i \succ^j r_i'$, i.e. $y_i^j = 1$, and viceversa. We have no information about what values really are using the agents to provide their decisions, but we can extrapolate them from the data with no modifications. \textcolor{blue}{ANDRES: Sara, si nos puedes dar nombres más interesantes o un explicación mejor de por qué estos valores nos vendría genial!} These values that we propose are \textit{time efficiency}, \textit{cost efficiency} and \textit{comfort}. Time efficiency is defined in terms of the travel time feature of a trajectory, cost efficiency in terms of route cost, and comfort in terms of the headway time and the number of interchanges. Specifically, we assume that over each pair or routes and agent, the route with higher expected travel time/cost is, naturally, assumed by the agent to be more aligned with time/cost efficiency respectively. Regarding the comfort, we follow this process. Let $r_i$ and $r_i'$ two routes, $h_i,h_i'$ and $it_i,it_i'$ their headway time and number of interchanges. If it both holds that $h_i < h_i'$ and $it_i < it_i'$, clearly, we assume $r_i$ is more aligned with comfort as it is less troublesome in these two aspects. If $h_i < h_i'$ but $it_i > it_i$ (or viceversa) we assume that both routes are similar ($y_i^{comfort}=0.5$), but we make the model able to make any decision, i.e. we make $\alpha = 0.5$, as we have no more information about how each agent would weight these factors. Given these value definitions, we gather a value dataset $D_V$ conisting of adding 3 more instances (one per value) per real agent-made comparison consisting of the very same 2 routes compared in terms of the previous rules.
+
+In our experiments, though, we assume no knowledge of how these three values are defined, the grounding network $G_V^\theta$ is not aware of this value definition process and will try to replicate the stated preferences in the dataset $D_V$. We employ a neural network architecture for each consisting of 3 hidden layers (of 16, 24 and 16 cells each) with $Tanh$ activation functions and a final activation consisting of a \textit{softplus} activation function with parameter $1$ so that the final value alignment estimation is always a positive number (mimicking the expected cost-based assumed definition of the values in this context). The value system networks consist of a linear layer with $3$ parameters, treated in the fashion described at the beginning of Section~\ref{sec:algorithm}.
+
+\subsection{Methodology}
+In the presented use case we want to evaluate the following of the results of running the proposed algorithm with different parameters.
+\begin{itemize}
+    \item First, the quality of the learned grounding function $G_V^\theta$. We will evaluate quantitatively  the grounding coherence, as well, qualitatively, analyzing which features contribute the most to the learned function using the global explainability method of Morris Sensitivity~\cite{morrissensitivity1991}. This will aid in estimating whether each value grounding is actually based in the features used in the dataset for its calculation.
+    \item Second, we will analyze the resulting societal value systems quantitatively in terms of the number of clusters obtained, the conciseness and the representativeness, per cluster and overall, with the aid of histograms showing how much each agent is actually represented in its own cluster. qualitativey, we will discuss the variety of value system weights, ad also make a reflection on how the contextual features (not used in the learning task) are distributed in the learned clusters, so to check whether the clusters make sense regarding the conditions stablished by the agents. We will measure, in each cluster, the average value of each feature, and plot the percentage increase/decrease of each one versus the over the respective overall average of these features in the full dataset.
+    \item Third, we will show the step-by-step covergence of the algorithms with different setups. 
+\end{itemize}
+
+We will perform 3 experiments. First, we will run Algorithm~\ref{alg:algorithm1} alone with $K_{max}=1$ cluster to observe the necessity to perform the clustering approach. Second, we employ Algorithm~\ref{alg:algorithm2} with a relatively low number of clusters for the problem, namely $K_{max}=3$. Lastly, we do another experiment with $K_{max} = 12$, which is a bigger number of clusters than what we should need as we will show. The hyperparameter selection is in Table~\ref{tab:hyperparameters}. \textcolor{blue}{We show results for a single run, but on different seeds they are mostly similar.}
+
+
+
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{c|c|c|c}
+    Hyperparameter & Exp. 1 & Exp. 2 & Exp. 3\\
+    $K_{max}$ & 1 & 3 &  12 \\
+        $\lambda_0,\alpha_\lambda,\gamma_\lambda$ & $0.1,0.005,10^{-9}$ & (same) & (same) \\
+        $T,N,n$ & 1,10,5 & 200,10,5 & 400\\
+        
+    \end{tabular}
+    \caption{Hyperparameters used in each experiment}
+    \label{tab:hyperparameters}
+\end{table}
+
+
+%\textbf{IMPORTANT DECISION TO MAKE: In both datasets (and in no other valid datasets), there are no values whatsoever. What we have is, at most like 4-5 features  that are relevant for decision making: cost, time, layovers, etc. Do we say each feature is a value, or rather, try to come up with a rule that defines a notion of comfort for things like layovers, or headway time, etc??? In the first case, critique can arise from the fact that learning the grounding is not needed, and SHAP would be unnecessary to do. In the second case, SHAP is needed because we need a deep network to estimate what comfort is, however, they can critizise that we are inventing the notion of comfort to our advantage... }
+
+
+%\subsection{Synthetic sequential decision domain: Route choice MOMDP/Item gathering environment}
+\subsection{Results and discussion}
+
+To determine the expected usefulness the clustering approach might have to determine value systems of the agents, we first execute Algorithm~\ref{alg:algorithm1} with $K=1$. In Table~\ref{tab:tablek1}, we observe the achieved accuracy of running $3$ experiments with different seeds. As expected, we achieve total coherence in all the values (given the value dataset is consistent with numerical attributes), However, with the initial $\lambda$ alone this goal was not always achieved (getting e.g. coherence with the cost value to $0.82$ with all the remaining hyperparameters the same), showing the Lagrange multiplier ascent mechanism was needed to properly prioritize the grounding coherence. Also, we oberserve the learned value system is based on comfort totally. We assume this is done artificially by the model, given we gave it liberty to choose any decision in indifferent cases on coherence (which constitute 
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{p{1.6cm}p{0.9cm}p{0.9cm}p{0.9cm}p{0.9cm}}
+        \toprule
+        Value System & Repr. & Coher. Cost & Coher. Eff & Coher. Comf \\
+        \midrule
+        (0, 0, 0.994) ± 0.003 & 0.794 ± 0.004 & 1.000 ± 0.000 & 1.000 ± 0.000 & 1.000 ± 0.000 \\
+        \bottomrule
+        \end{tabular}
+    \caption{Metrics achieved with $K=1$ cluster.}
+    \label{tab:tablek1}
+\end{table}
+
+
+
+\section{Conclusion}
+
+
+\textbf{TODO esto no sé si conviene decirlo por aquí... In future work, we will contemplate studying context-dependency and even agent-dependency on the groundings, as other domains such as politics where the frontier between values such as \textit{freedom} or \textit{equality} can certainly depend on specific viewpoints (e.g. leveraging different preferences over economic or social freedom).} 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Use this environment to include acknowledgements (optional).
+%%% This will be omitted in doubleblind mode.
+
+\begin{ack}
+TODO
+\end{ack}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%% Use this command to include your bibliography file.
+
+\bibliography{mybibfile}
+
+\end{document}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -78,6 +78,8 @@
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
+                    "mutation_prob": 0.0,
+                    "mutation_scale": 0.0,
                     "max_assignment_memory": 1
                 },
 
@@ -99,9 +101,9 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 500,
-                    "refining_steps_after_cluster_assignment": 4,
+                    "refining_steps_after_cluster_assignment": 10,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 8,
+                    "initial_refining_steps": 15,
                     "initial_exploration_rate": 0.0,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null

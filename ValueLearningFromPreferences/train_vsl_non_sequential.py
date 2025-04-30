@@ -215,7 +215,7 @@ if __name__ == "__main__":
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
                           reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
     print(metrics_s['assignment_memory'])
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args, historic_assignments, env_state = load_training_results(
+    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args, historic_assignments, env_state, n_iterations = load_training_results(
         experiment_name)
     
     assignment: ClusterAssignment = historic_assignments[-1]

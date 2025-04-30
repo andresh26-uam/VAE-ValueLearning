@@ -381,9 +381,10 @@ class ClusterAssignment():
 
             # Create the figure for combined pie charts and histograms
             fig_combined = plt.figure(figsize=(12, 12))
+            n_clusters = len(cluster_idx_to_label)
             for idx, cluster_idx in enumerate(cluster_idx_to_label):
                 # Pie chart
-                pie_ax = fig_combined.add_subplot(2, len(cluster_idx_to_label), 2 * idx + 1, aspect='equal')
+                pie_ax = fig_combined.add_subplot(2, n_clusters, idx + 1, aspect='equal')
                 value_system_weights = self.get_value_system(cluster_idx)
                 pie_ax.pie(value_system_weights,
                             labels=[f"V{i}" for i in range(len(value_system_weights))] if values_short_names is None else [
@@ -394,7 +395,7 @@ class ClusterAssignment():
                 pie_ax.set_title(f"Cluster {cluster_idx} Value System", fontsize=fontsize)
 
                 # Histogram
-                hist_ax = fig_combined.add_subplot(2, len(cluster_idx_to_label), 2 * idx + 2)
+                hist_ax = fig_combined.add_subplot(2, n_clusters, n_clusters + idx + 1, aspect='equal')
                 agents = self.assignment_vs[cluster_idx]
                 cluster_representativity = [1.0 - self.intra_discordances_vs_per_agent[agent] for agent in agents]
                 hist_ax.hist(cluster_representativity, bins=5, color=cluster_colors_vs[idx], alpha=1.0)
@@ -405,9 +406,9 @@ class ClusterAssignment():
                 hist_ax.set_yticks(np.linspace(0, len(agents), num=8, endpoint=True, dtype=np.int64))
                 hist_ax.set_title(f"Cluster {cluster_idx} Representativity", fontsize=fontsize)
 
-                # Ensure the pie chart and histogram have the same width
-                pie_ax.set_box_aspect(1)
-                hist_ax.set_box_aspect(1)  # Save or show the combined pie charts and histograms
+            # Ensure the pie chart and histogram have the same width
+            pie_ax.set_box_aspect(1)
+            hist_ax.set_box_aspect(1)  # Save or show the combined pie charts and histograms
             if pie_and_hist_path is not None:
                 os.makedirs(os.path.dirname(pie_and_hist_path), exist_ok=True)
                 plt.savefig(pie_and_hist_path, bbox_inches="tight")
@@ -749,12 +750,13 @@ class ClusterAssignmentMemory():
         
             
         if all([asa.explored for asa in self.memory]) and len(self.memory) >= self.max_size:
-            self.clean_memory(exhaustive=True)  
+            #self.clean_memory(exhaustive=True)  
             for i in range(len(self.memory)):  
                 self.memory[i].explored = False
         
         l_assignment_1 = assignment.L == 1# if it is 1, need to have only one.
         k_assignment_all_1 = all(np.asarray(assignment.K) == 1)
+        override_and_insert = False
 
         if l_assignment_1 and k_assignment_all_1:
             l1_exists = False
@@ -836,6 +838,8 @@ class ClusterAssignmentMemory():
         return changes_made
 
     def clean_memory(self, exhaustive=False, sim_threshold=0.95, append_made=False):
+        if len(self.memory) < 3:
+            return
         pareto_dominated_counts = [0] * len(self.memory)
         equivalent_assignments_counts = [0] * len(self.memory)
         similarity_index = [0] * len(self.memory)
@@ -879,7 +883,7 @@ class ClusterAssignmentMemory():
             last_assignment_and_not_pareto = [1 if self.last_selected_assignment is not None and self.last_selected_assignment == i and self.compare_assignments(self.memory[-1], self.memory[self.last_selected_assignment])[1]>=0 else 0 for i in range(len(self.memory))]
         else:
             last_assignment_and_not_pareto = [0] * len(self.memory)
-        if (len(self.memory) > self.max_size) or (exhaustive and (max(pareto_dominated_counts) > 0 or sum(equivalent_assignments_counts) > 0))  or np.median(similarity_index) <= 0.0:
+        if (len(self.memory) > self.max_size) or (exhaustive and (max(pareto_dominated_counts) > 0 or sum(equivalent_assignments_counts) > 0)):
             
             sorted_indices = sorted(list(range(len(self.memory))), key=lambda x: (
                 #int(explored_and_pareto_dominated[x]),
@@ -932,6 +936,7 @@ class ClusterAssignmentMemory():
                             elif self.last_selected_assignment > eliminated_index:
                                 self.last_selected_assignment -= 1
             if exhaustive:
+                self.last_selected_assignment = None
                 self.clean_memory(exhaustive=exhaustive,sim_threshold=sim_threshold, append_made=False)
         return
         
@@ -950,8 +955,10 @@ class ClusterAssignmentMemory():
             indices_selectable = [i for i in range(len(self.memory))]
             
         if len(indices_selectable) == 0:
-            self.clean_memory(exhaustive=True)
-            return None
+            self.clean_memory(exhaustive=False)
+            for i, assignment in enumerate(self.memory):
+                assignment.explored = False
+            return self.memory[0]
         n = len(indices_selectable)
         weights = [2*(n-i)/(n*(n+1)) for i in range(n)] # Linear rank selection Goldberg
         assignment_index =  random.choices(indices_selectable, weights=weights, k=1)[0]
@@ -965,8 +972,10 @@ class ClusterAssignmentMemory():
         if not consider_only_unexplored:
             return self.assignment_with_env(assignment=self.memory[0])
         if len(indices_non_explored) == 0:
-            self.clean_memory(exhaustive=True)
-            return None
+            self.clean_memory(exhaustive=False)
+            for i, assignment in enumerate(self.memory):
+                assignment.explored = False
+            return self.memory[0]
         
         assignment = self.memory[indices_non_explored[0]]
         self.last_selected_assignment = indices_non_explored[0]
