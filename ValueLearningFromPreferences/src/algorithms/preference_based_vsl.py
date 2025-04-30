@@ -1592,7 +1592,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                              n_reward_reps_if_probabilistic_reward=n_reward_reps_if_probabilistic_reward,
                              **kwargs)
         
-        historic_assignments,env_state = load_historic_assignments(experiment_name)
+        historic_assignments,env_state, _ = load_historic_assignments(experiment_name)
         return *ret, historic_assignments
 
     def train_callback(self, t):
