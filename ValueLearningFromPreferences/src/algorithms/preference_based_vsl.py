@@ -1264,8 +1264,9 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             grounding_per_value_per_cluster_c = deepcopy(grounding_per_value_per_cluster)
             value_system_per_cluster_c = deepcopy(value_system_per_cluster)
 
-            l_prev = [1 for pcs in prev_cs_to_agent if len(pcs) > 0]
+            l_prev = len([i for i in range(len(prev_cs_to_agent))  if len(prev_cs_to_agent[i]) > 0])
             expand_or_reduce = random.random() < 0.5
+
 
             if len(value_system_per_cluster) >1:
                 valid_new_clusters = [i for i in range(len(prev_cs_to_agent))  if len(prev_cs_to_agent[i]) > 0]  # The old ones
@@ -1277,6 +1278,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     valid_new_clusters.pop(cs)
             else: 
                 valid_new_clusters = [0]
+            
 
             for aid, cluster_vs_aid in assignment_vs.items():
                 agent_to_gr_cluster_assignments[aid] = {}
@@ -1287,7 +1289,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                 rc.reset_learned_grounding_function()
 
                 if random.random() > mutation_prob:
-                    if cluster_vs_aid not in valid_new_clusters:
+                    if int(cluster_vs_aid) not in valid_new_clusters:
                         cs = np.random.choice(valid_new_clusters)
                     else:
                         cs = cluster_vs_aid
@@ -1297,6 +1299,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     cs = np.random.choice(valid_new_clusters)
                     assignment_vs_new[cs].append(aid)
                     agent_to_vs_cluster_assignments[aid] = cs
+
+                cluster_vs_aid = cs
 
                 for vi, cluster_vi_aid in grclusterby_value_aid.items():
                     assignment_gr_new[vi][cluster_vi_aid].append(aid)
@@ -1316,8 +1320,8 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
                     rc.set_network_for_value(vi, grounding_per_value_per_cluster_c[vi][cluster_vi_aid])
 
                 if value_system_per_cluster_c is not None and len(assignment_vs_new[cluster_vs_aid]) == 1:
-
-                    for param in value_system_per_cluster_c[cluster_vi_aid].parameters():
+                    rc.reset_learned_alignment_function()
+                    for param in value_system_per_cluster_c[cluster_vs_aid].parameters():
                             if param.requires_grad:
                                 param: th.Tensor
                                 #mask = th.rand_like(param) < mutation_prob  # percentage of parameters changed.
@@ -1335,9 +1339,10 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             assert set(random_reward_model.keys()) == set(reward_model_per_agent_id.keys())
 
             # Check that the assignment is consistent 
-            check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
+            """check_assignment_consistency(grounding_per_value_per_cluster,value_system_per_cluster,
                                                 assignment_aid_to_gr_cluster=agent_to_gr_cluster_assignments,
                                                 assignment_aid_to_vs_cluster=agent_to_vs_cluster_assignments, reward_models_per_aid=reward_model_per_agent_id)
+            """
             check_assignment_consistency(grounding_per_value_per_cluster_c,value_system_per_cluster_c,
                                                 assignment_aid_to_gr_cluster=agent_to_gr_cluster_assignments,
                                                 assignment_aid_to_vs_cluster=agent_to_vs_cluster_assignments, reward_models_per_aid=random_reward_model)
