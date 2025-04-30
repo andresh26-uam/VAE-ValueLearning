@@ -336,7 +336,7 @@
         "name": "RouteChoiceEnvironmentApolloComfort-v0",
         "n_values": 3,
         "K": 1,
-        "L": 3,
+        "L": 2,
         "horizon": 2,
 
         "is_contextual": false,
@@ -390,7 +390,7 @@
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
                     "repr_apply_on_worst_clusters_only": false,
-                    "conc_apply_on_worst_clusters_only": false,
+                    "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
                     "cluster_similarity_penalty": 1.0
@@ -411,8 +411,8 @@
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
                     "mutation_prob": 0.1,
-                    "mutation_scale": 0.0,
-                    "max_assignment_memory": 8
+                    "mutation_scale": 0.3,
+                    "max_assignment_memory": 5
                 },
 
                 "learner_policy_class": "PPO",

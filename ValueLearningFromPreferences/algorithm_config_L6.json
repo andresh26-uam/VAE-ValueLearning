@@ -1,0 +1,113 @@
+{"apollo": {
+        "name": "RouteChoiceEnvironmentApolloComfort-v0",
+        "n_values": 3,
+        "K": 1,
+        "L": 6,
+        "horizon": 2,
+
+        "is_contextual": false,
+
+        "assume_variable_horizon": false,
+        
+        "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
+        "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
+        "values_names": ["Efficiency", "Cost", "Comfort"],
+        "values_short_names": ["Eff", "Cost", "Comf"],
+        "environment_is_stochastic": false,
+        "discount": 1.0,
+        
+        "default_reward_net": {
+            "use_state": true,
+            "use_action": false,
+            "use_next_state": false,
+            "use_done": false,
+            "basic_layer_classes": ["nn.Linear", "nn.Linear",  "nn.Linear", "nn.Linear", "ConvexAlignmentLayer"],
+            "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Softplus", "nn.Identity"],
+            "use_bias": [true, true, true, true, false],
+            "hid_sizes": [16,24,16,3],
+            "negative_grounding_layer": true,
+            "clamp_rewards": false
+        },
+        "reward_feature_extractor": "FeatureExtractorFromVAEnv",
+        "policy_state_feature_extractor": "OneHotFeatureExtractor",
+        "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
+        "default_optimizer_kwargs": {
+            "lr": 0.003,
+            "weight_decay": 0.0000
+        },
+        "default_optimizer_class": "Adam",
+        "algorithm_config": {
+            "pc": {
+                "reward_net": {},
+                "optimizer_kwargs": {
+                    "lr": 0.01,
+                    "lr_grounding": 0.005,
+                    "lr_value_system": 0.02,
+                    "lr_lambda": 0.005,
+                    "initial_lambda": 0.01,
+                    "lambda_decay": 0.0001,
+                    "weight_decay": 0.0000
+                },
+                "optimizer_class": "lagrange",
+                "learn_stochastic_policy": true,
+                "loss_class": "lagrange",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 1.0,
+                    "gr_apply_on_misclassified_pairs_only": false, 
+                    "vs_apply_on_misclassified_pairs_only": false, 
+                    "repr_apply_on_worst_clusters_only": false,
+                    "conc_apply_on_worst_clusters_only": true,
+                    "confident_penalty": 5.0,
+                    "label_smoothing": 0.0,
+                    "cluster_similarity_penalty": 1.0
+                },
+                "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
+                "discount_factor_preferences": 1.0,
+
+                "policy_approximation_method": "mce_original",
+                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+
+                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                "use_quantified_preference": false,
+                "preference_sampling_temperature": 0,
+                "query_schedule": "constant",
+                "train_kwargs": {
+                    "max_iter": 300,
+                    "trajectory_batch_size": "full",
+                    "fragment_length": "horizon",
+                    "comparisons_per_agent_per_step": null,
+                    "mutation_prob": 0.1,
+                    "mutation_scale": 0.3,
+                    "max_assignment_memory": 6
+                },
+
+                "learner_policy_class": "PPO",
+                "learner_policy_kwargs" : 
+                {
+                    "batch_size": 25,
+                    "n_steps": 50,
+                    "ent_coef": 0.1,
+                    "learning_rate": 0.02,
+                    "gamma": 1.0,
+                    "gae_lambda": 0.999,
+                    "clip_range": 0.05,
+                    "vf_coef": 0.01,
+                    "n_epochs": 5,
+                    "normalize_advantage": true,
+                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
+                },
+                
+                "reward_trainer_kwargs": {
+                    "epochs": 4,
+                    "refining_steps_after_cluster_assignment": 4,
+                    "qualitative_cluster_assignment": false,
+                    "initial_refining_steps": 16,
+                    "initial_exploration_rate": 0.3,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": null
+                }
+            }
+        }
+    }
+    
+}

@@ -286,7 +286,7 @@ class ClusterAssignment():
             return 1.0
         #distances_non_zero = [d for d in inter_cluster_distances if d > 0]
         if len(inter_cluster_distances) > 0:
-            conciseness = np.mean(inter_cluster_distances)
+            conciseness = min(inter_cluster_distances)
         else:
             conciseness = 0.0 # ?????
         return conciseness

@@ -1149,26 +1149,26 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 assert probabilities_vs1_in_c1_c2.shape == (len(agents_in_c1_c2)*rews_gr_per_aid[agents_in_c1_c2[0]][0].shape[0],)
             conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
        
-            """with th.no_grad():
+            with th.no_grad():
                 conciseness_real.append(discordance(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2, indifference_tolerance=self.model_indifference_tolerance).detach())
-            """#conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
+            #conc_penalties.append(jensen_shannon_pairwise_preferences(probabilities_vs1_in_c1_c2, probabilities_vs2_in_c1_c2)) # TODO minimum?? or maybe other aggregation...
         
         if len(conc_penalties) == 0:
             conc_penalty = th.tensor(0.0, device=device, dtype=dtype)
         else:
-            """conciseness_real = th.stack(conciseness_real)
+            conciseness_real = th.stack(conciseness_real)
             stacked_penalties = th.stack(conc_penalties)
         
             if self.conc_apply_on_worst_clusters_only:
                 with th.no_grad():
                     worst_conciseness_idx_real = th.argwhere(conciseness_real == th.amin(conciseness_real)).flatten()
                 #not needed, it is an equivalent solution. weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
-                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])
+                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])/len(worst_conciseness_idx_real)
             else:
                 with th.no_grad():
                     weights = (1.0 - conciseness_real) # The closer to 0 the conciseness, the more important the penalty.
-                conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))"""
-            conc_penalty = th.mean(th.stack(conc_penalties))
+                conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))
+            #conc_penalty = th.mean(th.stack(conc_penalties))
                 
             
             
