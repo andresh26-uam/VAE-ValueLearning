@@ -26,7 +26,7 @@ from imitation.data.types import (
 import matplotlib.pyplot as plt
 import pandas as pd
 
-def parse_enames_for_learning_curve(learning_curve_from):
+def parse_enames_list(learning_curve_from):
     """
     Parses the learning curve from the given string.
     """
@@ -180,7 +180,8 @@ def parse_args():
                                help='Scales subfigs inside the plots.')
     general_group.add_argument('-pfont', '--plot_fontsize', type=int, default=12,
                                help='Font size in plots.')
-    general_group.add_argument('-lrcfrom', '--learning_curve_from', type=parse_enames_for_learning_curve, default=None,help="Generate the learning curve for the specified experiments")
+    general_group.add_argument('-dicfrom', '--dunn_index_curve_from', type=parse_enames_list, default=None,help="Generate the learning curve for the specified experiments")
+    general_group.add_argument('-lrcfrom', '--learning_curve_from', type=parse_enames_list, default=None,help="Generate the learning curve for the specified experiments")
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
 
@@ -338,6 +339,54 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
     print(f"Saved metrics plot to {plot_path}")
 
 
+def plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di):
+    scores = {}
+    best_per_memory = {}
+    max_conciseness = float('-inf')
+    for ename_clean, am in assignment_memories_per_di.items():
+        am: ClusterAssignmentMemory
+            #am.sort_lexicographic(lexicographic_vs_first=False)
+        best = am.get_best_assignment(lexicographic_vs_first=False)
+        best_per_memory[ename_clean] = best
+        max_conciseness = max(am.maximum_conciseness_vs,max_conciseness)
+
+    for best in best_per_memory.values():
+        key = f"{best.L}/{len(best.assignment_vs)}"
+        best: ClusterAssignment
+        if key not in scores.keys():
+            scores[key] = []
+        scores[key].append(best.combined_cluster_score_vs(aggr_repr=np.min, conciseness_if_L_is_1=max_conciseness if max_conciseness > 0 else None))
+
+        # Sort the scores lexicographically by L and len(assignment_vs)
+    sorted_keys = sorted(scores.keys(), key=lambda x: tuple(map(int, x.split('/'))))
+    sorted_scores = {key: scores[key] for key in sorted_keys}
+
+        # Prepare data for plotting
+    x_labels = list(sorted_scores.keys())
+    x_positions = range(len(x_labels))
+    means = [np.mean(values) for values in sorted_scores.values()]
+    errors = [np.std(values)/np.sqrt(len(values)) if len(values) > 1 else 0 for values in sorted_scores.values()]
+
+        # Plot the scores
+    plt.figure(figsize=(10, 6))
+    plt.errorbar(x_positions, means, yerr=errors, fmt='o-', capsize=5, label="Scores", color='blue', alpha=0.7)
+    plt.xticks(x_positions, x_labels, rotation=45)
+    plt.xlabel("L / Number of Clusters")
+    plt.ylabel("Combined Cluster Score")
+    plt.title("Scores by L and Number of Clusters")
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+
+        # Save the plot
+    plot_dir = os.path.join('test_results', experiment_name, 'plots', 'scores')
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_path = os.path.join(plot_dir, "di_scores_plot.pdf")
+    plt.savefig(plot_path)
+    plt.close()
+
+    print(f"Saved scores plot to {plot_path}")
+
 if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
     # IMPORTANT: Default Args are specified depending on the environment in config.json
@@ -354,7 +403,7 @@ if __name__ == "__main__":
     })
     
 
-    target_agent_and_vs_to_learned_ones_per_lre, reward_net_pair_agent_and_vs_per_lre, metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre= {}, {}, {}, {}, {},{}
+    metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre, assignment_memories_per_di= {}, {}, {},{},{}
     
     if hasattr(parser_args, 'learning_curve_from') and parser_args.learning_curve_from is not None:
         # If learning curve from is specified, load the results for each experiment
@@ -365,7 +414,7 @@ if __name__ == "__main__":
         for ename in parser_args.learning_curve_from:
             ename_clean = find_parse_ename(ename)[1]
             enames_for_lr_curve.append(ename_clean)
-            target_agent_and_vs_to_learned_ones_per_lre[ename_clean], reward_net_pair_agent_and_vs_per_lre[ename_clean], metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
+            _, _, metrics_per_lre[ename_clean], _, historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
             ename_clean)
             assignment_memories_per_lre[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
             assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=True)
@@ -374,7 +423,15 @@ if __name__ == "__main__":
         assignments_identifier_to_assignment_lre = {
             key: [assignment_memories_per_lre[ename_clean].memory[ikey] if len(assignment_memories_per_lre[ename_clean].memory) > ikey else None for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
         }
-    
+    if hasattr(parser_args, 'dunn_index_curve_from') and parser_args.dunn_index_curve_from is not None:
+        
+        for ename in parser_args.dunn_index_curve_from:
+            ename_clean = find_parse_ename(ename)[1]
+            _, _, metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
+            ename_clean)
+            assignment_memories_per_di[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
+        plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di)
+
     config = exp_parser_args_base['config']
     society_config = exp_parser_args_base['society_config']
     exp_parser_args = exp_parser_args_base['parser_args']
