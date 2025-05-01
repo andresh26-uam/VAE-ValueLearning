@@ -401,7 +401,7 @@ class ClusterAssignment():
                 pie_ax.set_title(f"Cluster {cluster_idx} Value System", fontsize=fontsize)
 
                 # Histogram
-                hist_ax = fig_combined.add_subplot(2, n_clusters, n_clusters + idx + 1, aspect='equal')
+                hist_ax = fig_combined.add_subplot(2, n_clusters, n_clusters + idx + 1)
                 agents = self.assignment_vs[cluster_idx]
                 cluster_representativity = [1.0 - self.intra_discordances_vs_per_agent[agent] for agent in agents]
                 hist_ax.hist(cluster_representativity, bins=5, color=cluster_colors_vs[idx], alpha=1.0)

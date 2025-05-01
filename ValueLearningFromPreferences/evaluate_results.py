@@ -184,6 +184,8 @@ def parse_args():
     general_group.add_argument('-lrcfrom', '--learning_curve_from', type=parse_enames_list, default=None,help="Generate the learning curve for the specified experiments")
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
+    general_group.add_argument(
+        '-scf', '--show_only_config', action='store_true', default=False, required=False, help='Only show the training configuration used.')
 
     
     return parser.parse_args()
@@ -402,6 +404,13 @@ if __name__ == "__main__":
         f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
     })
     
+    config = exp_parser_args_base['config']
+    society_config = exp_parser_args_base['society_config']
+    exp_parser_args = exp_parser_args_base['parser_args']
+
+    if parser_args.show_only_config:
+        pprint.pprint(config[exp_parser_args.environment])
+        exit(0)
 
     metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre, assignment_memories_per_di= {}, {}, {},{},{}
     
@@ -432,11 +441,7 @@ if __name__ == "__main__":
             assignment_memories_per_di[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
         plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di)
 
-    config = exp_parser_args_base['config']
-    society_config = exp_parser_args_base['society_config']
-    exp_parser_args = exp_parser_args_base['parser_args']
-
-    pprint.pprint(config)
+    
     # This will look again into the config files to see if there are new fields (wont update the old ones)
     config_actual = load_json_config(exp_parser_args.config_file)
     society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
@@ -519,7 +524,7 @@ if __name__ == "__main__":
     if exp_parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
     vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
-    pprint.pprint(config[exp_parser_args.environment])
+    #pprint.pprint(config[exp_parser_args.environment])
     
     
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
