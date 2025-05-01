@@ -72,7 +72,7 @@
             "preference_sampling_temperature": 0,
             "query_schedule": "constant",
             "train_kwargs": {
-                "max_iter": 200,
+                "max_iter": 250,
                 "trajectory_batch_size": "full",
                 "fragment_length": "horizon",
                 "comparisons_per_agent_per_step": null,
