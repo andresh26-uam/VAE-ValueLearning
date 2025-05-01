@@ -77,8 +77,8 @@
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
                     "mutation_prob": 0.1,
-                    "mutation_scale": 0.1,
-                    "max_assignment_memory": 5
+                    "mutation_scale": 0.3,
+                    "max_assignment_memory": 4
                 },
 
                 "learner_policy_class": "PPO",
@@ -99,9 +99,9 @@
                 
                 "reward_trainer_kwargs": {
                     "epochs": 3,
-                    "refining_steps_after_cluster_assignment": 4,
+                    "refining_steps_after_cluster_assignment": 3,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 12,
+                    "initial_refining_steps": 10,
                     "initial_exploration_rate": 0.2,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
