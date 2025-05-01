@@ -379,7 +379,7 @@ def plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di):
     plt.tight_layout()
 
         # Save the plot
-    plot_dir = os.path.join('test_results', experiment_name, 'plots', 'scores')
+    plot_dir = os.path.join('test_results', experiment_name, 'di_scores')
     os.makedirs(plot_dir, exist_ok=True)
     plot_path = os.path.join(plot_dir, "di_scores_plot.pdf")
     plt.savefig(plot_path)
@@ -527,8 +527,6 @@ if __name__ == "__main__":
 
     assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
     best_gr_then_vs_assignment = assignment_memory.memory[0]
-
-    assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
     
     if plot_test:
         test_assignment_memory = ClusterAssignmentMemory(assignment_memory.max_size, n_values=assignment_memory.memory[0].n_values)
@@ -538,7 +536,7 @@ if __name__ == "__main__":
             test_assignment = vsl_algo.evaluate_assignment(a, dataset_test)
             test_assignment_memory.memory.append(test_assignment) # just insert it.
         test_assignments_identifier_to_assignment = [
-            (f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train", test_assignment_memory.memory[i]) for i in range(0, len(test_assignment_memory.memory))
+            (f"assign_p{str(i+1).zfill(num_digits)}_in_train", test_assignment_memory.memory[i]) for i in range(0, len(test_assignment_memory.memory))
         ]
         best_vs_then_gr_assignment_test = vsl_algo.evaluate_assignment(best_vs_then_gr_assignment, dataset_test)
         best_gr_then_vs_assignment_test = vsl_algo.evaluate_assignment(best_gr_then_vs_assignment, dataset_test)
@@ -548,13 +546,13 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     values_names = environment_data['values_names']
-    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
-    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_gr_then_vs')
+    #contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
+    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_assignment')
     for aid, assignment in assignments_identifier_to_assignment.items():
         contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
     if plot_test:
-        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
-        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_gr_then_vs')
+        #contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
+        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_assignment')
         for aid, assignment in test_assignments_identifier_to_assignment.items():
             contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
         
@@ -588,7 +586,7 @@ if __name__ == "__main__":
             generate_assignment_tables(assignments_identifier_to_assignment_lre, experiment_name, output_columns, output_dir='test_results', label='test_set',values_names=values_short_names)
 
     
-    # 3: Explainability TODO
+    # 3: Explainability
     if isinstance(env, RouteChoiceEnvironmentApolloComfort):
         if plot_test:
             data_test = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_test.fragments1, dataset_test.fragments2)])
@@ -624,7 +622,7 @@ if __name__ == "__main__":
             explanation = s.explain_global( name="test_explanation")
             fig = explanation.visualize()
 
-            explanations_dir = os.path.join('test_results', experiment_name, 'explanations')
+            explanations_dir = os.path.join('test_results', experiment_name, 'train_set' if i == 0 else 'test_set', 'explanations')
             morris_dir = os.path.join(explanations_dir, "morris")
             os.makedirs(morris_dir, exist_ok=True)
             path = os.path.join(morris_dir, f"morris_{values_names[value]}.pdf")
@@ -668,16 +666,9 @@ if __name__ == "__main__":
         print(best_gr_then_vs_assignment_test)
 
     # 4: Plots. (PIE + HISTOGRAM + VISUALIZATION)
-    best_vs_then_gr_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_vs_gr.pdf", 
-                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters_vs_gr.pdf", 
-                                                   subfig_multiplier=parser_args.subfig_multiplier,
-                                                   values_color_map=environment_data['profiles_colors'], 
-                                                   values_names=environment_data['values_names'], 
-                                                   values_short_names=environment_data['values_short_names'],
-                                                   fontsize=parser_args.plot_fontsize,)
     
-    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters_gr_vs.pdf", 
-                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters_gr_vs.pdf", 
+    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters.pdf", 
+                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters.pdf", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
@@ -685,22 +676,14 @@ if __name__ == "__main__":
                                                    fontsize=parser_args.plot_fontsize,)
     
     if plot_test:
-        best_vs_then_gr_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_vs_gr.pdf", 
-                                                            f"test_results/{experiment_name}/test_set/plots/hist_clusters_vs_gr.pdf", 
+    
+        best_gr_then_vs_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters.pdf", 
+                                                            f"test_results/{experiment_name}/test_set/plots/hist_clusters.pdf",
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 
                                                    values_short_names=environment_data['values_short_names'],
                                                    fontsize=parser_args.plot_fontsize,)
     
-        best_gr_then_vs_assignment_test.plot_vs_assignments(f"test_results/{experiment_name}/test_set/plots/figure_clusters_gr_vs.pdf", 
-                                                            f"test_results/{experiment_name}/test_set/plots/hist_clusters_gr_vs.pdf",
-                                                   subfig_multiplier=parser_args.subfig_multiplier,
-                                                   values_color_map=environment_data['profiles_colors'], 
-                                                   values_names=environment_data['values_names'], 
-                                                   values_short_names=environment_data['values_short_names'],
-                                                   fontsize=parser_args.plot_fontsize,)
-    # 5 learning curves
-    # 
         
     
