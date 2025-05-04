@@ -231,7 +231,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                                 ) -> Tuple[th.Tensor, th.Tensor]:
 
         fragments_dict = {'g1': fragments, 'g2': fragments}
-        # print(fragments['none'][0])
         if len(self.dummy_models) < 2:
             self.dummy_models.append(self.model.copy())
             self.dummy_models.append(self.model.copy())
@@ -312,8 +311,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         prev_model = self.model
         model.set_alignment_function(alignment)
 
-        print(fragment_pairs[0].shape, fragment_pairs[1].shape)
-
         assert fragment_pairs[0].shape == fragment_pairs[
             1].shape, f"They are {fragment_pairs[0].shape, fragment_pairs[1].shape}"
         probs = th.zeros((fragment_pairs[0].shape[0],), dtype=dtype)
@@ -350,11 +347,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         # rews_should_be = model.forward(th.tensor(trans1.obs, dtype=model.dtype), action=None, next_state=None, done=None, info=None).detach()
         # rews_should_SHOULD_be = model.forward_value_groundings(th.tensor(trans1.obs, dtype=model.dtype), action=None, next_state=None, done=None, info=None).detach()
 
-        # print(model.get_learned_align_function())
-        # print(model.get_trained_alignment_function_network())
-
         assert rews.shape == (len(trans1.obs),)
-        print(rews.shape)
         rews1, rews2 = rews[0:n_fragments], rews[n_fragments:2*n_fragments]
 
         assert rews1.shape == (len(obs1), )
@@ -984,7 +977,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         agents_per_cluster = {int(c): [] for c in range(
             len(value_system_network_per_cluster))}
         for aid, c in agent_to_vs_cluster_assignments.items():
-            # TODO: EFFICIENCY!! (GET THE ASSIGNMENTS TO CLUSTERS INSTEAD??)
+            # TODO: EFFICIENCY!! (GET THE ASSIGNMENTS TO CLUSTERS INSTEAD?)
             agents_per_cluster[int(c)].append(aid)
 
         conc_penalties = []
@@ -1192,7 +1185,6 @@ class ConstrainedOptimizer(VSLOptimizer):
                     self.lambdas[vi].data = th.clamp(
                         self.lambdas[vi] - decay, min=self.initial_lambda)
 
-            # print("LAMBDA a", self.lambdas)
         return None
 
 

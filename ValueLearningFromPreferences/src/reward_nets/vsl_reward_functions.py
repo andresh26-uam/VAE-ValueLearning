@@ -215,7 +215,6 @@ class GroundingEnsemble(th.nn.Module):
                 # Check gradients for isolation: verify only target network parameters have gradients
                 if __debug__:
                     for idx, network in enumerate(self.networks):
-                        # print(f"Gradients for network {idx}:")
                         for param in network.parameters():
                             if param.grad is not None:
                                 if idx == 0:
@@ -430,19 +429,8 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
                         else:
 
                             nv[a] = av
-
-                elif isinstance(v, ContextualFeatureExtractorFromVAEnv):
-                    print("This should not happen?")
-                    exit(0)
-                    nv = None
                 else:
                     nv = deepcopy(v)
-                """if isinstance(v, th.nn.Module):
-                    nv.load_state_dict(v.state_dict())
-                if isinstance(v, GroundingEnsemble):
-                    for i in range(v.networks):
-                        #nv.networks[i] = deepcopy(v.networks[i])
-                        nv.networks[i].load_state_dict(v.networks[i].state_dict())"""
                 setattr(new, k, nv)
             except Exception as e:
                 print(e)

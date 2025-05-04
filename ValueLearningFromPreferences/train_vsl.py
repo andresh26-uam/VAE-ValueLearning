@@ -293,7 +293,6 @@ if __name__ == "__main__":
 
     if parser_args.algorithm == 'pc':
 
-        # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
             env=environment,
             reward_net=reward_net,
@@ -335,7 +334,7 @@ if __name__ == "__main__":
     # Now we need to train.
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
                           reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
-    print(metrics_s['assignment_memory'])
+    print("FINAL MEMORY OF SOLUTIONS",metrics_s['assignment_memory'])
     target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args, historic_assignments, env_state, n_iterations = load_training_results(
         experiment_name)
 

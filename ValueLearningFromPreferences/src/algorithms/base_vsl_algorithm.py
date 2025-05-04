@@ -316,11 +316,10 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     for action in range(self.env.action_dim):
                         action_array = util.safe_to_tensor(np.array(
                             [action]*len(observations)),  dtype=reward_net.dtype, device=reward_net.device).long()
-                        # print("OBS", observations)
-                        # print("ACTS", action_array)
+                        
                         next_state_array = util.safe_to_tensor(next_state_mat[observations.numpy(
                         ), action_array.numpy()],  dtype=reward_net.dtype, device=reward_net.device)
-                        # print("NEXTS", next_state_array)
+                        
                         reward_matrix[observations, action_array] += self.calculate_rewards(
                             align_func=rew_al,
                             # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),

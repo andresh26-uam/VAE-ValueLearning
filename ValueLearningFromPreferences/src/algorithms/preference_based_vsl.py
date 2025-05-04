@@ -287,9 +287,8 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     copy_assignment.explored = False
 
                     copy_assignment.n_training_steps = total_training_steps
-                    print(total_training_steps)
                     # position, old_assignment = assignment_ranking.insert_assignment(copy_assignment)
-                    print("before insert")
+                    
                     assignment_ranking.insert_assignment(copy_assignment)
 
                     # Ensure optimizer consistency
@@ -300,7 +299,6 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                     check_optimizer_consistency(
                         reward_model_per_agent_id, self.optim)
 
-                    print("After insert")
                     starting_assignment = None  # to not use it again
 
                     print(assignment_ranking)
@@ -343,7 +341,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
                 agent_ids=val_agent_ids,
                 value_system_network_per_cluster=value_system_per_cluster, use_assignment=new_assignment)
 
-            print("Cluster assigned.")
+            
 
             probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_aid, rews_vs, rews_gr = self._preference_model.forward(fragment_pairs_per_agent_id=val_fragment_pairs_per_aid, custom_model_per_agent_id=reward_model_per_agent_id,
                                                                                                                                                               fragment_pairs_idxs_per_agent_id=val_fragment_idxs_per_aid, only_for_alignment_function=None,
@@ -464,10 +462,9 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
 
         gt_is_numpy = isinstance(preferences_per_aid[list(
             preferences_per_aid.keys())[0]], np.ndarray)
-        s = time.time()
+       
         for (c1, c2), (assigned_c1, assigned_c2) in fragments_on_each_cluster_vs.items():
             for (ci, assigned_ci) in [(c1, assigned_c1), (c2, assigned_c2)]:
-                # print("CI", ci, fragments_on_each_cluster_per_aid.keys(), assigned_ci, vs_intra_cluster_distances_per_value_per_cluster.keys())
                 if ci not in fragments_on_each_cluster_per_aid.keys():
                     fragments_on_each_cluster_per_aid[ci] = 0
                     if not assume_1_grounding:  # TODO
@@ -546,8 +543,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
         assert len(vs_inter_cluster_distances) <= len(probs_per_aid.keys())
         if len(vs_intra_cluster_distances) == 0:
             raise ValueError("Cluster discordances are not well calculated")
-        rs = time.time()
-        print("RS", rs-s)
+        
         return vs_intra_cluster_distances, vs_inter_cluster_distances, vs_discordance_of_each_agent, vs_inter_dist_for_each_pair_of_clusters
 
     def _training_inner_loop(
@@ -1748,8 +1744,6 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
             lambda x: np.concatenate(x, axis=0) if len(data) > 1 else x[0],
             zip(*data)
         )
-        print("evaluating", len(val_fragment_pairs))
-        print(len(val_fragment_pairs))
         new_assignment = self.pref_comparisons.reward_trainer.evaluate_assignment_with_dataset(assignment.copy(),
                                                                                                val_fragment_pairs,
                                                                                                val_preferences,

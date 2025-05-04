@@ -234,8 +234,6 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
         context_features_per_cluster.append(context_features_cidx)
 
         value_system = assignment.get_value_system(clust_idx)
-        # print(clust_idx, np.mean(context_features_cidx, axis=0), value_system)
-
     # Plot all features in a single barplot with standard error bars for each cluster
     feature_names = ["Houshold Income", "Car available",
                      "Conmuting", "Shopping", "Business", "Leisure"]
@@ -516,8 +514,6 @@ if __name__ == "__main__":
             if best.L > 1 and best.conciseness_vs() < 1:
                 max_conciseness = max(best.conciseness_vs(), max_conciseness)
             best_per_memory[ename_clean] = best
-
-            print(max_conciseness)
             assert max_conciseness < 1, f"Max conciseness is {max_conciseness} for {ename_clean}"
             del am
 
@@ -582,7 +578,6 @@ if __name__ == "__main__":
     example_model.set_env(env)
     if exp_parser_args.algorithm == 'pc':
 
-        # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
             env=env_state,
             reward_net=example_model,
@@ -707,8 +702,6 @@ if __name__ == "__main__":
         env: TabularVAMDP
         data_train = np.concatenate(
             [env.observation_matrix, env.observation_matrix], axis=1)
-        print(data_train.shape)
-        # TODO, explainability here is not straightforward...
         data_test = None
 
     for i, (data_train_or_test, dataset_train_or_test) in enumerate(zip([data_train, data_test], [dataset_train, dataset_test])):
@@ -746,17 +739,6 @@ if __name__ == "__main__":
             print("Saving morris explanation to", path)
             # os.makedirs(f"demo_images", exist_ok=True)
             fig.write_image(path)
-
-    print(best_gr_then_vs_assignment)
-    print(best_vs_then_gr_assignment)
-    print("TEST ASIGNMENT")
-
-    print(len(assignment_memory))
-    print(assignment_memory)
-    if plot_test:
-        print(test_assignment_memory)
-        print(best_vs_then_gr_assignment_test)
-        print(best_gr_then_vs_assignment_test)
 
     # 4: Plots. (PIE + HISTOGRAM + VISUALIZATION)
 

@@ -950,7 +950,7 @@ class ClusterAssignmentMemory():
                         pareto_dominated_counts[i] += 1
                     else:
                         explored_and_pareto_dominated[i] = False
-                    # print("SIM", sim, i ,j)
+                    
                     if sim >= sim_threshold:
                         equivalent_assignments_counts[i] += 1
 
@@ -1009,8 +1009,7 @@ class ClusterAssignmentMemory():
             eliminated_index = sorted_indices[eiminated_index_in_sorted_indices % len(
                 sorted_indices)]
             self.memory.pop(eliminated_index)
-            print("eliminated", eliminated_index, "due to final rule")
-
+            
             if self.last_selected_assignment is not None:
                 if self.last_selected_assignment == eliminated_index:
                     self.last_selected_assignment = None

@@ -34,7 +34,7 @@ def create_dataset(parser_args, config, society_data={'name': "default", "same_t
                     agents.append(ag_name)
     else:
         agents = society_data['agents']
-    print("CRETING DATASET FOR AGENTS: ", agents)
+        
     for i, ag in enumerate(agents):
         if 'agents' not in society_data.keys():
             ag = {'agent_id': ag, 'name': ag, 'value_system': 'unk', 'data': defaultdict(
@@ -73,4 +73,5 @@ def create_dataset(parser_args, config, society_data={'name': "default", "same_t
         os.makedirs(path, exist_ok=True)
         dataset.save(os.path.join(
             path, f"{'dataset_train' if train_or_test == 'train' else 'dataset_test' if train_or_test == 'test' else 'dataset'}.pkl"))
+        print(f"Dataset saved at {path}")
     return dataset
