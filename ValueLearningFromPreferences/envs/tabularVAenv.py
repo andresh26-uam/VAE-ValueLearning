@@ -1,16 +1,12 @@
 
+from seals import util
 from abc import abstractmethod
-import abc
-from typing import Any, Callable, Dict, Generic, Iterable, Optional, SupportsFloat, Tuple, TypeVar, Union
-import imitation
-import imitation.util
-import imitation.util.sacred
+from typing import Any, Callable, Dict, Iterable, Optional, SupportsFloat, Tuple, TypeVar, Union
 import torch
 from typing_extensions import override
 from numpy import ndarray
 from seals import base_envs
 import numpy as np
-
 import gymnasium as gym
 
 
@@ -40,7 +36,6 @@ def translate_state(state, original_state_space):
     return new_state
 
 
-
 class ValueAlignedEnvironment(gym.Env):
 
     def __init__(self, n_values: int, horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True):
@@ -51,7 +46,8 @@ class ValueAlignedEnvironment(gym.Env):
         self._cur_align_func = None
         self.current_assumed_grounding = None
         self.n_values = n_values
-        self.basic_profiles = [tuple([float(ti) for ti in t]) for t in np.eye(self.n_values)]
+        self.basic_profiles = [tuple([float(ti) for ti in t])
+                               for t in np.eye(self.n_values)]
         # self.action_space = self.env.action_space
         # self.observation_space = self.observation_space
 
@@ -63,9 +59,9 @@ class ValueAlignedEnvironment(gym.Env):
     def align_func_yielder(self, a, ns=None, prev_align_func=None, info=None):
         return self._cur_align_func
 
-    
     def get_reward_per_value(self, vindex, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
         return self.get_reward_per_align_func(align_func=self.basic_profiles[vindex], obs=obs, action=action, next_obs=next_obs, info=info, custom_grounding=custom_grounding)
+
     @abstractmethod
     def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
         ...
@@ -75,7 +71,7 @@ class ValueAlignedEnvironment(gym.Env):
 
     def get_align_func(self):
         return self._cur_align_func
-    
+
     @abstractmethod
     def real_reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
         ...
@@ -83,7 +79,7 @@ class ValueAlignedEnvironment(gym.Env):
     @abstractmethod
     def real_step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
         ...
-           
+
     def reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
         super().reset(seed=seed, options=options)
         s, info = self.real_reset(seed=seed, options=options)
@@ -91,13 +87,13 @@ class ValueAlignedEnvironment(gym.Env):
         self.prev_observation, self.prev_info = s, info
         self.time = 0
         return s, info
-    
+
     def step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
-        ns, original_rew, done, trunc, info =  self.real_step(action)
+        ns, original_rew, done, trunc, info = self.real_step(action)
         self.set_align_func(self.align_func_yielder(
             action, ns=ns, prev_align_func=self.get_align_func(), info=self.prev_info))
-        info['align_func'] = self.get_align_func()  
-              
+        info['align_func'] = self.get_align_func()
+
         r = self.get_reward_per_align_func(
             self.get_align_func(), self.prev_observation, action, ns, info, custom_grounding=self.assumed_grounding)
         self.time += 1
@@ -108,7 +104,6 @@ class ValueAlignedEnvironment(gym.Env):
         self.prev_info = info
         return ns, r, done, trunc, info
 
-       
     @abstractmethod
     def calculate_assumed_grounding(self, **kwargs) -> tuple[Union[torch.nn.Module, np.ndarray], np.ndarray]:
         ...
@@ -116,15 +111,16 @@ class ValueAlignedEnvironment(gym.Env):
     @property
     def assumed_grounding(self):
         return self.current_assumed_grounding
-    
+
+
 DiscreteSpaceInt = np.int64
-from seals import util
 
 # Note: we redefine the type vars from gymnasium.core here, because pytype does not
 # recognize them as valid type vars if we import them from gymnasium.core.
 
 ActType = TypeVar("ActType")
 ObsType = TypeVar("ObsType")
+
 
 class TabularVAMDP(ValueAlignedEnvironment):
 
@@ -143,7 +139,6 @@ class TabularVAMDP(ValueAlignedEnvironment):
 
     _cur_state: Optional[DiscreteSpaceInt]
     _n_actions_taken: Optional[int]
-
 
     def initial_state(self) -> DiscreteSpaceInt:
         """Samples from the initial state distribution."""
@@ -200,7 +195,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
     def action_dim(self) -> int:
         """Number of action vectors (int)."""
         return self.transition_matrix.shape[1]
-    
+
     @property
     def obs_dim(self) -> int:
         """Size of observation vectors for this MDP."""
@@ -229,7 +224,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
         if state not in self.state_space:
             raise ValueError(f"{state} not in {self.state_space}")
         self._cur_state = state
-    
+
     def base_reset(
         self,
         *,
@@ -245,7 +240,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
         obs = self.obs_from_state(self.state)
         info: Dict[str, Any] = dict()
         return obs, info
-    
+
     def base_step(self, action: ActType) -> Tuple[ObsType, float, bool, bool, dict]:
         """Transition state using given action."""
         if self._cur_state is None or self._n_actions_taken is None:
@@ -264,7 +259,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
 
         infos = {"old_state": old_state, "new_state": self._cur_state}
         return obs, reward, terminated, truncated, infos
-    
+
     def __init__(self, n_values: int, transition_matrix: ndarray, observation_matrix: ndarray,
                  reward_matrix_per_va: Callable[[Any], ndarray],
                  default_reward_matrix: ndarray, initial_state_dist: ndarray = None,
@@ -273,10 +268,9 @@ class TabularVAMDP(ValueAlignedEnvironment):
                                                      reward_matrix=default_reward_matrix, horizon=horizon, initial_state_dist=initial_state_dist)
         """
 
-        
         self._cur_state = None
         self._n_actions_taken = None
-        
+
         # The following matrices should conform to the shapes below:
 
         # transition matrix: n_states x n_actions x n_states
@@ -313,7 +307,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
                 f"len(initial_state_dist) = {len(initial_state_dist)}",
             )
         self.observation_matrix = observation_matrix
-        
+
         self.transition_matrix = transition_matrix
         self.reward_matrix = default_reward_matrix
         self._feature_matrix = None
@@ -351,11 +345,11 @@ class TabularVAMDP(ValueAlignedEnvironment):
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
 
         self.set_initial_state_distribution(initial_state_dist)
-        super().__init__( n_values=n_values, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
+        super().__init__(n_values=n_values, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
                          trunc_when_horizon_is_met=trunc_when_horizon_is_met)
         self.env: base_envs.TabularModelPOMDP
-        
-        #self.current_assumed_grounding = self.calculate_assumed_grounding()
+
+        # self.current_assumed_grounding = self.calculate_assumed_grounding()
 
     def valid_actions(self, state, align_func=None):
         return np.arange(self.reward_matrix.shape[1])
@@ -378,17 +372,17 @@ class TabularVAMDP(ValueAlignedEnvironment):
     def real_reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
         s, i = self.base_reset(seed=seed, options=options)
         i['state'] = self.state
-        i['next_state'] = self.state      
+        i['next_state'] = self.state
 
         self.prev_observation = i['state']
         return s, i
-    
+
     @override
     def real_step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
         prev_state = self.state
         ns, r, d, t, i = self.base_step(action)
         # d = d or self.env.state in self.goal_states
-        
+
         i['state'] = prev_state
         i['next_state'] = self.state
 
@@ -400,10 +394,8 @@ class TabularVAMDP(ValueAlignedEnvironment):
     def invalid_states(self):
         return None
 
-    
     def obs_from_state(self, state: np.int64) -> np.ndarray[Any, np.dtype]:
         return self.observation_matrix[state]
-    
 
 
 class ContextualEnv(ValueAlignedEnvironment):
@@ -412,16 +404,17 @@ class ContextualEnv(ValueAlignedEnvironment):
     @abstractmethod
     def context(self):
         return None
+
     @abstractmethod
     def contextualize(self, context: Any):
         ...
-    def reset(self, *, seed = None, options = None):
-        s,i = super().reset(seed=seed, options=options)
+
+    def reset(self, *, seed=None, options=None):
+        s, i = super().reset(seed=seed, options=options)
         i['context'] = self.context
         return s, i
-    def step(self, action):
-        ns, r, d,t,i = super().step(action)
-        i['context'] = self.context
-        return ns, r, d,t,i
 
-    
+    def step(self, action):
+        ns, r, d, t, i = super().step(action)
+        i['context'] = self.context
+        return ns, r, d, t, i

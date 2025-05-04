@@ -3,4 +3,5 @@ minari==0.5.2
 sb3_contrib==2.5.0
 ordered_set==4.1.0
 interpret==0.6.10
+dill==0.3.8
 kaleido==0.2.1

@@ -1,17 +1,14 @@
 from copy import deepcopy
 import enum
 import os
-from typing import Any, SupportsFloat
 import numpy as np
 from gymnasium import spaces
 import torch
 from use_cases.firefighters_use_case.constants import STATE_MEDICAL
 from use_cases.firefighters_use_case.env import HighRiseFireEnv
-
-
 from gymnasium import spaces
-
 from envs.tabularVAenv import TabularVAMDP, encrypt_state
+
 
 def calculate_s_trans_ONE_HOT_FEATURES(vec, state_space, action_space):
 
@@ -24,6 +21,7 @@ def calculate_s_trans_ONE_HOT_FEATURES(vec, state_space, action_space):
         lambda row: encrypt_state(row[:-1], state_space), axis=1, arr=s_trans)
     actions = np.apply_along_axis(lambda row: row[-1], axis=1, arr=s_trans)
     return encrypted_s_trans, actions
+
 
 class FeatureSelectionFFEnv(enum.Enum):
 
@@ -154,7 +152,7 @@ class FireFightersEnv(TabularVAMDP):
         self.set_align_func((1.0, 0.0))
 
     def _get_reward_matrix_per_va(self, align_func, custom_grounding=None):
-        
+
         assert isinstance(align_func, tuple)
         assert isinstance(float(align_func[0]), float)
         assert isinstance(float(align_func[1]), float)
@@ -162,20 +160,19 @@ class FireFightersEnv(TabularVAMDP):
             v = self.reward_matrix_per_va_dict[(
                 1.0, 0.0)]*align_func[0] + self.reward_matrix_per_va_dict[(0.0, 1.0)]*align_func[1]
         else:
-        # custom grounding 0 might is only used for trajectories
+            # custom grounding 0 might is only used for trajectories
             if isinstance(custom_grounding, tuple):
                 custom_grounding = custom_grounding[1]
-            if custom_grounding.shape == (400,5,2):
-                v = custom_grounding[:,:,0]*align_func[0] + custom_grounding[:,:,1]*align_func[1]
-            
+            if custom_grounding.shape == (400, 5, 2):
+                v = custom_grounding[:, :, 0]*align_func[0] + \
+                    custom_grounding[:, :, 1]*align_func[1]
+
         # assert np.max(v) <= 1.00001
         # assert np.min(v) >= -1.00001
         return v
 
     def get_state_actions_with_known_reward(self, align_func):
         return None  # self._states_with_known_reward
-
-   
 
     @property
     def goal_states(self):
@@ -190,21 +187,20 @@ class FireFightersEnv(TabularVAMDP):
         if self.feature_selection == FeatureSelectionFFEnv.ONE_HOT_OBSERVATIONS:
             assumed_grounding = np.zeros(
                 (self.state_dim*self.action_dim, 2), dtype=np.float64)
-            assumed_grounding[:, 0] = np.reshape(self.obtain_grounding( variant=variants[0] if variants is not None else None, 
-                file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate), 
-                (self.state_dim*self.action_dim,))
-            assumed_grounding[:, 1] = np.reshape(self.obtain_grounding( variant=variants[1] if variants is not None else None, 
-                file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
-, (self.state_dim*self.action_dim,))
+            assumed_grounding[:, 0] = np.reshape(self.obtain_grounding(variant=variants[0] if variants is not None else None,
+                                                                       file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate),
+                                                 (self.state_dim*self.action_dim,))
+            assumed_grounding[:, 1] = np.reshape(self.obtain_grounding(variant=variants[1] if variants is not None else None,
+                                                                       file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate), (self.state_dim*self.action_dim,))
             self.current_assumed_grounding = assumed_grounding, assumed_grounding
             return assumed_grounding, assumed_grounding
         elif self.feature_selection == FeatureSelectionFFEnv.ONE_HOT_FEATURES:
             assumed_grounding = np.zeros(
                 (self.state_dim, self.action_dim, 2), dtype=np.float64)
-            assumed_grounding[:, :, 0] = self.obtain_grounding( variant=variants[0] if variants is not None else None, 
-                file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate)
-            assumed_grounding[:, :, 1] = self.obtain_grounding( variant=variants[1] if variants is not None else None, 
-                file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
+            assumed_grounding[:, :, 0] = self.obtain_grounding(variant=variants[0] if variants is not None else None,
+                                                               file_save=os.path.join(save_folder, variants_save_files[0]) if variants_save_files is not None else None, recalculate=recalculate)
+            assumed_grounding[:, :, 1] = self.obtain_grounding(variant=variants[1] if variants is not None else None,
+                                                               file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
 
             t_assumed_grounding = torch.tensor(
                 assumed_grounding, dtype=torch.float32).requires_grad_(False)
@@ -219,27 +215,32 @@ class FireFightersEnv(TabularVAMDP):
 
             return processing_obs, assumed_grounding
         else:
-            raise ValueError(f"Feature selection not registered {self.feature_selection}")
-        
+            raise ValueError(
+                f"Feature selection not registered {self.feature_selection}")
+
     def obtain_grounding(self, variant=None, file_save=None, recalculate=True):
         if variant is None or 'default' in variant:
             return self.reward_matrix_per_align_func(
                 (0.0, 1.0) if 'proximity' in variant else (1.0, 0.0) if 'professionalism' in variant else None)
         elif variant == 'professionalist':
             with open(file_save, 'wb' if recalculate else 'r') as fsave:
-                if recalculate or os.stat(file_save).st_size == 0: 
-                    reward_matrix = deepcopy(self.reward_matrix_per_align_func((1.0,0.0)))
-                    reward_matrix[reward_matrix > 0] = 1.0 # Always go for professionalism
+                if recalculate or os.stat(file_save).st_size == 0:
+                    reward_matrix = deepcopy(
+                        self.reward_matrix_per_align_func((1.0, 0.0)))
+                    # Always go for professionalism
+                    reward_matrix[reward_matrix > 0] = 1.0
                     np.save(fsave, reward_matrix)
                 else:
                     reward_matrix = np.load(fsave)
         elif variant == 'proximitier':
             with open(file_save, 'wb' if recalculate else 'r') as fsave:
-                if recalculate or os.stat(file_save).st_size == 0: 
-                    reward_matrix = deepcopy(self.reward_matrix_per_align_func((0.0,1.0)))
-                    reward_matrix[reward_matrix > 0] = 1.0 # Always go for proximity
+                if recalculate or os.stat(file_save).st_size == 0:
+                    reward_matrix = deepcopy(
+                        self.reward_matrix_per_align_func((0.0, 1.0)))
+                    # Always go for proximity
+                    reward_matrix[reward_matrix > 0] = 1.0
                     np.save(fsave, reward_matrix)
                 else:
                     reward_matrix = np.load(fsave)
-        
+
         return reward_matrix

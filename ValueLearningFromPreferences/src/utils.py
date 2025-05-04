@@ -1,14 +1,9 @@
 import types
 import argparse
-import itertools
 import json
-import os
 from types import LambdaType
-from typing import List
-
 import numpy as np
 
-from use_cases.roadworld_env_use_case.values_and_costs import BASIC_PROFILES
 
 def merge_dicts_recursive(base, update):
         for key, value in update.items():
@@ -17,32 +12,6 @@ def merge_dicts_recursive(base, update):
             else:
                 if key not in base:
                     base[key] = value
-
-
-class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            if hasattr(obj, "tolist"):  # numpy arrays have this
-                return {"$array": obj.tolist()}  # Make a tagged object
-        return super(NpEncoder, self).default(obj)
-
-
-def convert(x):
-    if hasattr(x, "tolist"):  # numpy arrays have this
-        return {"$array": x.tolist()}  # Make a tagged object
-    raise TypeError(x)
-
-
-def deconvert(x):
-    if len(x) == 1:  # Might be a tagged object...
-        key, value = next(iter(x.items()))  # Grab the tag and value
-        if key == "$array":  # If the tag is correct,
-            return np.array(value)  # cast back to array
-    return x
 
 
 def train_test_split_initial_state_distributions(n_states, split_percentage=0.7):
@@ -65,56 +34,6 @@ def train_test_split_initial_state_distributions(n_states, split_percentage=0.7)
 
     # Output the distributions
     return first_distribution, second_distribution
-
-
-def sample_example_profiles(profile_variety, n_values=3, basic_profiles=BASIC_PROFILES) -> List:
-    ratios = np.linspace(0, 1, profile_variety)
-
-    if n_values < 1:
-        raise ValueError('Need more values: n_values must be bigger than 0')
-    if n_values == 1:
-        profile_set = list(ratios)
-    if n_values == 2:
-        profile_set = [(1.0-ratio, ratio) for ratio in ratios]
-    if n_values == 3:
-        profile_combinations = [set(itertools.permutations((ratios[i], ratios[j], ratios[-i-j-1])))
-                                for i in range(len(ratios)) for j in range(i, (len(ratios)-i+1)//2)]
-    else:
-        def recursFind(N, nc=3, i=0, t=0, p=[]):
-            if nc == 1:
-                # No need to explore, last value is N-t
-                if N-t >= i:
-                    yield p+[N-t]
-                else:
-                    # p+[N-t] is a solution, but it has already been given in another order
-                    pass
-            elif i*nc+t > N:
-                # impossible to find nc values>=i (there are some <i. But that would yield to already given solutions)
-                return
-            else:
-                for j in range(i, N):
-                    yield from recursFind(N, nc-1, j, t+j, p+[j])
-
-        profile_combinations = [set(itertools.permutations(
-            ratios[i] for i in idx)) for idx in recursFind(len(ratios)-1, n_values)]
-
-    if n_values >= 3:
-        profile_set = list(set(tuple(
-            float(f"{a_i:0.3f}") for a_i in a) for l in profile_combinations for a in l))
-        [profile_set.remove(pr) for pr in basic_profiles]
-        for pr in reversed(basic_profiles):
-            profile_set.insert(0, pr)
-
-    a = np.array(profile_set, dtype=np.dtype(
-        [(f'{i}', float) for i in range(n_values)]))
-    sortedprofiles = a[np.argsort(
-        a, axis=-1, order=tuple([f'{i}' for i in range(n_values)]), )]
-    profile_set = list(tuple(t) for t in sortedprofiles.tolist())
-
-    profile_set = [tuple(round(num, 2) for num in t) for t in profile_set]
-
-    return profile_set
-
 
 def load_json_config(json_file):
     with open(json_file, 'r') as f:

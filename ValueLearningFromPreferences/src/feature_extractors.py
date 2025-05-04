@@ -27,10 +27,6 @@ class OneHotFeatureExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations):
         # Convert observations to integers (if needed) and perform one-hot encoding
-        """batch_size = observations.shape[0]
-        one_hot = torch.zeros((batch_size, self.n_categories), device=observations.device)
-
-        one_hot.scatter_(1, observations.long(), 1)"""
         with torch.no_grad():
             if len(observations.shape) > 2:
                 observations = torch.squeeze(observations, dim=1)
@@ -56,16 +52,10 @@ class ObservationMatrixFeatureExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations):
         # Convert observations to integers (if needed) and perform one-hot encoding
-        """batch_size = observations.shape[0]
-        one_hot = torch.zeros((batch_size, self.n_categories), device=observations.device)
-
-        one_hot.scatter_(1, observations.long(), 1)"""
+        
         with torch.no_grad():
             idx = observations
-            """if idx.shape[-1] > 1:
-                ret =  torch.vstack([self.observation_matrix[id] for id in idx.bool()])
-            else:
-                ret =  torch.vstack([self.observation_matrix[id] for id in idx.long()])"""
+            
             if idx.shape[-1] > 1:
                 # Convert idx to a boolean mask and use it to index the observation_matrix
                 mask = idx.bool()

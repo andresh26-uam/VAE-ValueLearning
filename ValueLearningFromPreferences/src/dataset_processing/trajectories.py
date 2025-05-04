@@ -1,15 +1,9 @@
-
-from src.dataset_processing.utils import TRAJECTORIES_DATASETS_PATH, USEINFO, calculate_trajectory_save_path
-from src.dataset_processing.data import TrajectoryWithValueSystemRews, load_vs_trajectories, save_vs_trajectories
-
-
 import numpy as np
 import torch
-
-
 import os
+from src.dataset_processing.utils import TRAJECTORIES_DATASETS_PATH, USEINFO, calculate_trajectory_save_path
+from src.dataset_processing.data import TrajectoryWithValueSystemRews, load_vs_trajectories, save_vs_trajectories
 from typing import Sequence
-
 
 
 def compare_trajectories(traj_i, traj_j, epsilon=0.0):

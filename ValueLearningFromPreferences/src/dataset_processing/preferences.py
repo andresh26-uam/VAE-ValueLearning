@@ -1,12 +1,9 @@
 import csv
 from typing import Tuple
-
 import torch
 from src.dataset_processing.utils import COMPARISONS_DATASETS_PATH, calculate_preferences_save_path
 import numpy as np
-
 import os
-
 from src.dataset_processing.trajectories import compare_trajectories
 
 

@@ -10,8 +10,7 @@ import numpy as np
 from typing import Sequence
 
 
-
-def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None, debug_grounding=False,save=True):
+def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None, debug_grounding=False, save=True):
     environment_data = config[parser_args.environment]
 
     dataset_name = parser_args.dataset_name
@@ -64,43 +63,14 @@ def create_dataset(parser_args, config, society_data={'name': "default", "same_t
             trajectory_pairs: Sequence[TrajectoryWithValueSystemRewsPair] = trajs_ag[ag_idxs]
             dataset.push(trajectory_pairs, preferences[ag_point:ag_point+n_pairs_per_agent], preferences_per_grounding[ag_point:(
                 ag_point+n_pairs_per_agent)], agent_ids=[agent_id]*n_pairs_per_agent, agent_data={agent_id: ag})
-            """if society_data["same_trajectories_for_each_agent_type"] and ag_point > 0:
-                prev_ag_idxs = idxs[ag_point -
-                                    n_pairs_per_agent:ag_point+n_pairs_per_agent]
-
-                for j in range(len(ag_idxs)):
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][0].obs, trajs_ag[prev_ag_idxs][j][0].obs)
-                    np.testing.assert_allclose(
-                        trajs_ag[ag_idxs][j][1].obs, trajs_ag[prev_ag_idxs][j][1].obs)
-                if ag['name'] == las_agent_name:
-                    np.testing.assert_allclose(
-                        dataset.data_per_agent[last_agent_id].preferences_with_grounding, dataset.data_per_agent[agent_id].preferences_with_grounding)
-                    np.testing.assert_allclose([t.obs for t in dataset.data_per_agent[last_agent_id].fragments1], [
-                                               t.obs for t in dataset.data_per_agent[agent_id].fragments1])
-"""
+            
             ag_point += n_pairs_per_agent
             # last_agent_id = agent_id
             # las_agent_name = ag['name']
-
-        """for i in range((len(trajs_ag))):
-            assert discounted_sums[i] == imitation.data.rollout.discounted_sum(
-                trajs_ag[i].rews, gamma=alg_config['discount_factor_preferences'])
-        for idx, pr in zip(idxs, preferences):
-            assert discounted_sums[idx[0]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[0]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert discounted_sums[idx[1]] == imitation.data.rollout.discounted_sum(
-                trajs_ag[idx[1]].rews, gamma=alg_config['discount_factor_preferences'])
-            assert compare_trajectories(
-                discounted_sums[idx[0]], discounted_sums[idx[1]], epsilon=parser_args.reward_epsilon) == pr
-        for vi in range(len(environment_data['basic_profiles'])):
-
-            for idx, pr in zip(idxs, preferences_per_grounding[vi]):
-                assert compare_trajectories(
-                    discounted_sums_per_grounding[vi, idx[0]], discounted_sums_per_grounding[vi, idx[1]], epsilon=parser_args.reward_epsilon) == pr"""
     if save:
         path = os.path.join(
-        DATASETS_PATH, calculate_dataset_save_path(dataset_name_pure, environment_data, society_data, epsilon=parser_args.reward_epsilon))
+            DATASETS_PATH, calculate_dataset_save_path(dataset_name_pure, environment_data, society_data, epsilon=parser_args.reward_epsilon))
         os.makedirs(path, exist_ok=True)
-        dataset.save(os.path.join(path, f"{"dataset_train" if train_or_test == "train" else "dataset_test" if train_or_test=='test' else "dataset"}.pkl"))
+        dataset.save(os.path.join(
+            path, f"{'dataset_train' if train_or_test == 'train' else 'dataset_test' if train_or_test == 'test' else 'dataset'}.pkl"))
     return dataset

@@ -81,21 +81,7 @@
                     "max_assignment_memory": 6
                 },
 
-                "learner_policy_class": "PPO",
-                "learner_policy_kwargs" : 
-                {
-                    "batch_size": 25,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.02,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.05,
-                    "vf_coef": 0.01,
-                    "n_epochs": 5,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
-                },
+                
                 
                 "reward_trainer_kwargs": {
                     "epochs": 4,
