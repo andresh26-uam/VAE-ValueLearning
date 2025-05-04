@@ -514,10 +514,6 @@ if __name__ == "__main__":
             os.path.join(path, "dataset.pkl"))
         dataset_test = []
 
-    print(np.sum(dataset_train.preferences_with_grounding == 0.5, axis=0))
-    print(dataset_train.preferences_with_grounding.shape)
-    exit(0)
-
     plot_test = True
     if len(dataset_test) == 0:
         plot_test = False
