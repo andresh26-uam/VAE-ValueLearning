@@ -58,40 +58,47 @@ def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str, Cl
         for cluster_idx in range(assignments[0].L):
             row = {}
             row["Cluster"] = cluster_idx + 1
+            # Sort clusters by the number of agents in descending order
+            corresponding_cidx = []
+            for assignment in assignments:
+                sorted_clusters = sorted(range(assignments[0].L), key=lambda idx: -len(assignment.assignment_vs[idx]))
+                cidx = sorted_clusters[cluster_idx]
+                corresponding_cidx.append(cidx)
+
             if output_columns.get("value_systems", False):
-                value_systems = [assignment.get_value_system(cluster_idx) for assignment in assignments]
+                value_systems = [assignment.get_value_system(cidx) for assignment,cidx in zip(assignments,corresponding_cidx)]
                 means = np.mean(value_systems, axis=0)
                 stds = np.std(value_systems, axis=0)
                 row["Value System"] = ", ".join(f"{mean:.3f} ± {std:.3f}" for mean, std in zip(means, stds))
             if output_columns.get("num_agents", False):
-                num_agents = [len(assignment.assignment_vs[cluster_idx]) for assignment in assignments]
+                num_agents = [len(assignment.assignment_vs[cidx]) for assignment,cidx in zip(assignments,corresponding_cidx)]
                 row["Number of Agents"] = f"{np.mean(num_agents):.1f} ± {np.std(num_agents):.1f}"
             if output_columns.get("representativity", False):
                 representativities = [
                     ClusterAssignment._representativity_cluster(
-                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
-                    ) for assignment in assignments
+                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cidx]]
+                    ) for assignment,cidx in zip(assignments,corresponding_cidx)
                 ]
                 row["Representativeness"] = f"{np.mean(representativities):.3f} ± {np.std(representativities):.3f}"
             if output_columns.get("conciseness", False):
                 conciseness_values = [
                     ClusterAssignment._conciseness(
-                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
+                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cidx or kpair[1] == cidx],
                     assignment.L
-                    ) if assignment.L > 1 else '-' for assignment in assignments
+                    ) if assignment.L > 1 else '-' for assignment,cidx in zip(assignments,corresponding_cidx)
                 ]
                 row["Conciseness"] = f"{np.mean(conciseness_values):.3f} ± {np.std(conciseness_values):.3f}" if assignments[0].L > 1 else '-'
             if output_columns.get("combined_score", False):
                 representativities = np.array([
                     ClusterAssignment._representativity_cluster(
-                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cluster_idx]]
-                    ) for assignment in assignments
+                    [d for agent, d in assignment.intra_discordances_vs_per_agent.items() if agent in assignment.assignment_vs[cidx]]
+                    ) for assignment,cidx in zip(assignments,corresponding_cidx)
                 ])
                 conciseness_values = np.array([
                     ClusterAssignment._conciseness(
-                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cluster_idx or kpair[1] == cluster_idx],
+                    [d for kpair, d in assignment.inter_discordances_vs_per_cluster_pair.items() if kpair[0] == cidx or kpair[1] == cidx],
                     assignment.L
-                    ) if assignment.L > 1 else '-' for assignment in assignments
+                    ) if assignment.L > 1 else '-' for assignment,cidx in zip(assignments,corresponding_cidx)
                 ])
                 combined_scores = [
                     conciseness_values / (1-representativities) if assignment.L > 1 else '-'
@@ -102,9 +109,9 @@ def generate_assignment_tables(assignment_identifier_to_assignment: Dict[str, Cl
                 coherence_values = [
                     [
                     ClusterAssignment._representativity_cluster(
-                        [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in assignment.assignment_vs[cluster_idx]]
+                        [d for agent, d in assignment.intra_discordances_gr_per_agent[i].items() if agent in assignment.assignment_vs[cidx]]
                     ) for i in range(len(assignment.gr_score))
-                    ] for assignment in assignments
+                    ] for assignment,cidx in zip(assignments,corresponding_cidx)
                 ]
             coherence_means = np.mean(coherence_values, axis=0)
             coherence_stds = np.std(coherence_values, axis=0)
@@ -184,6 +191,8 @@ def parse_args():
     general_group.add_argument('-lrcfrom', '--learning_curve_from', type=parse_enames_list, default=None,help="Generate the learning curve for the specified experiments")
     general_group.add_argument(
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
+    general_group.add_argument(
+        '-scf', '--show_only_config', action='store_true', default=False, required=False, help='Only show the training configuration used.')
 
     
     return parser.parse_args()
@@ -225,12 +234,12 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
 
         plt.figure(figsize=(10, 6))
         plt.bar(range(1, len(means) + 1), perc_increase_over_mean, yerr=std_errors, capsize=5, alpha=0.7, color='skyblue')
-        plt.xticks(range(1, len(means) + 1), [feature_names[i] for i in range(len(means))])
+        plt.xticks(range(1, len(means) + 1), [feature_names[i] for i in range(len(means))],fontsize=16)
         plt.ylim(-1.4 * 100, 1.4 * 100)  # Set y-axis
-        plt.yticks(np.arange(-1.4 * 100, 1.5 * 100, 0.1 * 100), rotation=45)
-        plt.title(f"Barplot of Context Features for Cluster {cluster_idx + 1} (Agents: {num_agents})\n(Value System: {value_system_str})")
-        plt.xlabel("Features")
-        plt.ylabel("Percentage increase/decrease over average")
+        plt.yticks(np.arange(-1.4 * 100, 1.5 * 100, 0.1 * 100), rotation=45,fontsize=16)
+        plt.title(f"Barplot of Context Features for Cluster {cluster_idx + 1} (Agents: {num_agents})\n(Value System: {value_system_str})",fontsize=16)
+        plt.xlabel("Features",fontsize=16)
+        plt.ylabel("Percentage increase/decrease over average",fontsize=16)
         plt.grid(axis='y')
 
         # Save the plot
@@ -321,11 +330,11 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
         plt.fill_between(x, mean_values - std_error, mean_values + std_error, color=colors[idx_color % len(colors)],
                             alpha=0.2)
 
-    plt.xlabel("Iteration")
-    plt.xticks(x, labels = [int(xi/len(x)*n_iterations_real) for xi in x])
-    plt.ylabel("Metric Value")
-    plt.title("Learning curves")
-    plt.legend()
+    plt.xlabel("Iteration",fontsize=16)
+    plt.xticks(x, labels = [int(xi/len(x)*n_iterations_real) for xi in x],fontsize=16)
+    plt.ylabel("Metric Value",fontsize=16)
+    plt.title("Learning curves",fontsize=16)
+    plt.legend(fontsize=16)
     plt.grid(True)
     plt.tight_layout()
 
@@ -339,46 +348,47 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
     print(f"Saved metrics plot to {plot_path}")
 
 
-def plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di):
-    scores = {}
-    best_per_memory = {}
-    max_conciseness = float('-inf')
-    for ename_clean, am in assignment_memories_per_di.items():
-        am: ClusterAssignmentMemory
-            #am.sort_lexicographic(lexicographic_vs_first=False)
-        best = am.get_best_assignment(lexicographic_vs_first=False)
-        best_per_memory[ename_clean] = best
-        max_conciseness = max(am.maximum_conciseness_vs,max_conciseness)
-
-    for best in best_per_memory.values():
-        key = f"{best.L}/{len(best.assignment_vs)}"
-        best: ClusterAssignment
-        if key not in scores.keys():
-            scores[key] = []
-        scores[key].append(best.combined_cluster_score_vs(aggr_repr=np.min, conciseness_if_L_is_1=max_conciseness if max_conciseness > 0 else None))
-
-        # Sort the scores lexicographically by L and len(assignment_vs)
+def plot_di_scores_for_experiments(experiment_name, scores, repres, conc):
+    
     sorted_keys = sorted(scores.keys(), key=lambda x: tuple(map(int, x.split('/'))))
     sorted_scores = {key: scores[key] for key in sorted_keys}
+    sorted_repres = {key: repres[key] for key in sorted_keys}
+    sorted_conc = {key: conc[key] for key in sorted_keys}
 
-        # Prepare data for plotting
+    # Prepare data for plotting
     x_labels = list(sorted_scores.keys())
     x_positions = range(len(x_labels))
-    means = [np.mean(values) for values in sorted_scores.values()]
-    errors = [np.std(values)/np.sqrt(len(values)) if len(values) > 1 else 0 for values in sorted_scores.values()]
-
-        # Plot the scores
+    # Plot the scores
     plt.figure(figsize=(10, 6))
-    plt.errorbar(x_positions, means, yerr=errors, fmt='o-', capsize=5, label="Scores", color='blue', alpha=0.7)
-    plt.xticks(x_positions, x_labels, rotation=45)
-    plt.xlabel("L / Number of Clusters")
-    plt.ylabel("Combined Cluster Score")
-    plt.title("Scores by L and Number of Clusters")
+
+    max_score = 0
+    for values in sorted_scores.values():
+        max_score = max(max_score, max(values))
+    if isinstance(max_score, torch.Tensor):
+        max_score = float(max_score.detach().cpu().numpy())
+    means = [np.mean(np.asarray(values)/max_score) for values in sorted_scores.values()]
+    errors = [np.std(np.asarray(values)/max_score)/np.sqrt(len(values)) if len(values) > 1 else 0 for values in sorted_scores.values()]
+    plt.errorbar(x_positions, means, yerr=errors, fmt='o-', capsize=5, label="Dunn Index", color='green', alpha=0.7)
+    
+    means = [np.mean(values) for values in sorted_repres.values()]
+    errors = [np.std(values)/np.sqrt(len(values)) if len(values) > 1 else 0 for values in sorted_repres.values()]
+    plt.errorbar(x_positions, means, yerr=errors, fmt='o-', capsize=5, label="Representativeness", color='red', alpha=0.7)
+    
+    means = [np.mean(values) for values in sorted_conc.values()]
+    errors = [np.std(values)/np.sqrt(len(values)) if len(values) > 1 else 0 for values in sorted_conc.values()]
+    plt.errorbar(x_positions, means, yerr=errors, fmt='o-', capsize=5, label="Conciseness", color='blue', alpha=0.7)
+    
+    plt.xticks(x_positions, x_labels, rotation=45, fontsize=16)  # Increased font size by 75%
+    plt.xlabel("L / Number of Clusters", fontsize=16)  # Increased font size by 75%
+    plt.ylabel("Cluster Score", fontsize=16)  # Increased font size by 75%
+    plt.ylim(0, 1.05)
+    plt.yticks(np.arange(0, 1.05, 0.1), fontsize=16)  # Increased font size by 75%
+    plt.title("Scores by Number of Clusters", fontsize=16)  # Increased font size by 75%
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.legend()
+    plt.legend(fontsize=16)  # Increased font size by 75%
     plt.tight_layout()
 
-        # Save the plot
+    # Save the plot
     plot_dir = os.path.join('test_results', experiment_name, 'di_scores')
     os.makedirs(plot_dir, exist_ok=True)
     plot_path = os.path.join(plot_dir, "di_scores_plot.pdf")
@@ -402,6 +412,13 @@ if __name__ == "__main__":
         f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
     })
     
+    config = exp_parser_args_base['config']
+    society_config = exp_parser_args_base['society_config']
+    exp_parser_args = exp_parser_args_base['parser_args']
+
+    if parser_args.show_only_config:
+        pprint.pprint(config[exp_parser_args.environment])
+        exit(0)
 
     metrics_per_lre, exp_parser_args_base_per_lre, historic_assignments_per_lre, assignment_memories_per_lre, assignment_memories_per_di= {}, {}, {},{},{}
     
@@ -424,19 +441,42 @@ if __name__ == "__main__":
             key: [assignment_memories_per_lre[ename_clean].memory[ikey] if len(assignment_memories_per_lre[ename_clean].memory) > ikey else None for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
         }
     if hasattr(parser_args, 'dunn_index_curve_from') and parser_args.dunn_index_curve_from is not None:
-        
+        scores = {}
+        repres = {}
+        conc = {}
+        best_per_memory = {}
+        max_conciseness = float('-inf')
         for ename in parser_args.dunn_index_curve_from:
             ename_clean = find_parse_ename(ename)[1]
-            _, _, metrics_per_lre[ename_clean], exp_parser_args_base_per_lre[ename_clean], historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
+            _, _, metrics, _, h, _, n_iterations_real = load_training_results(
             ename_clean)
-            assignment_memories_per_di[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
-        plot_di_scores_for_experiments(experiment_name, assignment_memories_per_di)
+            am: ClusterAssignmentMemory = metrics['assignment_memory']
+            best = am.get_best_assignment(lexicographic_vs_first=False)
+            #max_conciseness = max(am.maximum_conciseness_vs,max_conciseness)
+            if best.L > 1 and best.conciseness_vs() < 1:
+                max_conciseness = max(best.conciseness_vs(),max_conciseness)
+            best_per_memory[ename_clean] = best
 
-    config = exp_parser_args_base['config']
-    society_config = exp_parser_args_base['society_config']
-    exp_parser_args = exp_parser_args_base['parser_args']
+            print(max_conciseness)
+            assert max_conciseness < 1, f"Max conciseness is {max_conciseness} for {ename_clean}"
+            del am
 
-    pprint.pprint(config)
+        for best in best_per_memory.values():
+            key = f"{best.L}"
+            best: ClusterAssignment
+            if key not in scores.keys():
+                scores[key] = []
+                repres[key] = []
+                conc[key] = []
+            scores[key].append(best.combined_cluster_score_vs(aggr_repr=np.min, conciseness_if_L_is_1=max_conciseness if max_conciseness > 0 else None))
+            repres[key].append(best.representativity_vs(aggr=np.min))
+            conc[key].append(best.conciseness_vs() if best.L > 1 else max_conciseness)
+            del best
+
+
+        plot_di_scores_for_experiments(experiment_name, scores, repres, conc)
+
+    
     # This will look again into the config files to see if there are new fields (wont update the old ones)
     config_actual = load_json_config(exp_parser_args.config_file)
     society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
@@ -473,6 +513,10 @@ if __name__ == "__main__":
         dataset_train = VSLPreferenceDataset.load(
             os.path.join(path, "dataset.pkl"))
         dataset_test = []
+
+    print(np.sum(dataset_train.preferences_with_grounding == 0.5, axis=0))
+    print(dataset_train.preferences_with_grounding.shape)
+    exit(0)
 
     plot_test = True
     if len(dataset_test) == 0:
@@ -519,7 +563,7 @@ if __name__ == "__main__":
     if exp_parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
     vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
-    pprint.pprint(config[exp_parser_args.environment])
+    #pprint.pprint(config[exp_parser_args.environment])
     
     
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)

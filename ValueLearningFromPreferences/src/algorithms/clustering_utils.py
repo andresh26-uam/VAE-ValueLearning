@@ -295,14 +295,20 @@ class ClusterAssignment():
         return np.mean(1.0 - np.asarray(intra_cluster_distances))
     
     def _representativity(intra_cluster_distances_per_agent: Dict[str, float], cluster_to_agents: List[List[str]], aggr=np.mean):
-        distances_per_cluster = ClusterAssignment._intra_cluster_discordances(intra_cluster_distances_per_agent, cluster_to_agents)
+        disc_total = 0.0
+        for aid, disc in intra_cluster_distances_per_agent.items():
+            disc_total += disc
+        disc_total /= len(intra_cluster_distances_per_agent)
+        return 1- disc_total
+    
+        """distances_per_cluster = ClusterAssignment._intra_cluster_discordances(intra_cluster_distances_per_agent, cluster_to_agents)
         if aggr=='weighted':
             val = 1.0 - np.dot(np.asarray(distances_per_cluster), np.asarray([len(cluster) for cluster in cluster_to_agents]))/sum([len(cluster) for cluster in cluster_to_agents])
             if not(val <=1.0 and val >= 0.0):
                 raise ValueError(f"val {val} is negative")
             return val
         else:
-            return aggr(1.0 - np.asarray(distances_per_cluster)) 
+            return aggr(1.0 - np.asarray(distances_per_cluster)) """
     def plot_vs_assignments(self, save_path="demo.pdf", pie_and_hist_path="pie_and_histograms.pdf", show=False, subfig_multiplier=5.0, values_color_map=plt.cm.tab10.colors, 
                                 values_names=None, values_short_names=None, fontsize=12):
             """

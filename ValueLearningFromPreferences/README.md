@@ -1,4 +1,4 @@
-# Learning the value systems of societies from preferences - submitted for ECAI 2025
+# Learning the value systems of societies from preferences - submitted for ECAI 2025 (paper id 6755)
 This repository is the source code for the ECAI paper titled "Learning the value systems of societies from preferences". The paper presents a novel approach to learning value systems (value-based preferences) and value groundings (domain-specific value alignment measures) of a society of agents or stakeholders from examples of pairwise preferences between alternatives in a decision-making problem domain.
 
 In the paper we utilize the Apollo dataset from [https://rdrr.io/cran/apollo/man/apollo_swissRouteChoiceData.html](https://rdrr.io/cran/apollo/man/apollo_swissRouteChoiceData.html), about train choice in Switzerland. The dataset includes features such as cost, time, headway, and interchanges, which are used to model agent preferences based on values. Although it also works for sequential decision making, in the paper we focus on the non-sequential decision making use case that the Apollo Dataset is about. 

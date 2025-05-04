@@ -41,8 +41,8 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.005,
-                    "lr_value_system": 0.03,
+                    "lr_grounding": 0.006,
+                    "lr_value_system": 0.025,
                     "lr_lambda": 0.005,
                     "initial_lambda": 0.01,
                     "lambda_decay": 0.0001,
@@ -55,7 +55,7 @@
                     "model_indifference_tolerance": 1.0,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
-                    "repr_apply_on_worst_clusters_only": true,
+                    "repr_apply_on_worst_clusters_only": false,
                     "conc_apply_on_worst_clusters_only": true,
                     "confident_penalty": 5.0,
                     "label_smoothing": 0.0,
@@ -77,8 +77,8 @@
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
                     "mutation_prob": 0.1,
-                    "mutation_scale": 0.1,
-                    "max_assignment_memory": 7
+                    "mutation_scale": 0.15,
+                    "max_assignment_memory": 8
                 },
 
                 "learner_policy_class": "PPO",
@@ -98,8 +98,8 @@
                 },
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 2,
-                    "refining_steps_after_cluster_assignment": 10,
+                    "epochs": 4,
+                    "refining_steps_after_cluster_assignment": 5,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 20,
                     "initial_exploration_rate": 0.5,

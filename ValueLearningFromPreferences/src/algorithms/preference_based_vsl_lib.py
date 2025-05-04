@@ -954,9 +954,10 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             pass # return loss 0.
         else:
             # This is the global approach. Does not optimize for the true representativity: 
-            #loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
+            #
+            loss_vs = self.loss_func(probs_vs, preferences, missclassified_vs, apply_on_misclassified_only=self.vs_apply_on_misclassified_only)
             # This one is:
-            loss_vs = th.tensor(0.0, device=example_model.device, dtype=example_model.dtype)
+            """loss_vs = th.tensor(0.0, device=example_model.device, dtype=example_model.dtype)
             loss_vs_per_cluster = [th.tensor(0.0, device=example_model.device, dtype=example_model.dtype) for _ in range(len(value_system_network_per_cluster))]
             agent_count_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
             current_disc_per_cluster = [0 for _ in range(len(value_system_network_per_cluster))]
@@ -995,7 +996,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                     for lw in loss_vs_per_cluster:
                         loss_vs += lw
             loss_vs/=total_discordance # CURRENT PAPER and TOTAL SUM
-            
+            """
             #print("TD?", total_discordance, len([ac for ac in agent_count_per_cluster if ac > 0]))
 
             #loss_vs/=len([ac for ac in agent_count_per_cluster if ac > 0]) # NO WEIGHTS
@@ -1116,7 +1117,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             if len(ac1) == 0 or len(ac2) == 0:
                 continue
 
-            agents_in_c1_c2 = agents_per_cluster[c1] + agents_per_cluster[c2]
+            agents_in_c1_c2 = ac1 + ac2
             
             vs1 = value_system_network_per_cluster[c1]
             vs2 = value_system_network_per_cluster[c2]
@@ -1162,11 +1163,12 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 with th.no_grad():
                     worst_conciseness_idx_real = th.argwhere(conciseness_real == th.amin(conciseness_real)).flatten()
                 #not needed, it is an equivalent solution. weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
-                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])
+                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])/len(worst_conciseness_idx_real)
             else:
                 with th.no_grad():
                     weights = (1.0 - conciseness_real) # The closer to 0 the conciseness, the more important the penalty.
                 conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))
+            #conc_penalty = th.mean(th.stack(conc_penalties))
                 
             
             
