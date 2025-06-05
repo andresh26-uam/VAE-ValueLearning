@@ -79,6 +79,8 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
             raise ValueError(f"Feature selection not registered {self.real_environ.feature_selection}")
 
     def _get_reward_matrix_for_profile(self, profile: tuple, custom_grounding=None):
+        if isinstance(profile[0], str):
+            profile = profile[1]
         if custom_grounding is None:
             if profile in self.reward_matrix_dict.keys() and self.reward_matrix_dict[profile].shape == (self.real_environ.state_dim, self.real_environ.action_dim):
                 np.testing.assert_allclose(self.reward_matrix_dict[profile][self.real_environ.cur_des], 0)

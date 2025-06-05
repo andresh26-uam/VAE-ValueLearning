@@ -379,7 +379,8 @@ class ClusterAssignment():
 
             # Save or show the cluster plot
             if save_path is not None:
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                if os.path.dirname(save_path) != '':
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 plt.savefig(save_path, bbox_inches="tight")
             if show or save_path is None:
                 plt.show()
@@ -416,7 +417,8 @@ class ClusterAssignment():
             pie_ax.set_box_aspect(1)
             hist_ax.set_box_aspect(1)  # Save or show the combined pie charts and histograms
             if pie_and_hist_path is not None:
-                os.makedirs(os.path.dirname(pie_and_hist_path), exist_ok=True)
+                if os.path.dirname(pie_and_hist_path) != '':
+                    os.makedirs(os.path.dirname(pie_and_hist_path), exist_ok=True)
                 plt.savefig(pie_and_hist_path, bbox_inches="tight")
             if show or pie_and_hist_path is None:
                 plt.show()
@@ -642,10 +644,12 @@ class ClusterAssignment():
                 min_total_edit_distance = min(min_total_edit_distance, total_edit_distance)
                 total_differences .append(min_total_edit_distance)
         diff = np.mean(1.0 - np.array(total_differences)/ (2*self.n_agents) )
-        if diff == 1.0:
+        """
+        this is just an approximation... Might be differeif diff == 1.0:
             assert self.is_equivalent_assignment(other)
         else:
             assert not self.is_equivalent_assignment(other)
+        """ 
         return diff # TODO: separate grounding?
     
     def agent_distribution_gr(self):

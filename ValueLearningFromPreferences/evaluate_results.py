@@ -10,11 +10,14 @@ import shap
 import torch
 from envs.routechoiceApollo import RouteChoiceEnvironmentApolloComfort
 from envs.tabularVAenv import TabularVAMDP
+from src.algorithms.plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies
+from src.algorithms.utils import PolicyApproximators, mce_partition_fh
 from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED
 from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
 from src.dataset_processing.data import VSLPreferenceDataset
 from src.dataset_processing.datasets import calculate_dataset_save_path
+from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy
 from src.reward_nets.vsl_reward_functions import LinearVSLRewardFunction, TrainingModes
 from train_vsl import find_parse_ename, load_training_results, parse_cluster_sizes, parse_optimizer_data
 from src.utils import filter_none_args, load_json_config, merge_dicts_recursive
@@ -403,18 +406,180 @@ if __name__ == "__main__":
     parser_args = filter_none_args(parse_args())
     
     _, experiment_name = find_parse_ename(parser_args.experiment_name)
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, exp_parser_args_base, historic_assignments, env_state, _ = load_training_results(
+    data = load_training_results(
         experiment_name)
-    assignment_memory: ClusterAssignmentMemory = metrics['assignment_memory']
+    print(list(data.target_agent_and_vs_to_learned_ones.values())[0])
+    #TODO: ESTO ES EL GROUNDING LEARNED:
+    print(data.metrics['learned_rewards'](list(data.target_agent_and_vs_to_learned_ones.keys())[0],1)(8,4))
+    
+    target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
+    exp_parser_args_base = data.parser_args
+
+    config = exp_parser_args_base['config']
+    society_config = exp_parser_args_base['society_config']
+    exp_parser_args = exp_parser_args_base['parser_args']
+
+    # This will look again into the config files to see if there are new fields (wont update the old ones)
+    config_actual = load_json_config(exp_parser_args.config_file)
+    society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
+
+    
+    # If a config file is specified, load it and override command line args
+    merge_dicts_recursive(config, config_actual)
+    merge_dicts_recursive(society_config, society_config_actual)
+        
+    
+    experiment_name = exp_parser_args.experiment_name
+    dataset_name = exp_parser_args.dataset_name
+    
+    pprint.pprint(parser_args)
+    np.random.seed(parser_args.seed)
+    torch.manual_seed(parser_args.seed)
+    random.seed(parser_args.seed)
+    rng_for_algorithms = np.random.default_rng(parser_args.seed)
+
+    environment_data = config[exp_parser_args.environment]
+    
+    society_data = society_config[exp_parser_args.environment][exp_parser_args.society_name]
+    alg_config = environment_data['algorithm_config'][exp_parser_args.algorithm]
+
+    opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
+    
+
+    #single_state = np.zeros_like(data.env_state.initial_state_dist)
+    #single_state[323] = 1.0
+    #data.env_state.set_initial_state_distribution(single_state)
+    exp_estimated, exp_estimated_real, trajs_sampled = data.policies.calculate_value_grounding_expectancy(value_grounding=
+        lambda state=None, action=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action),
+        target_align_func=learned_al_aid,
+        seed=parser_args.seed,
+        n_rep_per_seed=1,
+        n_seeds=400,
+        stochastic=True,
+        initial_state_distribution=data.env_state.initial_state_dist,
+        #initial_state_distribution=single_state
+        )
+    exp_precise_estimated, exp_precise_real= data.policies.calculate_value_grounding_expectancy_precise(value_grounding=
+        lambda state=None, action=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action),
+        target_align_func=learned_al_aid,
+         initial_state_distribution=data.env_state.initial_state_dist,
+        #initial_state_distribution=single_state,
+        stochastic=True
+        )
+    print(f"Value grounding expectancy: {exp_estimated} vs precise: {exp_precise_estimated}")
+    print(f"Value grounding real: {exp_estimated_real} vs precise: {exp_precise_real}")
+    example_model: LinearVSLRewardFunction = list(data.reward_net_pair_agent_and_vs.values())[0]
+    env = example_model.remove_env()
+    example_model.set_env(env)
+
+
+    path = os.path.join(
+        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=exp_parser_args.reward_epsilon))
+    try:
+        dataset_train = VSLPreferenceDataset.load(
+            os.path.join(path, "dataset_train.pkl"))
+        dataset_test = VSLPreferenceDataset.load(
+            os.path.join(path, "dataset_test.pkl"))
+    except FileNotFoundError:
+        dataset_train = VSLPreferenceDataset.load(
+            os.path.join(path, "dataset.pkl"))
+        dataset_test = []
+    if exp_parser_args.algorithm == 'pc':
+
+        # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
+        vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
+            env=env,
+            reward_net=example_model,
+            optimizer_cls=opt_class,
+            optimizer_kwargs=opt_kwargs,
+            discount=environment_data['discount'],
+            discount_factor_preferences=alg_config['discount_factor_preferences'],
+            dataset=dataset_train,
+            training_mode=TrainingModes.SIMULTANEOUS,
+            cluster_sizes=parse_cluster_sizes(
+                environment_data['K'], n_values=environment_data['n_values']),
+            vs_cluster_sizes=environment_data['L'] if isinstance(
+                environment_data['L'], int) else None,
+
+            learn_stochastic_policy=alg_config['learn_stochastic_policy'],
+            use_quantified_preference=alg_config['use_quantified_preference'],
+            preference_sampling_temperature=0 if alg_config[
+                'use_quantified_preference'] else alg_config['preference_sampling_temperature'],
+            log_interval=1,
+            reward_trainer_kwargs=alg_config['reward_trainer_kwargs'],
+            query_schedule=alg_config['query_schedule'],
+            vgl_target_align_funcs=environment_data['basic_profiles'],
+            approximator_kwargs=alg_config['approximator_kwargs'],
+            policy_approximator=PolicyApproximators(alg_config['policy_approximation_method']),
+            rng=rng_for_algorithms,
+            # This is only used for testing purposes
+            expert_is_stochastic=society_data['stochastic_expert'],
+            loss_class=alg_config['loss_class'],
+            loss_kwargs=alg_config['loss_kwargs'],
+            assume_variable_horizon=environment_data['assume_variable_horizon']
+
+        )
+    print(data.historic_assignments[0])
+    print(data.metrics['assignment_memory'])
+    assignment_memory: ClusterAssignmentMemory = data.metrics['assignment_memory']
+    assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
+    print(assignment_memory.memory[0])
+
+
+    target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
+    unique_al = set([t[1] for t in data.target_agent_and_vs_to_learned_ones.keys()])
+    print(unique_al)
+    targets_all = []
+    for t,v in  data.target_agent_and_vs_to_learned_ones.items():
+        if t[1] in unique_al and t[1] not in [tt[1] for tt in targets_all]:
+            targets_all.append(t)
+    print(targets_all)
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action)))
+                                         , vsi_or_vgl='vgl',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig='prueba_rpairs.png', show=True,
+                                         trajs_sampled=trajs_sampled)
+    plot_learned_and_expert_rewards(vsl_algo=vsl_algo, 
+                                    learned_rewards_per_al_func=lambda target: (
+                                        lambda state=None, action=None, vi=(int(
+                                            np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(
+                                                data.metrics['learned_rewards'](target,vg_or_vs=vi)(
+                                                    state=state, action=action)))
+                                    , vsi_or_vgl='vgl',
+        target_align_funcs_to_learned_align_funcs={target_al_aid: data.target_agent_and_vs_to_learned_ones[target_al_aid]},
+        namefig='prueba_r.png', show=True,
+         targets=targets_all,
+        )
+    if exp_parser_args.algorithm == 'pc':
+        alg_config['train_kwargs']['experiment_name'] = experiment_name
+    vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
+    env: TabularVAMDP = data.env_state
+    
+    epi = VAlignedDictSpaceActionPolicy(policy_per_va_dict={t: mce_partition_fh(env, reward=env.reward_matrix_per_align_func(t[1]),
+                                        discount=1.0, deterministic=False)[2] for t in targets_all},env=env)
+    plot_learned_to_expert_policies(expert_policy=epi, learnt_policy=data.policies
+                                    , vsl_algo=vsl_algo,
+        vsi_or_vgl='sim',
+        target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+        namefig='prueba_r.png', show=True,
+         targets=targets_all,)
+    plot_learned_and_expert_occupancy_measures(
+        vsl_algo=vsl_algo, 
+        learned_rewards_per_al_func=lambda target: (lambda state=None, action=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action)))
+        , vsi_or_vgl='vgl',
+        target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+        namefig='prueba_r.png', show=True,
+        targets=targets_all,
+    )
+    exit(0)
+    assignment_memory: ClusterAssignmentMemory = data.metrics['assignment_memory']
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
     num_digits = len(str(len(assignment_memory.memory)))
     assignments_identifier_to_assignment = OrderedDict({
         f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
     })
     
-    config = exp_parser_args_base['config']
-    society_config = exp_parser_args_base['society_config']
-    exp_parser_args = exp_parser_args_base['parser_args']
 
     if parser_args.show_only_config:
         pprint.pprint(config[exp_parser_args.environment])
@@ -431,8 +596,11 @@ if __name__ == "__main__":
         for ename in parser_args.learning_curve_from:
             ename_clean = find_parse_ename(ename)[1]
             enames_for_lr_curve.append(ename_clean)
-            _, _, metrics_per_lre[ename_clean], _, historic_assignments_per_lre[ename_clean], _, n_iterations_real = load_training_results(
-            ename_clean)
+            data = load_training_results(ename_clean)
+            metrics_per_lre[ename_clean] = data.metrics
+            historic_assignments_per_lre[ename_clean] = data.historic_assignments
+            n_iterations_real = data.n_iterations
+            
             assignment_memories_per_lre[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
             assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=True)
 
@@ -448,8 +616,11 @@ if __name__ == "__main__":
         max_conciseness = float('-inf')
         for ename in parser_args.dunn_index_curve_from:
             ename_clean = find_parse_ename(ename)[1]
-            _, _, metrics, _, h, _, n_iterations_real = load_training_results(
+            data= load_training_results(
             ename_clean)
+            metrics = data.metrics
+            h = data.historic_assignments
+            n_iterations_real = data.n_iterations
             am: ClusterAssignmentMemory = metrics['assignment_memory']
             best = am.get_best_assignment(lexicographic_vs_first=False)
             #max_conciseness = max(am.maximum_conciseness_vs,max_conciseness)
@@ -477,88 +648,13 @@ if __name__ == "__main__":
         plot_di_scores_for_experiments(experiment_name, scores, repres, conc)
 
     
-    # This will look again into the config files to see if there are new fields (wont update the old ones)
-    config_actual = load_json_config(exp_parser_args.config_file)
-    society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
-
     
-    # If a config file is specified, load it and override command line args
-    merge_dicts_recursive(config, config_actual)
-    merge_dicts_recursive(society_config, society_config_actual)
-        
-    np.random.seed(parser_args.seed)
-    torch.manual_seed(parser_args.seed)
-    random.seed(parser_args.seed)
-    rng_for_algorithms = np.random.default_rng(parser_args.seed)
-
-    environment_data = config[exp_parser_args.environment]
-    society_data = society_config[exp_parser_args.environment][exp_parser_args.society_name]
-    alg_config = environment_data['algorithm_config'][exp_parser_args.algorithm]
-    
-    experiment_name = exp_parser_args.experiment_name
-    dataset_name = exp_parser_args.dataset_name
-
-    
-    
-    opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
-    
-    path = os.path.join(
-        DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=exp_parser_args.reward_epsilon))
-    try:
-        dataset_train = VSLPreferenceDataset.load(
-            os.path.join(path, "dataset_train.pkl"))
-        dataset_test = VSLPreferenceDataset.load(
-            os.path.join(path, "dataset_test.pkl"))
-    except FileNotFoundError:
-        dataset_train = VSLPreferenceDataset.load(
-            os.path.join(path, "dataset.pkl"))
-        dataset_test = []
 
     plot_test = True
     if len(dataset_test) == 0:
         plot_test = False
 
-    example_model: LinearVSLRewardFunction = list(reward_net_pair_agent_and_vs.values())[0]
-    env = example_model.remove_env()
-    example_model.set_env(env)
-    if exp_parser_args.algorithm == 'pc':
-
-        # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
-        vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
-            env=env_state,
-            reward_net=example_model,
-            optimizer_cls=opt_class,
-            optimizer_kwargs=opt_kwargs,
-            discount=environment_data['discount'],
-            discount_factor_preferences=alg_config['discount_factor_preferences'],
-            dataset=dataset_train,
-            training_mode=TrainingModes.SIMULTANEOUS,
-            cluster_sizes=parse_cluster_sizes(
-                environment_data['K'], n_values=environment_data['n_values']),
-            vs_cluster_sizes=environment_data['L'] if isinstance(
-                environment_data['L'], int) else None,
-
-            learn_stochastic_policy=alg_config['learn_stochastic_policy'],
-            use_quantified_preference=alg_config['use_quantified_preference'],
-            preference_sampling_temperature=0 if alg_config[
-                'use_quantified_preference'] else alg_config['preference_sampling_temperature'],
-            log_interval=1,
-            reward_trainer_kwargs=alg_config['reward_trainer_kwargs'],
-            query_schedule=alg_config['query_schedule'],
-            vgl_target_align_funcs=environment_data['basic_profiles'],
-            approximator_kwargs=alg_config['approximator_kwargs'],
-            policy_approximator=alg_config['policy_approximation_method'],
-            rng=rng_for_algorithms,
-            # This is only used for testing purposes
-            expert_is_stochastic=society_data['stochastic_expert'],
-            loss_class=alg_config['loss_class'],
-            loss_kwargs=alg_config['loss_kwargs'],
-            assume_variable_horizon=environment_data['assume_variable_horizon']
-
-        )
-    if exp_parser_args.algorithm == 'pc':
-        alg_config['train_kwargs']['experiment_name'] = experiment_name
-    vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
+    
     #pprint.pprint(config[exp_parser_args.environment])
     
     

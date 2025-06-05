@@ -372,7 +372,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         """Computes the preference probability of the first fragment for all pairs.
 
         """
-
+        
         dtype = self.algorithm.reward_net.dtype
             
         if custom_model_per_agent_id is not None:
@@ -415,6 +415,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             model = models_per_agent.get(aid, custom_model_per_agent_id)
             n_fragments = len(fragment_pairs_aid)
             fragment_size = len(fragment_pairs_aid[0][0])
+            
             if idx_global == 0:
                 if return_rewards_global:
                     rews_vs = (th.empty(total_number_of_fragment_pairs, fragment_size, dtype=dtype), th.empty(total_number_of_fragment_pairs, fragment_size, dtype=dtype))

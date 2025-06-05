@@ -8,7 +8,7 @@ import torch
 
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 from src.algorithms.utils import  mce_partition_fh, mce_occupancy_measures
-from src.policies.vsl_policies import VAlignedDictDiscreteStateActionPolicyTabularMDP
+from src.policies.vsl_policies import VAlignedDiscreteSpaceActionPolicy
 
 
 def get_color_gradient(c1, c2, mix):
@@ -82,9 +82,9 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
     plt.close()
 
 
-def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False, learnt_policy=None):
-    targets = vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
-        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs)
+def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False, learnt_policy=None, targets=None):
+    targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl in ['vsi','sim'] else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
+        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
     learnt_policy = learnt_policy if learnt_policy is not None else vsl_algo.learned_policy_per_va
 
     fig = plt.figure(constrained_layout=True, figsize=(16, 8))
@@ -120,13 +120,15 @@ def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, v
         else:
             learned_al = al if vsi_or_vgl == 'vgl' else target_align_funcs_to_learned_align_funcs[
                 al]
-
-            lpol = learnt_policy.policy_per_va(learned_al)
+            
+            lpol = learnt_policy.policy_per_va(learned_al if isinstance(learned_al[0],str) else learned_al)
         if len(lpol.shape) == 3:
             lpol = lpol[0, :, :]
 
         im1 = axesUp[i].imshow(lpol, cmap='viridis', vmin=0, vmax=1,
                                interpolation='nearest', aspect=lpol.shape[1]/lpol.shape[0])
+        learned_al = learned_al[1] if isinstance(learned_al[0],str) else learned_al
+
         axesUp[i].set_title(
             f'{tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
         axesUp[i].set_xlabel('Action')
@@ -152,7 +154,7 @@ def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, v
         im2, ax=axesDown, orientation='vertical', label='State-Action Prob.')
     # Adjust layout to prevent overlap
     # fig.tight_layout()
-    fig.savefig('results/' + namefig + '_policy_dif.pdf')
+    fig.savefig('test_results/' + namefig + '_policy_dif.pdf')
     # Show the plot
     if show:
         fig.show()
@@ -191,10 +193,10 @@ def filter_values(data1, data2, min_value=-10):
     return combined_mask
 
 
-def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='reward_pairs', show=False):
+def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='reward_pairs', show=False, targets=None, trajs_sampled=None):
     # Select target alignment functions based on vsi_or_vgl
-    targets = vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
-        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs)
+    targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
+        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
 
     num_targets = len(targets)
 
@@ -205,7 +207,7 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
     else:
         rows = 1  # If there are 3 or fewer targets, use a single row
         cols = num_targets
-
+    print(rows, cols, "NOOOO")
     # Create figure and subplots with dynamic layout
     fig, axes = plt.subplots(rows, cols, figsize=(
         16, 8), constrained_layout=True)
@@ -245,6 +247,13 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
         # Check shape consistency
         assert learned_reward_al.shape == expert_reward_al.shape, "Learned and expert rewards must have the same shape"
 
+        # if sampling trajs, plot the aggregated rewards.
+        if trajs_sampled is not None:
+            if isinstance(trajs_sampled, list):
+                print([len(t) for t in trajs_sampled])
+                expert_reward_al =  np.array([np.sum(expert_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+                learned_reward_al = np.array([np.sum(learned_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+                
         # Flatten rewards for plotting as pairs
         learned_rewards_flat = learned_reward_al.flatten()
         expert_rewards_flat = expert_reward_al.flatten()
@@ -256,7 +265,7 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
         expert_rewards_flat = expert_rewards_flat[combined_mask]"""
 
         combined_mask = filter_values(
-            expert_rewards_flat, learned_rewards_flat, min_value=-100)
+            expert_rewards_flat, learned_rewards_flat, min_value=-1000)
         learned_rewards_flat = learned_rewards_flat[combined_mask]
         expert_rewards_flat = expert_rewards_flat[combined_mask]
 
@@ -271,6 +280,8 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
                 color='red', linestyle='--', alpha=0.7, label='x=y')
 
         # Set labels and title for each subplot
+        al = al[1] if isinstance(al[0],str) else al 
+        learned_al = learned_al[1] if isinstance(learned_al[0],str) else learned_al
         if vsi_or_vgl != 'vgl':
             ax.set_title(
                 f'Original: {tuple([float("{0:.3f}".format(v)) for v in al])}\nLearned: {tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
@@ -285,7 +296,7 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
         fig.delaxes(axes[-1])
 
     # Save the figure
-    fig.savefig('results/' + namefig + '_reward_dif_correlation.pdf')
+    fig.savefig('test_results/' + namefig + '_reward_dif_correlation.pdf')
 
     # Show the plot if requested
     if show:
@@ -294,9 +305,9 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
     plt.close()
 
 
-def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap='viridis',  vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False):
-    targets = vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
-        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs)
+def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap='viridis',  vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False, targets=None):
+    targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
+        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
 
     # fig, axes = plt.subplots(2, len(targets), figsize=(16, 8))
     fig = plt.figure(constrained_layout=True, figsize=(16, 8))
@@ -326,6 +337,8 @@ def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap=
             learned_reward_al = learned_rewards_per_al_func(al)()
         im1 = axesUp[i].imshow(learned_reward_al, cmap=cmap, interpolation='nearest',
                                aspect=learned_reward_al.shape[1]/learned_reward_al.shape[0])
+        learned_al = learned_al[1] if isinstance(learned_al[0],str) else learned_al
+
         axesUp[i].set_title(
             f'{tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
         axesUp[i].set_xlabel('Action')
@@ -345,16 +358,18 @@ def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap=
     # subfigs[0].tight_layout(pad=3.0)
     # subfigs[1].tight_layout(pad=3.0)
     # Adjust layout to prevent overlap
-    fig.savefig('results/' + namefig + '_reward_dif.pdf')
+    fig.savefig('test_results/' + namefig + '_reward_dif.pdf')
     # Show the plot
     if show:
         fig.show()
         plt.show()
     plt.close()
 
-def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, expert_policy: VAlignedDictDiscreteStateActionPolicyTabularMDP, learned_rewards_per_al_func, cmap='viridis',  vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False):
-    targets = vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
-        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs)
+def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, 
+        learned_rewards_per_al_func,  vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, 
+        namefig='mce_vsl_test', show=False, targets=None):
+    targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
+        vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
 
     fig = plt.figure(constrained_layout=True, figsize=(16, 8))
     subfigs = fig.subfigures(nrows=2, ncols=1)
@@ -397,13 +412,14 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, exper
         else:
 
             std_oc = 0.0
+            print("PO", vsl_algo.policy_approximator)
             learned_oc = mce_occupancy_measures(env=vsl_algo.env,
                                                 reward=learned_rewards_per_al_func(al)(),
                                                 discount=vsl_algo.discount,
                                                 deterministic=not vsl_algo.learn_stochastic_policy,
                                                 approximator_kwargs=vsl_algo.approximator_kwargs,
                                                 policy_approximator=vsl_algo.policy_approximator,
-                                                initial_state_distribution=vsl_algo.initial_state_distribution_test,
+                                                initial_state_distribution=vsl_algo.env.initial_state_dist,
                                                 use_action_visitations=use_action_visitations)[1]
         ocs = np.transpose(learned_oc)
 
@@ -411,7 +427,8 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, exper
                                                    reward=vsl_algo.env.reward_matrix_per_align_func(
                                                        al),
                                                    approximator_kwargs=vsl_algo.approximator_kwargs,
-                                                   policy_approximator=vsl_algo.policy_approximator, deterministic=not vsl_algo.expert_is_stochastic)
+                                                   policy_approximator=vsl_algo.policy_approximator,
+                                                    deterministic=not vsl_algo.stochastic_expert)
 
         eocs = np.transpose(mce_occupancy_measures(env=vsl_algo.env,
                                                    reward=vsl_algo.env.reward_matrix_per_align_func(al),
@@ -420,7 +437,7 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, exper
                                                    deterministic=not vsl_algo.learn_stochastic_policy,
                                                    approximator_kwargs=vsl_algo.approximator_kwargs,
                                                    policy_approximator=vsl_algo.policy_approximator,
-                                                   initial_state_distribution=vsl_algo.initial_state_distribution_test,
+                                                   initial_state_distribution=vsl_algo.env.initial_state_dist,
                                                    use_action_visitations=use_action_visitations)[1])
         # eocs2 = np.transpose(vsl_algo.mce_occupancy_measures(pi=expert_policy.policy_per_va(al), deterministic=not vsl_algo.expert_is_stochastic,  use_action_visitations=use_action_visitations)[1])
         # eocs3 = np.transpose(vsl_algo.mce_occupancy_measures(pi=assumed_expert_pi, deterministic=not vsl_algo.expert_is_stochastic,  use_action_visitations=use_action_visitations)[1])
@@ -434,6 +451,7 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, exper
 
         im1 = axesUp[i].imshow(ocs, cmap='viridis', interpolation='nearest',
                                aspect=vsl_algo.env.state_dim/vsl_algo.env.action_dim)
+        learned_al = learned_al[1] if isinstance(learned_al[0],str) else learned_al
         axesUp[i].set_title(
             f'{tuple([float("{0:.3f}".format(v)) for v in learned_al])}\nSTD: {tuple([float("{0:.3f}".format(v)) for v in std_learned_al])}')
         axesUp[i].set_xlabel(
@@ -455,7 +473,7 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, exper
         im2, ax=axesDown, orientation='vertical', label='Visitation Freq.')
     # Adjust layout to prevent overlap
     # fig.tight_layout()
-    fig.savefig('results/' + namefig + '_occupancy_dif.pdf')
+    fig.savefig('test_results/' + namefig + '_occupancy_dif.pdf')
     # Show the plot
     if show:
         fig.show()

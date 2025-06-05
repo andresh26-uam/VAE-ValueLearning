@@ -235,17 +235,20 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
             self.vsi_optimizer_kwargs = optimizer_kwargs
             self.target_agent_and_align_func_to_learned_ones = {
                 al: None for al in self.vsi_target_align_funcs}
+            self.grounding_net_per_agent = {
+                al: None for al in self.vgl_target_align_funcs}
             with networks.training(self.current_net):
                 self.reward_net_per_agent = self.train_simultaneous_vsl(
                     max_iter, n_seeds_for_sampled_trajectories, n_sampled_trajs_per_seed)
-            for al in self.vsi_target_align_funcs:
-                self.target_agent_and_align_func_to_learned_ones[al] = (al[0], self.reward_net_per_agent[al[0]].get_learned_align_function())
-                learned_grounding = self.reward_net_per_agent[al[0]].get_learned_grounding()
+            for aid_and_al in self.vsi_target_align_funcs:
+                self.target_agent_and_align_func_to_learned_ones[aid_and_al] = (aid_and_al[0], self.reward_net_per_agent[aid_and_al[0]].get_learned_align_function())
+                #learned_grounding = self.reward_net_per_agent[al[0]].get_learned_grounding()
             for aid_and_al in self.vgl_target_align_funcs:
                 aid, al = aid_and_al
                 r_copy = self.reward_net_per_agent[aid].copy()
                 r_copy.set_alignment_function(al)
                 reward_nets_per_target_align_func[aid_and_al] =  r_copy 
+                self.grounding_net_per_agent[aid_and_al] = r_copy
             
             
 
@@ -530,22 +533,24 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
         self.__previous_next_states = torch_next_state_mat
         return torch_next_state_mat
 
-    def state_action_callable_reward_from_reward_net_per_target_align_func(self, reward_per_agent=None, targets=None, info=None):
+    def state_action_callable_reward_from_reward_net_per_target_align_func(self, reward_per_agent=None, targets=None, info=None, return_groundings=True):
         if hasattr(self.env, 'state_dim'):
             one_hot_observations = th.eye(
                 self.env.state_dim*self.env.action_dim)
             rewards_per_target_agent_and_al = dict()
+            groundings_per_target_agent_and_al = dict()
 
             for target_aid_and_al, learned_aid_and_al in (self.target_agent_and_align_func_to_learned_ones.items() if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else zip(self.all_targets, self.all_targets)):
                 aid, rew_al = learned_aid_and_al if self.training_mode != TrainingModes.VALUE_GROUNDING_LEARNING else target_aid_and_al
                 reward_net = self.reward_net_per_agent[aid] if reward_per_agent is None else reward_per_agent[aid]
-
+                
                 if targets is not None:
                     if target_aid_and_al not in targets:
                         continue
                 reward_matrix = th.zeros(
                     (self.env.state_dim, self.env.action_dim))
-
+                grounding_matrix = th.zeros(
+                    (self.env.n_values, self.env.state_dim, self.env.action_dim))
                 if not self.environment_is_stochastic or not reward_net.use_next_state:
                     repetitions_for_reward_estimation = 1
                 else:
@@ -565,7 +570,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                         next_state_array = util.safe_to_tensor(next_state_mat[observations.numpy(
                         ), action_array.numpy()],  dtype=reward_net.dtype, device=reward_net.device)
                         # print("NEXTS", next_state_array)
-                        reward_matrix[observations, action_array] += self.calculate_rewards(
+                        _, r, _, r_g = self.calculate_rewards(
                                 align_func=rew_al,
                                 # Should be: assumed_grounding if self.training_mode == TrainingModes.VALUE_SYSTEM_IDENTIFICATION else self.current_net.get_learned_grounding(),
                                 grounding=self.assumed_grounding[aid],
@@ -578,20 +583,30 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                                 n_reps_if_probabilistic_reward=1,  
                                 custom_model=reward_net,
                                 requires_grad=False,
+                                forward_groundings=True,
                                 info=info
-                            )[1]
+                            )
+                        reward_matrix[observations, action_array] += r/repetitions_for_reward_estimation
+                        grounding_matrix[:, observations,action_array] += r_g/repetitions_for_reward_estimation
                         # print("REWARD", reward_matrix)
                         assert reward_matrix.shape == (
                             self.env.state_dim, self.env.action_dim)
                 rewards_per_target_agent_and_al[target_aid_and_al] = reward_matrix
+                groundings_per_target_agent_and_al[target_aid_and_al] = grounding_matrix
                 assert rewards_per_target_agent_and_al[target_aid_and_al].shape == (
                     self.env.state_dim, self.env.action_dim)
                 # TODO: info should be used in contextual environments...
-            return lambda target: (lambda state=None, action=None, info=None: (
+            
+            return (lambda target, vg_or_vs='vs': ((lambda state=None, action=None, info=None: (
                 rewards_per_target_agent_and_al[target] if (state is None and action is None)
                 else rewards_per_target_agent_and_al[target][state, :] if action is None and state is not None
                 else rewards_per_target_agent_and_al[target][:, action] if action is not None and state is None
-                else rewards_per_target_agent_and_al[target][state, action]))
+        else rewards_per_target_agent_and_al[target][state, action]))) if vg_or_vs == 'vs' else (lambda state=None, action=None, info=None: (
+                groundings_per_target_agent_and_al[target][ int(vg_or_vs), :,:] if (state is None and action is None)
+                else groundings_per_target_agent_and_al[target][ int(vg_or_vs), state, :] if action is None and state is not None
+                else groundings_per_target_agent_and_al[target][ int(vg_or_vs), :, action] if action is not None and state is None
+        else groundings_per_target_agent_and_al[target][ int(vg_or_vs), state, action]))) 
+
         else:
             # TODO: test this if needed... Untested
 

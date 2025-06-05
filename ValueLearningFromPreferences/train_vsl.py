@@ -19,6 +19,7 @@ from src.algorithms.preference_based_vsl_lib import ConstrainedOptimizer, SobaOp
 from src.dataset_processing.data import VSLPreferenceDataset
 from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
+from src.policies.vsl_policies import ValueSystemLearningPolicy
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
 from src.utils import filter_none_args, load_json_config
@@ -26,44 +27,79 @@ from src.utils import filter_none_args, load_json_config
 
 import gymnasium as gym
 
+class VSLTrainResults:
+    """
+    Container for all results of a VSL training run.
+    """
+    def __init__(
+        self,
+        target_agent_and_vs_to_learned_ones: Dict[Tuple[str, str], Tuple],
+        reward_net_pair_agent_and_vs: Dict[str, AbstractVSLRewardFunction],
+        metrics: Dict[str, Any],
+        parser_args: argparse.Namespace,
+        policies=ValueSystemLearningPolicy,
+        historic_assignments=None,
+        env_state=None,
+        n_iterations=None,
+        experiment_name=None
+    ):
+        self.target_agent_and_vs_to_learned_ones = target_agent_and_vs_to_learned_ones
+        self.reward_net_pair_agent_and_vs = reward_net_pair_agent_and_vs
+        self.metrics = metrics
+        self.parser_args = parser_args
+        self.policies = policies
+        self.historic_assignments = historic_assignments
+        self.env_state = env_state
+        self.n_iterations = n_iterations
+        self.experiment_name = experiment_name
 
-def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, parser_args):
+    @classmethod
+    def from_dict(cls, d, historic_assignments=None, env_state=None, n_iterations=None):
+        return cls(
+            experiment_name=d.get("experiment_name"),
+            target_agent_and_vs_to_learned_ones=d.get("target_agent_and_vs_to_learned_ones"),
+            reward_net_pair_agent_and_vs=d.get("reward_net_pair_agent_and_vs"),
+            metrics=d.get("metrics"),
+            parser_args=d.get("parser_args"),
+            policies=d.get("policies"),
+            historic_assignments=historic_assignments,
+            env_state=env_state,
+            n_iterations=n_iterations,
+        )
+    
+def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones, 
+                          reward_net_pair_agent_and_vs, metrics, 
+                          parser_args, policies=None):
     # Save the training results to a file
     os.makedirs(TRAIN_RESULTS_PATH, exist_ok=True)
 
     with open(os.path.join(TRAIN_RESULTS_PATH, f"{experiment_name}.pkl"), 'wb') as f:
         dill.dump({
+            "experiment_name": experiment_name,
             "target_agent_and_vs_to_learned_ones": target_agent_and_vs_to_learned_ones,
             "reward_net_pair_agent_and_vs": reward_net_pair_agent_and_vs,
             "metrics": metrics,
             "parser_args": parser_args,
+            "policies": policies,
         }, f)
 
     print(
         f"Training results saved to {os.path.join(CHECKPOINTS, f'{experiment_name}.pkl')}")
 
 
-def load_training_results(experiment_name) -> Tuple[Tuple[Dict[Tuple[str, Tuple], Tuple], Dict[Tuple[str, Tuple], AbstractVSLRewardFunction], Dict[str, Any]], List[ClusterAssignment]]:
+def load_training_results(experiment_name, sample_historic_assignments=20) -> VSLTrainResults:
     # Load the training results from a file
     file_path, experiment_name = find_parse_ename(experiment_name)
     with open(file_path, 'rb') as f:
         data = dill.load(f)
+
     print(f"Training results loaded from {file_path}")
 
-    returned_tuple = [None, None, None,None]
-    for k in data.keys():
-        if k == "target_agent_and_vs_to_learned_ones":
-            returned_tuple[0] = data[k]
-        elif k == "reward_net_pair_agent_and_vs":
-            returned_tuple[1] = data[k]
-        elif k == "metrics":
-            returned_tuple[2] = data[k]
-        elif k == "parser_args":
-            returned_tuple[3] = data[k]
-    returned_tuple = tuple(returned_tuple)
     # Get the saved best assignments per iteration
-    historic_assignments, env_state, n_iterations_real = load_historic_assignments(experiment_name, sample=20)
-    return *returned_tuple, historic_assignments, env_state, n_iterations_real
+    historic_assignments, env_state, n_iterations_real = load_historic_assignments(experiment_name,sample=sample_historic_assignments)
+    data_simple = VSLTrainResults.from_dict(data, historic_assignments, env_state, n_iterations_real)
+    assert data_simple.experiment_name == experiment_name
+    return data_simple
 
 def find_parse_ename(experiment_name: str):
     
@@ -344,19 +380,27 @@ if __name__ == "__main__":
 
     target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s, historic_assignments_s = vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
                                                                                                                               assumed_grounding=None, **alg_config['train_kwargs'])
-
+    
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
-                          reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
-    print(metrics_s['assignment'])
-    target_agent_and_vs_to_learned_ones, reward_net_pair_agent_and_vs, metrics, historic_assignments, env_state, n_iterations = load_training_results(
+                          reward_net_pair_agent_and_vs_s, metrics_s, 
+                          parser_args={'parser_args': parser_args, 
+                                       'config': config, 
+                                       'society_config': society_config},
+                          policies=vsl_algo.learned_policy_per_va)
+    
+    
+    print(metrics_s['assignment_memory'])
+    print(vsl_algo.learned_policy_per_va.policy_per_va_dict.keys())
+    target = list(target_agent_and_vs_to_learned_ones_s.values())[0]
+    
+    data = load_training_results(
         experiment_name)
     
-    assignment: ClusterAssignment = historic_assignments[-1]
+    assignment: ClusterAssignment = data.historic_assignments[-1]
     
-
     assignment.plot_vs_assignments("demo.png")
     
-    assert target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
-    assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
+    assert data.target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
+    assert data.reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
     ), "Mismatch in reward_net_pair_agent_and_vs"
-    assert metrics.keys() == metrics_s.keys(), "Mismatch in metrics"
+    assert data.metrics.keys() == metrics_s.keys(), "Mismatch in metrics"

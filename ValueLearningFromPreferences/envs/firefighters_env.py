@@ -154,7 +154,8 @@ class FireFightersEnv(TabularVAMDP):
         self.set_align_func((1.0, 0.0))
 
     def _get_reward_matrix_per_va(self, align_func, custom_grounding=None):
-        
+        if isinstance(align_func[0], str):
+            align_func = align_func[1]
         assert isinstance(align_func, tuple)
         assert isinstance(float(align_func[0]), float)
         assert isinstance(float(align_func[1]), float)
@@ -173,7 +174,7 @@ class FireFightersEnv(TabularVAMDP):
         return v
 
     def get_state_actions_with_known_reward(self, align_func):
-        return None  # self._states_with_known_reward
+        return  self._states_with_known_reward
 
    
 

@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from stable_baselines3.ppo import MlpPolicy
 from sb3_contrib.common.wrappers import ActionMasker
 from minari.serialization import serialize_space, deserialize_space
@@ -6,33 +7,30 @@ from sb3_contrib.ppo_mask.policies import MlpPolicy as MASKEDMlpPolicy
 import json
 import os
 from seals import base_envs
-from abc import abstractmethod
-import datetime
 import signal
 import sys
-from typing import Any, Callable, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Tuple, Union, override
 import gymnasium as gym
 import numpy as np
 
 
 from imitation.data.types import Trajectory, TrajectoryWithRew
 
-from numpy._typing import NDArray
 from stable_baselines3 import PPO
 from stable_baselines3.common.type_aliases import PyTorchObs
 import torch
 
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.base_class import BaseAlgorithm
-from envs.tabularVAenv import ContextualEnv, TabularVAMDP, ValueAlignedEnvironment
-from src.algorithms.utils import PolicyApproximators, mce_partition_fh
+from envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from src.algorithms.utils import PolicyApproximators, concentrate_on_max_policy, mce_partition_fh
 from src.dataset_processing.data import TrajectoryWithValueSystemRews
 from defines import CHECKPOINTS
 
 from src.utils import NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
 
 
-class ValueSystemLearningPolicy(BasePolicy):
+class ValueSystemLearningPolicy():
 
     def __init__(self, env: ValueAlignedEnvironment, use_checkpoints=True, state_encoder=None, squash_output: bool = False, observation_space=None, action_space=None, **kwargs):
         if observation_space is None:
@@ -46,8 +44,9 @@ class ValueSystemLearningPolicy(BasePolicy):
             self.action_space = action_space
 
         self.use_checkpoints = use_checkpoints
-        super().__init__(squash_output=squash_output,
+        """super().__init__(squash_output=squash_output,
                          observation_space=self.observation_space, action_space=self.action_space, **kwargs)
+        """
         self.env = env
         self.default_alignment = None
         self.default_exploration = 0
@@ -319,32 +318,51 @@ class ValueSystemLearningPolicy(BasePolicy):
             self.env.set_initial_state_distribution(prev_init_state_dist)
         return trajs
 
-    def _save_checkpoint(self, save_last=True):
+    """def _save_checkpoint(self, save_last=True):
         self.save("checkpoints/" + self._get_name() + "_" +
-                  str(datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')))
+                  str(datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')))"""
 
-    def calculate_value_grounding_expectancy(self, value_grounding: Callable[[np.ndarray], np.ndarray], target_align_func, align_function_sampler=None, n_align_func_samples=1, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
-        if align_function_sampler is not None:
+    def calculate_value_grounding_expectancy(self, value_grounding: Callable[[Any, Any, Any], np.ndarray], target_align_func, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, seed=26,options=None, initial_state_distribution=None):
+        """if align_function_sampler is not None:
             trajs = []
             for al_rep in range(n_align_func_samples):
                 al_fun = align_function_sampler(target_align_func)
                 trajs.extend(self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic,
-                             repeat_per_seed=n_rep_per_seed, align_funcs_in_policy=[al_fun,], t_max=t_max, exploration=exploration))
+                             repeat_per_seed=n_rep_per_seed, align_funcs_in_policy=[al_fun,], t_max=self.env.horizon, exploration=exploration))
         else:
-            trajs = self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic,
-                                             repeat_per_seed=n_rep_per_seed, align_funcs_in_policy=[al_fun,], t_max=t_max, exploration=exploration)
-        expected_gr = None
+            
+            """
+        self.env.set_initial_state_distribution(initial_state_distribution)
+        p = self.policy_per_va(target_align_func)
+        trajs = self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic,
+                                             repeat_per_seed=n_rep_per_seed, 
+                                             align_funcs_in_policy=[target_align_func,], t_max=self.env.horizon, exploration=exploration,
+                                              with_reward=True, with_grounding=True,end_trajectories_when_ended=True)
+        
+        precalc = np.zeros((*(value_grounding(vi=0).shape),self.env.n_values), dtype=np.float64)
+        
+        for vi in range(self.env.n_values):
+            precalc[:, :, vi] = value_grounding(vi=vi)
+       
+        ntrajs = float(len(trajs))
+        real_ground = np.zeros((self.env.n_values,), dtype=np.float64)
+        expected_gr = np.zeros((self.env.n_values,), dtype=np.float64)
         for t in trajs:
-            cur_t_gr = None
-            for to in t.obs:
-                if cur_t_gr is None:
-                    cur_t_gr = value_grounding(to)
-                else:
-                    cur_t_gr += value_grounding(to)
-            cur_t_gr /= len(t)
-            expected_gr += cur_t_gr
-        expected_gr /= len(trajs)
-        return expected_gr
+            #cur_t_gr = np.zeros((precalc.shape[-1],), dtype=np.float64)
+            for i, (to,ta, tn) in enumerate(zip(t.obs[:-1], t.acts, t.obs[1:])):
+                #print(t.vs_rews[i], t.v_rews[:, i], cur_t_gr)
+                
+                expected_gr += (precalc[to,ta,:] )/len(t)
+                
+                if i == len(t.obs) - 2:
+                    pass
+                    #print("C1",(precalc[to,ta,:] ), to, ta)
+                    #print("R1",t.v_rews[:,-1])
+            #print("C", expected_gr)   
+            real_ground += (np.mean(t.v_rews , axis=1)  )
+            
+            #print("R", real_ground)
+        return expected_gr/len(trajs), real_ground/ len(trajs), trajs
 
     def get_environ(self, alignment_function):
         return self.env
@@ -373,7 +391,7 @@ def action_mask(valid_actions, action_shape, *va_args):
     return mask
 
 
-class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy):
+class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy,BasePolicy):
     def learn(self, alignment_function, total_timesteps, callback=None, log_interval=1, tb_log_name='', reset_num_timesteps=False, progress_bar=True):
         learner = self.get_learner_for_alignment_function(alignment_function)
         learner.learn(total_timesteps=total_timesteps, 
@@ -636,41 +654,55 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
         else:
             obs_in_state = next_state_obs
         return obs_in_state
+    
+    def calculate_value_grounding_expectancy_precise(self, value_grounding: Callable[[np.ndarray,np.ndarray], float], target_align_func, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
 
-    def calculate_value_grounding_expectancy(self, value_grounding: np.ndarray, align_function, n_seeds=100, n_rep_per_seed=10, exploration=0, stochastic=True, t_max=None, seed=None, p_state=None, env_seed=None, options=None, initial_state_distribution=None):
-
-        pi = self.policy_per_va(align_function)
-        self.reset(seed=seed, state=p_state)
-        self.env.reset(seed=env_seed, options=options)
-
+        
         if initial_state_distribution is None:
             initial_state_distribution = np.ones(
                 (self.env.state_dim))/self.env.state_dim
         initial_state_dist = initial_state_distribution
 
+        pi = self.policy_per_va(target_align_func)
+        
+        self.reset(seed=seed, state=p_state)
+        
+        self.env.reset(seed=env_seed, options=options)
+
+
         state_dist = initial_state_dist
         accumulated_feature_expectations = 0
+        accumulated_feature_expectations_real = 0
 
-        assert (value_grounding.shape[0], value_grounding.shape[1]) == (
-            self.env.state_dim, self.env.action_dim)
-
+        precalc = np.zeros((*(value_grounding(vi=0).shape),self.env.n_values), dtype=np.float64)
+        print("POLICY IN PREC", pi[150:200])
+        reward_matric_precalc = np.zeros((*(value_grounding(vi=0).shape),self.env.n_values), dtype=np.float64)
+        for vi in range(self.env.n_values):
+            precalc[:, :, vi] = value_grounding(vi=vi)
+            reward_matric_precalc[:,:,vi] = self.env.reward_matrix_per_align_func(self.env.basic_profiles[vi]) 
         for t in range(self.env.horizon):
 
             pol_t = pi if len(pi.shape) == 2 else pi[t]
+            if not stochastic:
+                pol_t = concentrate_on_max_policy(pol_t, distribute_probability_on_max_prob_actions=False, valid_action_checker=lambda s: self.env.valid_actions(s, None))
             state_action_prob = np.multiply(pol_t, state_dist[:, np.newaxis])
-
             features_time_t = np.sum(
-                value_grounding * state_action_prob[:, :, np.newaxis], axis=(0, 1))/self.env.state_dim
+                precalc * state_action_prob[:, :, np.newaxis], axis=(0, 1))/self.env.state_dim/self.env.action_dim
+            
+            features_time_t_real = np.sum(
+                reward_matric_precalc * state_action_prob[:, :, np.newaxis], axis=(0, 1))/self.env.state_dim/self.env.action_dim
 
             if t == 0:
                 accumulated_feature_expectations = features_time_t
+                accumulated_feature_expectations_real = features_time_t_real
             else:
                 accumulated_feature_expectations += features_time_t
+                accumulated_feature_expectations_real += features_time_t_real
             # /self.env.state_dim
             state_dist = np.sum(self.env.transition_matrix *
                                 state_action_prob[:, :, np.newaxis], axis=(0, 1))
             assert np.allclose(np.sum(state_dist), 1.0)
-        return accumulated_feature_expectations
+        return accumulated_feature_expectations, accumulated_feature_expectations_real
 
     def act(self, state_obs: int, policy_state=None, exploration=0, stochastic=True, alignment_function=None):
         policy = self.policy_per_va(alignment_function)
@@ -722,13 +754,12 @@ class VAlignedDiscreteSpaceActionPolicy(ValueSystemLearningPolicy):
 
 class VAlignedDictSpaceActionPolicy(VAlignedDiscreteSpaceActionPolicy):
 
-    def _callable_from_dict(self):
-        return lambda x: self.policy_per_va_dict[x]
 
     def __init__(self,  *args, policy_per_va_dict: Dict[Tuple, np.ndarray], env: gym.Env, state_encoder=None, expose_state=True, **kwargs):
 
         self.policy_per_va_dict = policy_per_va_dict
-        policy_per_va = self._callable_from_dict()
+        policy_per_va = lambda x:  self.policy_per_va_dict[x]
+        
         super().__init__(policy_per_va=policy_per_va, env=env,
                          state_encoder=state_encoder, expose_state=expose_state, *args, **kwargs)
 
@@ -750,6 +781,7 @@ class ContextualVAlignedDictSpaceActionPolicy(ContextualValueSystemLearningPolic
         self.contextual_policy_estimation_kwargs['horizon'] = self.env.horizon
 
         self.contextual_policies = dict()
+    
     def update_context(self):
         for va in self.policy_per_va_dict.keys():
             new_context = self.get_environ(self.env.get_align_func()).context

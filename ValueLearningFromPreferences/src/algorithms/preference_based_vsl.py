@@ -645,6 +645,7 @@ class ClusteringRewardTrainerVSL(BasicRewardTrainerVSL):
     ) -> th.Tensor:
 
         # This is the M step. of the EM-like algorithm
+        
         output = self.loss.forward(
             preferences=preferences,
             preferences_with_grounding=preferences_with_grounding,
@@ -1484,8 +1485,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         self.cluster_sizes = cluster_sizes
         self.debug_mode = debug_mode
         self.vs_L_clusters = vs_cluster_sizes if vs_cluster_sizes is not None else []
-        self.allow_variable_horizon = not assume_variable_horizon
-
+        
         vsi_target_align_funcs_per_agent = OrderedSet()
         vgl_target_align_funcs_per_agent = OrderedSet()
         for aid, adata in dataset.agent_data.items():
@@ -1503,6 +1503,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                          vgl_optimizer_kwargs=optimizer_kwargs, vsi_optimizer_kwargs=optimizer_kwargs, discount=discount,
                          log_interval=log_interval, vgl_expert_policy=None, vsi_expert_policy=None, vsi_target_align_funcs=vsi_target_align_funcs_per_agent,
                          vgl_target_align_funcs=vgl_target_align_funcs_per_agent, training_mode=training_mode, custom_logger=None, learn_stochastic_policy=learn_stochastic_policy, stochastic_expert=expert_is_stochastic)
+        self.allow_variable_horizon = assume_variable_horizon
+
         self.use_logger = custom_logger != 'disable'
         self.policy_approximator = policy_approximator
         self.approximator_kwargs = approximator_kwargs
@@ -1824,7 +1826,6 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                                         discount=self.discount, deterministic=not self.learn_stochastic_policy)
 
             # self.learned_policy_per_va.set_policy_for_va(target_align_func, pi)
-
             self.learned_policy_per_va.set_policy_for_va(
                 self.target_agent_and_align_func_to_learned_ones[target_align_func], pi)
 
