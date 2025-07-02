@@ -5,6 +5,7 @@ import json
 from types import LambdaType
 from typing import List
 
+import dill
 import numpy as np
 
 from use_cases.roadworld_env_use_case.values_and_costs import BASIC_PROFILES
@@ -158,8 +159,10 @@ def deserialize_lambda(code_data):
         tuple(code_data['co_varnames']),  # variable names
         "",  # filename (empty string)
         "<lambda>",  # name
+        "",  # qualified name (empty string)
         0,  # first line number
-        b""  # lnotab (empty)
+        b"",  # lnotab (empty),
+        b""
     )
     return types.FunctionType(code, globals())
 

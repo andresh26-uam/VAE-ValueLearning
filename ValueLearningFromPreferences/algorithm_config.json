@@ -44,17 +44,17 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.01,
-                    "lr_grounding": 0.008,
-                    "lr_value_system": 0.005,
+                    "lr_grounding": 0.002,
+                    "lr_value_system": 0.004,
                     "lr_lambda": 0.1,
-                    "initial_lambda": 5.0,
+                    "initial_lambda": 3.0,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
                 "learn_stochastic_policy": true,
                 "loss_class": "lagrange",
                 "loss_kwargs": {
-                    "model_indifference_tolerance": 0.0,
+                    "model_indifference_tolerance": 0.0001,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
                     "repr_apply_on_worst_clusters_only": false,
@@ -66,15 +66,59 @@
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
 
-                "policy_approximation_method": "mce_original",
-                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                "expert_policy_class": "VAlignedDictSpaceActionPolicy",
+                "expert_policy_kwargs": {
+                    "VAlignedDictSpaceActionPolicy":{
+                        "policy_approximation_method": "mce_original",
+                        "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                        "discount": 1.0,
+                        "assume_env_produce_state": true,
+                        "expose_state": true, "use_checkpoints": false,
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                    
+                        "use_expert_grounding": true
+                    }
+                },
 
-                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                "learning_policy_class": "VAlignedDictSpaceActionPolicy",
+                "learning_policy_kwargs": {
+                    "VAlignedDictSpaceActionPolicy": {
+                        "policy_approximation_method": "new_value_iteration",
+                        "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 20000},
+                        "assume_env_produce_state": true,
+                        "discount": 1.0,
+                        "expose_state": true, "use_checkpoints": false
+                    },
+                    "LearningValueSystemLearningPolicy": {
+                        "policy_kwargs": {
+                        "net_arch": {"pi": [], "vf": []}
+                        },
+                        "policy_class": "MaskedPolicySimple",
+
+                        "learner_policy_class": "PPO",
+                        "learner_policy_kwargs" : 
+                        {
+                            "batch_size": 25,
+                            "n_steps": 50,
+                            "ent_coef": 0.1,
+                            "learning_rate": 0.02,
+                            "gamma": 1.0,
+                            "gae_lambda": 0.999,
+                            "clip_range": 0.05,
+                            "vf_coef": 0.01,
+                            "n_epochs": 5,
+                            "normalize_advantage": true,
+                            "tensorboard_log": "./ppo_tensorboard_expert_ff/"
+                        }                
+                    }
+                },
+
                 "use_quantified_preference": false,
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 500,
+                    "max_iter": 40,
                     "trajectory_batch_size": "full",
                     "comparisons_per_agent_per_step": null,
                     "fragment_length": "horizon",
@@ -83,28 +127,13 @@
                     "max_assignment_memory": 5
                 },
 
-                "learner_policy_class": "PPO",
-                "learner_policy_kwargs" : 
-                {
-                    "batch_size": 25,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.02,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.05,
-                    "vf_coef": 0.01,
-                    "n_epochs": 5,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
-                },
                 
                 "reward_trainer_kwargs": {
                     "epochs": 3,
-                    "refining_steps_after_cluster_assignment": 3,
+                    "refining_steps_after_cluster_assignment": 2,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 12,
-                    "initial_exploration_rate": 0.7,
+                    "initial_refining_steps": 3,
+                    "initial_exploration_rate": 0.5,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
                 }
@@ -137,10 +166,10 @@
             "use_action": false,
             "use_next_state": true,
             "use_done": false,
-            "basic_layer_classes": ["ConvexLinearModule", "ConvexAlignmentLayer"],
-            "activations": ["nn.Identity", "nn.Identity"],
-            "use_bias": false,
-            "hid_sizes": [3],
+            "basic_layer_classes": ["nn.Linear", "nn.Linear", "ConvexLinearModule", "ConvexAlignmentLayer"],
+            "activations": ["nn.Tanh","nn.Softplus","nn.Identity", "nn.Identity"],
+            "use_bias": [true, true, false, false],
+            "hid_sizes": [80,80,3],
             "negative_grounding_layer": true,
             "clamp_rewards": false
         },
@@ -164,10 +193,10 @@
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
-                "learn_stochastic_policy": true,
+                "learn_stochastic_policy": false,
                 "loss_class": "lagrange",
                 "loss_kwargs": {
-                    "model_indifference_tolerance": 0.0,
+                    "model_indifference_tolerance": 0.0001,
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
                     "repr_apply_on_worst_clusters_only": false,
@@ -178,10 +207,51 @@
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
 
-                "policy_approximation_method": "mce_original",
-                "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                "expert_policy_class": "VAlignedDictSpaceActionPolicy",
+                "expert_policy_kwargs": {
+                    "VAlignedDictSpaceActionPolicy":{
+                        "policy_approximation_method": "new_value_iteration",
+                        "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                        "discount": 1.0,
+                        "assume_env_produce_state": true,
+                        "expose_state": true, "use_checkpoints": false,
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000}
+                    }
+                },
+                "learning_policy_class": "VAlignedDictSpaceActionPolicy",
+                "learning_policy_kwargs": {
+                    "VAlignedDictSpaceActionPolicy": {
+                        "policy_approximation_method": "new_value_iteration",
+                        "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                        "assume_env_produce_state": true,
+                        "discount": 1.0,
+                        "expose_state": true, "use_checkpoints": false
+                    },
+                    "LearningValueSystemLearningPolicy": {
+                        "policy_kwargs": {
+                        "net_arch": {"pi": [64, 64, 8], "vf": [64, 64, 8]}
+                        },
+                        "policy_class": "MaskedPolicySimple",
 
-                "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                        "learner_policy_class": "PPO",
+                        "learner_policy_kwargs" : 
+                        {
+                            "batch_size": 25,
+                            "n_steps": 50,
+                            "ent_coef": 0.1,
+                            "learning_rate": 0.02,
+                            "gamma": 1.0,
+                            "gae_lambda": 0.999,
+                            "clip_range": 0.05,
+                            "vf_coef": 0.01,
+                            "n_epochs": 5,
+                            "normalize_advantage": true,
+                            "tensorboard_log": "./ppo_tensorboard_expert_rw/"
+                        }
+                
+                    }
+                },
                 "use_quantified_preference": false,
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
@@ -194,25 +264,172 @@
                     "max_assignment_memory": 7
                 },
 
-                "learner_policy_class": "PPO",
-                "learner_policy_kwargs" : 
-                {
-                    "batch_size": 25,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.02,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.05,
-                    "vf_coef": 0.01,
-                    "n_epochs": 5,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
-                },
                 
                 "reward_trainer_kwargs": {
                     "epochs": 3,
                     "refining_steps_after_cluster_assignment": 3,
+                    "qualitative_cluster_assignment": false,
+                    "initial_refining_steps": 12,
+                    "initial_exploration_rate": 0.4,
+                    "batch_size": "full",
+                    "inner_k_fold_validation_divisions_per_epoch": null
+                }
+            }
+        }
+    },
+"mvc": {
+        "name": "MultiValuedCarEnv-v0",
+        "n_values": 3,
+        "K": 1,
+        "L": 5,
+        "horizon": 50,
+
+        "is_contextual": false,
+
+        "assume_variable_horizon": false,
+        
+        "basic_profiles": [[1.0, 0.0, 0.0], [0.0,1.0, 0.0], [0.0, 0.0, 1.0]],
+        "profiles_colors": [[1,0,0], [0,0,1], [0,1,0]],
+        "values_names": ["Achievement", "Comfort", "Safety"],
+        "values_short_names": ["Achv", "Comf", "Safe"],
+        "feature_selection": "features_one_hot",
+        "environment_is_stochastic": true,
+        "discount": 1.0,
+        
+        "default_reward_net": {
+            "use_state": false,
+            "use_action": false,
+            "use_next_state": true,
+            "use_done": false,
+            "basic_layer_classes": ["nn.Linear", "nn.Linear", "nn.Linear",  "nn.Linear", "nn.Linear",  "ConvexAlignmentLayer"],
+            "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Identity"],
+            "use_bias": [true, true, true, true, true, false],
+            "hid_sizes": [40,40,40,40,3],
+            "negative_grounding_layer": false,
+            "clamp_rewards": false
+        },
+        "reward_feature_extractor": "FeatureExtractorFromVAEnv",
+        "policy_state_feature_extractor": "OneHotFeatureExtractor",
+        "_options_for_feature_extractors": ["FeatureExtractorFromVAEnv"],
+        "default_optimizer_kwargs": {
+            "lr": 0.001,
+            "weight_decay": 0.0000
+        },
+        "default_optimizer_class": "lagrange",
+        "algorithm_config": {
+            "pc": {
+                "reward_net": {},
+                "optimizer_kwargs": {
+                    "lr": 0.0005,
+                    "lr_grounding": 0.0005,
+                    "lr_value_system": 0.001,
+                    "lr_lambda": 0.01,
+                    "initial_lambda":5.0,
+                    "weight_decay": 0.0000
+                },
+                "optimizer_class": "lagrange",
+                "learn_stochastic_policy": false,
+                "loss_class": "lagrange",
+                "loss_kwargs": {
+                    "model_indifference_tolerance": 0.05,
+                    "gr_apply_on_misclassified_pairs_only": false, 
+                    "vs_apply_on_misclassified_pairs_only": false, 
+                    "repr_apply_on_worst_clusters_only": false,
+                    "conc_apply_on_worst_clusters_only": true,
+                    "confident_penalty":5.0,
+                    "cluster_similarity_penalty": 0.0,
+                    "lambda_decay": 5e-9},
+                "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
+                "discount_factor_preferences": 1.0,
+
+                
+                "use_quantified_preference": false,
+                "preference_sampling_temperature": 0,
+                "query_schedule": "constant",
+                "train_kwargs": {
+                    "max_iter": 2,
+                    "trajectory_batch_size": "full",
+                    "fragment_length": "horizon",
+                    "comparisons_per_agent_per_step": null,
+                    "max_assignment_memory": 7
+                },
+                "expert_policy_class": "CustomPolicy",
+                "expert_policy_kwargs": {
+                    "CustomPolicy":{
+                        "policy_approximation_method": "custom_policy_approximation",
+                        "_policy_approximation_method_options": ["mce_original", 
+                        "new_value_iteration", "use_learner_class", "custom_policy_approximation"],
+                        "discount": 1.0,
+                        "expose_state": false, "use_checkpoints": false,
+                        "assume_env_produce_state": false,
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
+                        
+                        "use_expert_grounding": true
+                    },"LearningValueSystemLearningPolicy": {
+                        "policy_kwargs": {
+                        "net_arch": {"pi": [64, 64], "vf": [64, 64]}
+                        },
+                        "policy_class": "MaskedPolicySimple",
+
+                        "learner_policy_class": "PPO",
+                        
+                        "learner_policy_kwargs" : 
+                        {
+                            "batch_size": 50,
+                            "n_steps": 50,
+                            "ent_coef": 0.05,
+                            "learning_rate": 0.001,
+                            "gamma": 1.0,
+                            "gae_lambda": 0.999,
+                            "clip_range": 0.1,
+                            "vf_coef": 0.1,
+                            "n_epochs": 5,
+                            "normalize_advantage": false,
+                            "tensorboard_log": "./ppo_tensorboard_expert_mvc/"
+                        }
+                    }
+                },
+                "learning_policy_class": "LearningValueSystemLearningPolicy",
+                "learning_policy_kwargs": {
+                    "CustomPolicy": {
+                        "policy_approximation_method": "custom_policy_approximation",
+                        "_policy_approximation_method_options": ["mce_original", 
+                        "new_value_iteration", "use_learner_class", "custom_policy_approximation"],
+                        "discount": 1.0,
+                        "expose_state": false, "use_checkpoints": false,
+                        "use_expert_grounding": false,
+                        "assume_env_produce_state": false,
+                        "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000}
+                    },
+                    "LearningValueSystemLearningPolicy": {
+                        "policy_kwargs": {
+                        "net_arch": {"pi": [64, 64], "vf": [64, 64]}
+                        },
+                        "policy_class": "MaskedPolicySimple",
+
+                        "learner_policy_class": "PPO",
+                        
+                        "learner_policy_kwargs" : 
+                        {
+                            "batch_size": 50,
+                            "n_steps": 50,
+                            "ent_coef": 0.05,
+                            "learning_rate": 0.001,
+                            "gamma": 1.0,
+                            "gae_lambda": 0.999,
+                            "clip_range": 0.1,
+                            "vf_coef": 0.1,
+                            "n_epochs": 5,
+                            "normalize_advantage": false,
+                            "tensorboard_log": "./ppo_tensorboard_learner_mvc/"
+                        }
+                    }
+                },
+                
+                
+                "reward_trainer_kwargs": {
+                    "epochs": 3,
+                    "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
                     "initial_refining_steps": 12,
                     "initial_exploration_rate": 0.3,

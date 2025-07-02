@@ -1,7 +1,7 @@
 import numpy as np
-from ItemAndAgent import Item, Agent
-from ValuesNorms import Values, Norms, ProblemName
-from window import Window
+from use_cases.multivalue_car_use_case.ItemAndAgent import Item, Agent
+from use_cases.multivalue_car_use_case.ValuesNorms import Values, Norms, ProblemName
+from use_cases.multivalue_car_use_case.window import Window
 
 """
 
@@ -162,13 +162,13 @@ class Environment:
                         #print("Eliminated because it is terminal :", [i, j])
 
 
-        #print(self.states_agent_left)
-        #print([self.translate_state_cell(i) for i in self.states_agent_left])
+        print(self.states_agent_left)
+        print([self.translate_state_cell(i) for i in self.states_agent_left])
 
-        #print("------------------------------------------")
+        print("------------------------------------------")
 
-        #print(self.states_agent_right)
-        #print([self.translate_state_cell(i) for i in self.states_agent_right])
+        print(self.states_agent_right)
+        print([self.translate_state_cell(i) for i in self.states_agent_right])
 
     def generate_item(self, kind, name, position, goal=None):
         """
@@ -461,7 +461,7 @@ class Environment:
 
         reward = [0.0, 0.0, 0.0]
         # Individual objective
-        if (agent.get_position() == self.agent_right_goal) or (agent.get_position() == self.agent_left_goal):
+        if self.is_done_agent(agent):
             reward[0] += 14.0
             agent.succeeds = True
         else:
@@ -475,7 +475,7 @@ class Environment:
         # Value External Safety
         if self.external_damage > 0:
             reward[2] += self.external_damage*Values.SAFETY_EXTERNAL
-            self.external_damage = 0
+            self.external_damage = 0 
 
 
         return np.array(reward)
@@ -504,7 +504,7 @@ class Environment:
                 results[i] = float(self.in_which_wastebasket[i])/float(self.original_garbage_position[i])
         return results
 
-    def get_state(self):
+    def get_state(self, internal_damage=None, external_damage=None):
         """
         Wrapper to get the needed information of the state to the q-learning algorithm.
         :return:
@@ -523,8 +523,11 @@ class Environment:
                 temp = stator[1]
                 stator[1] = stator[2]
                 stator[2] = temp
-
-        return np.array(stator)
+        if internal_damage is not None:
+            stator.insert(0, int(internal_damage))
+        if external_damage is not None:
+            stator.insert(1, int(external_damage))
+        return np.array(stator, dtype=np.int16)
 
     def step(self, actions):
         """
@@ -536,21 +539,27 @@ class Environment:
 
         rewards = list()
         dones = list()
-
+        internal_damage = self.internal_damage
+        external_damage = self.external_damage
         for agent, action in zip(self.agents, actions):
 
             reward = self.to_reward(agent, action)
 
             done = False
-            if (agent.get_position() == self.agent_right_goal) or (agent.get_position() == self.agent_left_goal):
+            if self.is_done_agent(agent):
                 done = True
 
             rewards.append(reward)
             dones.append(done)
 
         # rewards[0] only takes rewards from left agent
-        return self.get_state(), rewards[0], dones
+        return self.get_state(internal_damage=internal_damage, external_damage=external_damage), rewards[0], dones
 
+    def is_done_agent(self, agent):
+        return (agent.get_position() == self.agent_right_goal) or (agent.get_position() == self.agent_left_goal)
+    def is_done(self, state=None):
+        self.easy_reset(*state)
+        return self.is_done_agent(self.agents[0])
 
     def set_stats(self, episode, r_big, mean_score, fourth=0, fifth=0):
         self.window.stats = episode, r_big, mean_score, fourth, fifth

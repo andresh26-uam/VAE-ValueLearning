@@ -12,7 +12,7 @@ from typing import Sequence
 
 
 
-def compare_trajectories(traj_i, traj_j, epsilon=0.0):
+def compare_trajectories(traj_i, traj_j, epsilon=0.0001):
     """
     Compare two trajectories based on their discounted sums.
     Args:
@@ -23,7 +23,7 @@ def compare_trajectories(traj_i, traj_j, epsilon=0.0):
         float: Comparison flag (1.0, 0.5, 0.0).
     """
     comparison = traj_i - traj_j
-    if abs(comparison) < epsilon:
+    if abs(comparison) <= epsilon :
         return 0.5
     elif comparison > 0:
         return 1.0

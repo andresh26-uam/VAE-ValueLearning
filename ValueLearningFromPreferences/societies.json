@@ -12,24 +12,7 @@
             "name": "s1",
             "stochastic_expert": true,
             "same_trajectories_for_each_agent_type": true,
-            "approx_expert": true,
-            "policy_approximation_method": "mce_original",
-            "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
-            "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
-            "expert_policy_class": "PPO",
-                "expert_kwargs" : {
-                    "batch_size": 32,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.002,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.1,
-                    "vf_coef": 0.001,
-                    "n_epochs": 10,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
-                },
+            "is_tabular": true,
             "agents": [{
                 "name": "normal",
                 "grounding": ["default_professionalism", "default_proximity"], 
@@ -37,7 +20,7 @@
                 
                 "n_agents": 4,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 100,
                     "rationality": 1.0, "random_traj_proportion": 1.0
                 }
             },
@@ -47,7 +30,7 @@
                 "value_system": [1.0, 0.0],
                 "n_agents": 4,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 100,
                     "rationality": 1.0, "random_traj_proportion": 1.0
                 }
             },{
@@ -56,40 +39,145 @@
                 "value_system": [0.0, 1.0],
                 "n_agents": 4,
                 "data": {
-                    "trajectory_pairs": 50,
+                    "trajectory_pairs": 100,
                     "rationality": 1.0, "random_traj_proportion": 1.0
                 }
             }]
         },
-        "default": {
-            "name": "default",
-            "stochastic_expert": true,
+        "default_deter": {
+            "name": "default_deter",
+            "stochastic_expert": false,
             "same_trajectories_for_each_agent_type": true,
-            "approx_expert": true,
-            "policy_approximation_method": "mce_original",
-            "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
-            "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
-            "expert_policy_class": "PPO",
-                "expert_kwargs" : {
-                    "batch_size": 32,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.002,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.1,
-                    "vf_coef": 0.001,
-                    "n_epochs": 10,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_ff/"
-                },
+            "is_tabular": true,
             "agents": [{
                 "name": "proximity_agent",
                 "grounding": ["default_professionalism", "default_proximity"], 
                 "value_system": [0.0, 1.0],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0208_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.2, 0.8],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0406_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.4, 0.6],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0604_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.6, 0.4],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0802_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.8, 0.2],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                    
+                }
+            },{
+                "name": "prof_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [1.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }}]},
+        "default_expert": {
+            "name": "default_expert",
+            "stochastic_expert": true,
+            "same_trajectories_for_each_agent_type": true,
+            "is_tabular": true,
+            "agents": [{
+                "name": "proximity_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.0, 1.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0208_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.2, 0.8],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0406_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.4, 0.6],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0604_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.6, 0.4],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            }, {
+                "name": "0802_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.8, 0.2],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                    
+                }
+            },{
+                "name": "prof_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [1.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+                }]
+            },
+        "default": {
+            "name": "default",
+            "stochastic_expert": true,
+            "same_trajectories_for_each_agent_type": true,
+            "is_tabular": true,
+            "agents": [{
+                "name": "proximity_agent",
+                "grounding": ["default_professionalism", "default_proximity"], 
+                "value_system": [0.0, 1.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
                 }
             }, {
@@ -98,7 +186,7 @@
                 "value_system": [0.2, 0.8],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
                 }
             }, {
@@ -107,7 +195,7 @@
                 "value_system": [0.4, 0.6],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
                 }
             }, {
@@ -116,7 +204,7 @@
                 "value_system": [0.6, 0.4],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
                 }
             }, {
@@ -125,7 +213,7 @@
                 "value_system": [0.8, 0.2],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
                     
                 }
@@ -135,8 +223,55 @@
                 "value_system": [1.0, 0.0],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 80,
+                    "trajectory_pairs": 120,
                     "rationality": 1.0, "random_traj_proportion": 0.5
+                }
+            }]
+        }
+    },
+
+"mvc": 
+    {
+        
+        "groundings": {
+                "default_ach": "rw_achievement.npy",
+                "default_com": "rw_comfort.npy",
+                "default_saf": "rw_safety.npy"
+                }
+            ,
+        "default": {
+            "name": "default",
+            "stochastic_expert": false,
+            "same_trajectories_for_each_agent_type": true,
+            "is_tabular": false,
+            "agents": [{
+                "name": "100agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [1.0, 0.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 100,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+            {
+                "name": "010agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.0, 1.0, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 100,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+            {
+                "name": "001agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.0, 0.0, 1.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 100,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
                 }
             }]
         }
@@ -154,41 +289,54 @@
             "name": "default",
             "stochastic_expert": false,
             "same_trajectories_for_each_agent_type": true,
-            "approx_expert": true,
-            "policy_approximation_method": "new_value_iteration",
-            "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
-            "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
-            "expert_policy_class": "PPO",
-                "expert_kwargs" : {
-                    "batch_size": 32,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.002,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.1,
-                    "vf_coef": 0.001,
-                    "n_epochs": 10,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
-                },
+            "is_tabular": true,
             "agents": [{
                 "name": "100agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 
                 "value_system": [1.0, 0.0, 0.0],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 30,
+                    "trajectory_pairs": 60,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             },
             {
-                "name": "010agent",
+                "name": "00505agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 
-                "value_system": [0.0, 1.0, 0.0],
+                "value_system": [0.0, 0.5, 0.5],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 30,
+                    "trajectory_pairs": 60,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            },
+            {
+                "name": "030303gent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [0.33, 0.33, 0.34],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 60,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            },
+            {
+                "name": "030303gent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [0.33, 0.33, 0.34],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 60,
+                    "rationality": 1.0, "random_traj_proportion": 0.0
+                }
+            },
+            {
+                "name": "05050agent",
+                "grounding": ["default_sus", "default_com", "default_eff"], 
+                "value_system": [0.5, 0.5, 0.0],
+                "n_agents": 3,
+                "data": {
+                    "trajectory_pairs": 60,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             },
@@ -198,7 +346,7 @@
                 "value_system": [0.0, 0.0, 1.0],
                 "n_agents": 3,
                 "data": {
-                    "trajectory_pairs": 30,
+                    "trajectory_pairs": 60,
                     "rationality": 1.0, "random_traj_proportion": 0.0
                 }
             }]
@@ -217,24 +365,7 @@
             "name": "default",
             "stochastic_expert": false,
             "same_trajectories_for_each_agent_type": true,
-            "approx_expert": true,
-            "policy_approximation_method": "new_value_iteration",
-            "_policy_approximation_method_options": ["mce_original", "new_value_iteration", "use_learner_class"],
-            "approximator_kwargs": {"value_iteration_tolerance": 0.0000001, "iterations": 2000},
-            "expert_policy_class": "PPO",
-                "expert_kwargs" : {
-                    "batch_size": 32,
-                    "n_steps": 50,
-                    "ent_coef": 0.1,
-                    "learning_rate": 0.002,
-                    "gamma": 1.0,
-                    "gae_lambda": 0.999,
-                    "clip_range": 0.1,
-                    "vf_coef": 0.001,
-                    "n_epochs": 10,
-                    "normalize_advantage": true,
-                    "tensorboard_log": "./ppo_tensorboard_expert_rw/"
-                },
+            "is_tabular": true,
             "agents": [{
                 "name": "100agent",
                 "grounding": ["default_sus", "default_com", "default_eff"], 

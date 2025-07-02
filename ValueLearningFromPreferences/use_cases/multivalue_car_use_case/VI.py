@@ -1,7 +1,7 @@
 import numpy as np
-from ADS_Environment import Environment
+from use_cases.multivalue_car_use_case.ADS_Environment import Environment
 import gc
-from Lex import lex_max
+from use_cases.multivalue_car_use_case.Lex import lex_max
 
 agent_2_actions = Environment.pedestrian_move_map
 
@@ -104,6 +104,8 @@ def Q_function_calculator(env, state, V, discount_factor, model_used=None):
                     else:
                         env.easy_reset(state_translated[0], state_translated[1], state_translated[2])
                         next_state, rewards, _ = env.step([action, act2, act3])
+                        if len(next_state) > 3:
+                            next_state = next_state[2:]
 
                     for objective in range(len(rewards)):
                         Q_state[action, objective] += dividing_factor*(rewards[objective] + discount_factor * V[next_state[0], next_state[1], next_state[2], objective])
@@ -144,7 +146,7 @@ def generate_model(env):
     n_objectives = env.n_objectives
     n_actions = env.n_actions
     n_cells = env.map_num_cells
-    model = np.zeros([45, 46, 46, n_actions, n_actions + 2, n_actions + 2, n_objectives + 4])
+    model = np.zeros([53, 53, 53, n_actions, n_actions + 2, n_actions + 2, n_objectives + 4])
 
     print(n_cells, len(env.states_agent_left), len(env.states_agent_right))
     print("Number of states:", len(env.states_agent_left)*len(env.states_agent_right)**2)
@@ -166,20 +168,18 @@ def generate_model(env):
                     for action in range(env.n_actions):
                         for action2 in [0, 1, 2, 7]:
                             for action3 in [0, 1, 2, 7]:
-                                env.easy_reset(state_translated[0], state_translated[1], state_translated[2])
+                                env.easy_reset(*state_translated)
 
                                 next_state, rewards, done = env.step([action, action2, action3])
 
-                                for i in range(len(rewards)):
-                                    model[cell_L, cell_R, cell_J, action, action2, action3, i] = rewards[i]
+                                model[cell_L, cell_R, cell_J, action, action2, action3, 0:len(rewards)] = rewards
 
-                                for i in range(3):
-                                    model[cell_L, cell_R, cell_J, action, action2, action3, i + len(rewards)] = next_state[i]
+                                model[cell_L, cell_R, cell_J, action, action2, action3, len(rewards):-1] = next_state
 
                                 model[cell_L, cell_R, cell_J, action, action2, action3, -1] = int(done[0])
 
     np.save("model.npy", model)
-
+    return model, n_actions, n_cells, n_objectives
 
 def value_iteration(env, weights, lex=None, theta=1.0, discount_factor=0.7, model_used=None):
     """
@@ -218,8 +218,7 @@ def value_iteration(env, weights, lex=None, theta=1.0, discount_factor=0.7, mode
         # Threshold delta
         delta = 0
         max_delta = 0
-        max_delta_s = []
-        print(delta)
+        #max_delta_s = []
         n_states = 0
         # Sweep for every state
         for cell_L in states_agent:
@@ -233,6 +232,8 @@ def value_iteration(env, weights, lex=None, theta=1.0, discount_factor=0.7, mode
 
                         # calculate the value of each action for the state
                         Q[cell_L, cell_R, cell_J] = Q_function_calculator(env, [cell_L, cell_R, cell_J], V, discount_factor, model_used)
+                        
+                        
                         # compute the best action for the state
                         if lex is None:
                             if True: #cell_L < 2 * env.map_width:
@@ -249,7 +250,7 @@ def value_iteration(env, weights, lex=None, theta=1.0, discount_factor=0.7, mode
                         delta += np.abs(best_action_value - scalarisation_function(V[cell_L, cell_R, cell_J], weights))
                         if delta > max_delta:
                             max_delta = delta
-                            max_delta_s = [cell_L, cell_R, cell_J]
+                            #max_delta_s = [cell_L, cell_R, cell_J]
                         # Update the state value function
                         V[cell_L, cell_R, cell_J] = Q[cell_L, cell_R, cell_J, best_action]
 

@@ -22,7 +22,7 @@ class PolicyApproximators(enum.Enum):
     SOFT_VALUE_ITERATION = 'value_iteration'
     NEW_SOFT_VALUE_ITERATION = 'new_value_iteration'
 
-def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False, valid_action_checker=None):
+def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=False, valid_action_getter=None):
     """
     Modify the policy matrix pi such that for each state s, the policy is concentrated 
     on the action with the maximum probability, or equally among the actions with maximum probability
@@ -41,8 +41,8 @@ def concentrate_on_max_policy(pi, distribute_probability_on_max_prob_actions=Fal
 
     for state in range(n_states):
         # Get the valid actions for this state, or all actions if no valid_action_checker is provided
-        if valid_action_checker is not None:
-            valid_actions = valid_action_checker(state)
+        if valid_action_getter is not None:
+            valid_actions = valid_action_getter(state)
         else:
             valid_actions = np.arange(n_actions)
 
@@ -113,6 +113,8 @@ def mce_partition_fh(
     else:
         broad_R = reward
         assert len(reward.shape) == 2
+    if isinstance(broad_R, torch.Tensor):
+        broad_R = broad_R.detach().cpu().numpy()
 
     if policy_approximator == PolicyApproximators.MCE_ORIGINAL:
         # Initialization
@@ -159,7 +161,7 @@ def mce_partition_fh(
             iterations += 1
         pi = scipy.special.softmax(Q - V[:, None], axis=1)
     elif policy_approximator == PolicyApproximators.NEW_SOFT_VALUE_ITERATION:
-        value_iteration_tolerance = np.min(np.abs(broad_R[broad_R != 0.0]))
+        value_iteration_tolerance = min(abs(broad_R[broad_R != 0.0]))
 
         # Initialization
         # indexed as V[t,s]
@@ -167,7 +169,7 @@ def mce_partition_fh(
         V[env.goal_states] = 0.0
         Q = broad_R
         # we assume the MDP is correct, but illegal state should respond to this rule. By design broad_R should be very negative in illegal states.
-        illegal_reward = np.max(np.abs(broad_R))*-1.0
+        illegal_reward = float(np.max(np.array(list(abs(broad_R))))*-1.0)
 
         inv_states = env.invalid_states
         if inv_states is not None:
@@ -214,14 +216,14 @@ def mce_partition_fh(
 
         if len(pi.shape) == 2:
             pi = concentrate_on_max_policy(
-                pi, valid_action_checker=lambda s: env.valid_actions(s, None))
+                pi, valid_action_getter=lambda s: env.valid_actions(s, None))
             if __debug__:
                 for i in range(pi.shape[0]):
                     assert np.allclose(np.sum(pi[i]), 1)
         else:
             for time_t in range(pi.shape[0]):
                 pi[time_t] = concentrate_on_max_policy(
-                    pi[time_t], valid_action_checker=lambda s: env.valid_actions(s, None))
+                    pi[time_t], valid_action_getter=lambda s: env.valid_actions(s, None))
                 if __debug__:
                     for i in range(pi[time_t].shape[0]):
                         assert np.allclose(np.sum(pi[time_t, i]), 1)

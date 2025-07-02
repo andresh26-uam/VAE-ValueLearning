@@ -1,6 +1,7 @@
 
 from abc import abstractmethod
 import abc
+from functools import partial
 from typing import Any, Callable, Dict, Generic, Iterable, Optional, SupportsFloat, Tuple, TypeVar, Union
 import imitation
 import imitation.util
@@ -12,6 +13,8 @@ from seals import base_envs
 import numpy as np
 
 import gymnasium as gym
+
+from src.algorithms.utils import mce_partition_fh
 
 
 def encrypt_state(state, original_state_space):
@@ -43,15 +46,26 @@ def translate_state(state, original_state_space):
 
 class ValueAlignedEnvironment(gym.Env):
 
-    def __init__(self, n_values: int, horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True):
+    init__kwargs: Dict[str, Any] = None
+
+    @abstractmethod
+    def compute_policy(env, reward: Callable[[Optional[Any], Optional[Any], Optional[Any], Optional[Any]], float], discount=1.0, **kwargs):
+        raise NotImplementedError(
+            "This method is not implemented for the base ValueAlignedEnvironment class. ")
+    
+    def __init__(self, env_name: str, n_values: int, horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True):
+        
         super().__init__()
+
+        self.env_name= env_name
         self.horizon = horizon
         self.done_when_horizon_is_met = done_when_horizon_is_met
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
         self._cur_align_func = None
-        self.current_assumed_grounding = None
+        self._cur_grounding_func = None
         self.n_values = n_values
         self.basic_profiles = [tuple([float(ti) for ti in t]) for t in np.eye(self.n_values)]
+        self.is_stochastic = True
         # self.action_space = self.env.action_space
         # self.observation_space = self.observation_space
 
@@ -61,20 +75,25 @@ class ValueAlignedEnvironment(gym.Env):
         # self.spec = self.env.spec
 
     def align_func_yielder(self, a, ns=None, prev_align_func=None, info=None):
-        return self._cur_align_func
+        return self.get_align_func()
 
     
-    def get_reward_per_value(self, vindex, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
-        return self.get_reward_per_align_func(align_func=self.basic_profiles[vindex], obs=obs, action=action, next_obs=next_obs, info=info, custom_grounding=custom_grounding)
+    def get_reward_per_value(self, vindex, state=None, action=None, next_state=None, done=None, info=None, custom_grounding=None) -> SupportsFloat:
+        return self.get_reward_per_align_func(align_func=self.basic_profiles[vindex], state=state, action=action, next_state=next_state, done=done, info=info, custom_grounding=custom_grounding)
     @abstractmethod
-    def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info=None, custom_grounding=None) -> SupportsFloat:
+    def get_reward_per_align_func(self, align_func, state=None, action=None, next_state=None, done=None, info=None, custom_grounding=None) -> SupportsFloat:
         ...
 
     def set_align_func(self, align_func):
         self._cur_align_func = align_func
 
+    def set_grounding_func(self, grounding):
+        self._cur_grounding_func = grounding
+
     def get_align_func(self):
         return self._cur_align_func
+    def get_grounding_func(self):
+        return self._cur_grounding_func
     
     @abstractmethod
     def real_reset(self, *, seed: int = None, options: dict[str, Any] = None) -> tuple[Any, dict[str, Any]]:
@@ -97,13 +116,15 @@ class ValueAlignedEnvironment(gym.Env):
         self.set_align_func(self.align_func_yielder(
             action, ns=ns, prev_align_func=self.get_align_func(), info=self.prev_info))
         info['align_func'] = self.get_align_func()  
-              
-        r = self.get_reward_per_align_func(
-            self.get_align_func(), self.prev_observation, action, ns, info, custom_grounding=self.assumed_grounding)
-        self.time += 1
         if self.horizon is not None and self.time >= self.horizon:
             trunc = self.trunc_when_horizon_is_met or trunc
             done = self.done_when_horizon_is_met or done
+            
+        r = self.get_reward_per_align_func(
+            align_func=info['align_func'], state=self.prev_observation, action=action, next_state=ns, 
+            done=done, info=info, custom_grounding=self.get_grounding_func())
+        self.time += 1
+        
         self.prev_observation = ns
         self.prev_info = info
         return ns, r, done, trunc, info
@@ -113,9 +134,7 @@ class ValueAlignedEnvironment(gym.Env):
     def calculate_assumed_grounding(self, **kwargs) -> tuple[Union[torch.nn.Module, np.ndarray], np.ndarray]:
         ...
 
-    @property
-    def assumed_grounding(self):
-        return self.current_assumed_grounding
+    
     
 DiscreteSpaceInt = np.int64
 from seals import util
@@ -127,7 +146,7 @@ ActType = TypeVar("ActType")
 ObsType = TypeVar("ObsType")
 
 class TabularVAMDP(ValueAlignedEnvironment):
-
+    
     """Base class for tabular environments with known dynamics.
 
     This is the general class that also allows subclassing for creating
@@ -144,6 +163,8 @@ class TabularVAMDP(ValueAlignedEnvironment):
     _cur_state: Optional[DiscreteSpaceInt]
     _n_actions_taken: Optional[int]
 
+    def compute_policy(env, reward: Callable[[Optional[Any], Optional[Any], Optional[Any], Optional[Any]], float], discount=1.0, stochastic=True, **kwargs):
+        return mce_partition_fh(env, reward=reward(), discount=discount, deterministic=not stochastic, **kwargs)
 
     def initial_state(self) -> DiscreteSpaceInt:
         """Samples from the initial state distribution."""
@@ -265,7 +286,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
         infos = {"old_state": old_state, "new_state": self._cur_state}
         return obs, reward, terminated, truncated, infos
     
-    def __init__(self, n_values: int, transition_matrix: ndarray, observation_matrix: ndarray,
+    def __init__(self, env_name: str, n_values: int, transition_matrix: ndarray, observation_matrix: ndarray,
                  reward_matrix_per_va: Callable[[Any], ndarray],
                  default_reward_matrix: ndarray, initial_state_dist: ndarray = None,
                  horizon: int = None, done_when_horizon_is_met: bool = False,  trunc_when_horizon_is_met: bool = True):
@@ -351,7 +372,7 @@ class TabularVAMDP(ValueAlignedEnvironment):
         self.trunc_when_horizon_is_met = trunc_when_horizon_is_met
 
         self.set_initial_state_distribution(initial_state_dist)
-        super().__init__( n_values=n_values, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
+        super().__init__(env_name=env_name, n_values=n_values, horizon=horizon, done_when_horizon_is_met=done_when_horizon_is_met,
                          trunc_when_horizon_is_met=trunc_when_horizon_is_met)
         self.env: base_envs.TabularModelPOMDP
         
@@ -359,9 +380,10 @@ class TabularVAMDP(ValueAlignedEnvironment):
 
     def valid_actions(self, state, align_func=None):
         return np.arange(self.reward_matrix.shape[1])
-
-    def get_reward_per_align_func(self, align_func, obs=None, action=None, next_obs=None, info=None, custom_grounding=None):
-        return self.reward_matrix_per_align_func(align_func, custom_grounding=custom_grounding)[info['state'] if obs is None or isinstance(obs, Iterable) else int(obs), action]
+    
+    @override
+    def get_reward_per_align_func(self, align_func, state=None, action=None, next_state=None, done=None, info=None, custom_grounding=None):
+        return self.reward_matrix_per_align_func(align_func, custom_grounding=custom_grounding)[info['state'] if state is None or isinstance(state, Iterable) else int(state), action]
 
     def get_state_actions_with_known_reward(self, align_func):
         return None
@@ -405,6 +427,100 @@ class TabularVAMDP(ValueAlignedEnvironment):
         return self.observation_matrix[state]
     
 
+def grounding_func_from_matrix(assumed_grounding: np.ndarray):
+    return partial(grounding_func_from_matrix_partial, assumed_grounding)
+
+def reward_func_from_matrix(reward_matrix: np.ndarray):
+    return partial(reward_func_from_matrix_partial, reward_matrix)
+
+def reward_func_from_matrix_partial(reward_matrix: np.ndarray, state=None, action=None, next_state=None, done=None,info=None):
+        if len(reward_matrix.shape) == 2:
+            if action is not None:
+                return reward_matrix[state,action] if state is not None and action is not None else\
+                            reward_matrix[state, :] if state is not None else \
+                            reward_matrix[:, action] if action is not None else \
+                            reward_matrix
+            else:
+                return reward_matrix[state,next_state] if state is not None and next_state is not None else\
+                            reward_matrix[state, :] if state is not None else \
+                            reward_matrix[:, next_state] if next_state is not None else \
+                            reward_matrix
+        elif len(reward_matrix.shape) == 1:
+            return reward_matrix[state] if state is not None else \
+                        reward_matrix[next_state,: ] if next_state is not None else \
+                        reward_matrix
+        elif len(reward_matrix.shape) == 3:
+            return reward_matrix[state,action,next_state, :] if state is not None and action is not None and next_state is not None else \
+                        reward_matrix[state,action,:, :] if state is not None and action is not None else \
+                        reward_matrix[state, :, next_state, :] if state is not None and next_state is not None else \
+                        reward_matrix[:, action, next_state, :] if action is not None and next_state is not None else \
+                        reward_matrix[state, :, :, :, :] if state is not None else \
+                        reward_matrix[:, action, :] if action is not None else \
+                        reward_matrix[:, :, next_state, :] if next_state is not None else \
+                        reward_matrix
+        elif len(reward_matrix.shape) == 4:
+            if done is not None:
+                return reward_matrix[state, action, next_state, :, done] if state is not None and action is not None and next_state is not None else \
+                        reward_matrix[state, action, :, done] if state is not None and action is not None else \
+                        reward_matrix[state, :, next_state, done] if state is not None and next_state is not None else \
+                        reward_matrix[:, action, next_state, done] if action is not None and next_state is not None else \
+                        reward_matrix[state, :, :, done] if state is not None else \
+                        reward_matrix[:, action, :, done] if action is not None else \
+                        reward_matrix[:, :, next_state, done] if next_state is not None else \
+                        reward_matrix[..., done,:]
+            else:
+                return reward_matrix[state, action, next_state, :, :] if state is not None and action is not None and next_state is not None else \
+                        reward_matrix[state, action, :, :] if state is not None and action is not None else \
+                        reward_matrix[state, :, next_state, :] if state is not None and next_state is not None else \
+                        reward_matrix[:, action, next_state, :] if action is not None and next_state is not None else \
+                        reward_matrix[state, :, :, :] if state is not None else \
+                        reward_matrix[:, action, :, :] if action is not None else \
+                        reward_matrix[:, :, next_state, :] if next_state is not None else \
+                        reward_matrix
+def grounding_func_from_matrix_partial(assumed_grounding: np.ndarray, state=None, action=None, next_state=None, done=None, info=None):
+        if len(assumed_grounding.shape) == 3:
+            if action is not None:
+                return assumed_grounding[state,action,:] if state is not None and action is not None else\
+                            assumed_grounding[state, :, :] if state is not None else \
+                            assumed_grounding[:, action, :] if action is not None else \
+                            assumed_grounding
+            else:
+                return assumed_grounding[state,next_state,:] if state is not None and next_state is not None else\
+                            assumed_grounding[state, :, :] if state is not None else \
+                            assumed_grounding[:, next_state, :] if next_state is not None else \
+                            assumed_grounding
+        elif len(assumed_grounding.shape) == 2:
+            return assumed_grounding[state, :] if state is not None else \
+                        assumed_grounding[next_state,: ] if next_state is not None else \
+                        assumed_grounding
+        elif len(assumed_grounding.shape) == 4:
+            return assumed_grounding[state,action,next_state, :] if state is not None and action is not None and next_state is not None else \
+                        assumed_grounding[state,action,:, :] if state is not None and action is not None else \
+                        assumed_grounding[state, :, next_state, :] if state is not None and next_state is not None else \
+                        assumed_grounding[:, action, next_state, :] if action is not None and next_state is not None else \
+                        assumed_grounding[state, :, :, :, :] if state is not None else \
+                        assumed_grounding[:, action, :] if action is not None else \
+                        assumed_grounding[:, :, next_state, :] if next_state is not None else \
+                        assumed_grounding
+        elif len(assumed_grounding.shape) == 5:
+            if done is not None:
+                return assumed_grounding[state, action, next_state, :, done, :] if state is not None and action is not None and next_state is not None else \
+                        assumed_grounding[state, action, :, done, :] if state is not None and action is not None else \
+                        assumed_grounding[state, :, next_state, done, :] if state is not None and next_state is not None else \
+                        assumed_grounding[:, action, next_state, done, :] if action is not None and next_state is not None else \
+                        assumed_grounding[state, :, :, done, :] if state is not None else \
+                        assumed_grounding[:, action, :, done, :] if action is not None else \
+                        assumed_grounding[:, :, next_state, done, :] if next_state is not None else \
+                        assumed_grounding[..., done]
+            else:
+                return assumed_grounding[state, action, next_state, :, :, :] if state is not None and action is not None and next_state is not None else \
+                        assumed_grounding[state, action, :, :, :] if state is not None and action is not None else \
+                        assumed_grounding[state, :, next_state, :, :] if state is not None and next_state is not None else \
+                        assumed_grounding[:, action, next_state, :, :] if action is not None and next_state is not None else \
+                        assumed_grounding[state, :, :, :, :] if state is not None else \
+                        assumed_grounding[:, action, :, :, :] if action is not None else \
+                        assumed_grounding[:, :, next_state, :, :] if next_state is not None else \
+                        assumed_grounding
 
 class ContextualEnv(ValueAlignedEnvironment):
 

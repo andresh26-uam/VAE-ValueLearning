@@ -100,6 +100,7 @@ class RouteChoiceEnvironmentApollo(TabularVAMDP):
             done_when_horizon_is_met=True,
             trunc_when_horizon_is_met=True
         )
+        self.is_stochastic = False
     def _get_reward_matrix_per_va(self, align_func, custom_grounding=None):
         return self._reward_matrix_per_va[align_func] if align_func in self._reward_matrix_per_va.keys() else np.sum([align_func[i]*self._reward_matrix_per_va[self.basic_profiles[i]] for i in range(len(align_func))], axis=0)
 

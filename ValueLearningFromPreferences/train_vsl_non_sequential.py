@@ -70,7 +70,7 @@ def parse_args():
 
     env_group.add_argument('-rte', '--retrain_experts', action='store_true',
                            default=False, help='Retrain experts (roadworld)')
-    env_group.add_argument('-appr', '--approx_expert', action='store_true',
+    env_group.add_argument('-appr', '--is_tabular', action='store_true',
                            default=False, help='Approximate expert (roadworld)')
     env_group.add_argument('-reps', '--reward_epsilon', default=0.000, type=float,
                            help='Distance between the cummulative rewards of each pair of trajectories for them to be considered as equal in the comparisons')

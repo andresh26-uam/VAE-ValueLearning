@@ -36,7 +36,9 @@ class ConvexLinearModule(th.nn.Linear):
             th.sum(state_dict['weight'])
         
         self.load_state_dict(state_dict)
-        assert th.all(self.state_dict()['weight'] > 0)
+
+        assert th.all(self.state_dict()['weight'] >= 0), self.state_dict()['weight']
+
 
     def forward(self, input: th.Tensor) -> th.Tensor:
         w_normalized = th.nn.functional.softmax(self.weight, dim=1)

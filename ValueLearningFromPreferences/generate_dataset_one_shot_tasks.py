@@ -224,7 +224,7 @@ if __name__ == "__main__":
                         for o, no, a, info in zip(all_trajs_ag_train[i].obs[:-1], all_trajs_ag_train[i].obs[1:], all_trajs_ag_train[i].acts, all_trajs_ag_train[i].infos):
 
                             list_.append(environment.get_reward_per_align_func(align_func=tuple(
-                                environment.basic_profiles[vi]), action=a, info=info, obs=o, next_obs=no, custom_grounding=None))
+                                environment.basic_profiles[vi]), action=a, info=info, state=o, next_state=no, custom_grounding=None))
 
                         
                         np.testing.assert_almost_equal(

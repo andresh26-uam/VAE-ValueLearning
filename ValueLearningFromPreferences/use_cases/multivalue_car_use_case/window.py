@@ -1,6 +1,7 @@
 import pygame
 from pygame import __rect_constructor as rc
 import sys
+import os
 
 RIGHT = 0
 UP = 1
@@ -11,6 +12,7 @@ PUSH_UP = 4
 PUSH_LEFT = 5
 
 afasdada = True
+dirname = os.path.dirname(__file__)
 
 def arrow(x, y, direction, factor, screen):
     if direction % 3 == RIGHT:
@@ -90,7 +92,7 @@ class Window:
         self.stats = 0, 0, 0, 0
         self.paused = False
 
-        self.image = pygame.image.load('wastebasket.png')
+        self.image = pygame.image.load(os.path.join(dirname, 'wastebasket.png'))
         self.image = pygame.transform.scale(self.image, (40, 40))
 
 

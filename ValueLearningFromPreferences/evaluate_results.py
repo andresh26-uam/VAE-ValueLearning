@@ -10,9 +10,10 @@ import shap
 import torch
 from envs.routechoiceApollo import RouteChoiceEnvironmentApolloComfort
 from envs.tabularVAenv import TabularVAMDP
+from generate_dataset import parse_policy_approximator
 from src.algorithms.plot_utils import plot_learned_and_expert_occupancy_measures, plot_learned_and_expert_reward_pairs, plot_learned_and_expert_rewards, plot_learned_to_expert_policies
 from src.algorithms.utils import PolicyApproximators, mce_partition_fh
-from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED
+from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED, calculate_expert_policy_save_path
 from src.algorithms.clustering_utils import ClusterAssignment, ClusterAssignmentMemory
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL
 from src.dataset_processing.data import VSLPreferenceDataset
@@ -404,15 +405,18 @@ if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
     # IMPORTANT: Default Args are specified depending on the environment in config.json
     parser_args = filter_none_args(parse_args())
-    
+    pprint.pprint(parser_args)
+    np.random.seed(parser_args.seed)
+    torch.manual_seed(parser_args.seed)
+    random.seed(parser_args.seed)
+    rng_for_algorithms = np.random.default_rng(parser_args.seed)
+
+
     _, experiment_name = find_parse_ename(parser_args.experiment_name)
-    data = load_training_results(
-        experiment_name)
-    print(list(data.target_agent_and_vs_to_learned_ones.values())[0])
-    #TODO: ESTO ES EL GROUNDING LEARNED:
-    print(data.metrics['learned_rewards'](list(data.target_agent_and_vs_to_learned_ones.keys())[0],1)(8,4))
-    
-    target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
+
+    data = load_training_results(ref_vsl_algo=None,
+        experiment_name=experiment_name)
+
     exp_parser_args_base = data.parser_args
 
     config = exp_parser_args_base['config']
@@ -422,7 +426,7 @@ if __name__ == "__main__":
     # This will look again into the config files to see if there are new fields (wont update the old ones)
     config_actual = load_json_config(exp_parser_args.config_file)
     society_config_actual = load_json_config(exp_parser_args.society_file if hasattr(exp_parser_args, 'society_file') else 'societies.json')
-
+    
     
     # If a config file is specified, load it and override command line args
     merge_dicts_recursive(config, config_actual)
@@ -432,49 +436,16 @@ if __name__ == "__main__":
     experiment_name = exp_parser_args.experiment_name
     dataset_name = exp_parser_args.dataset_name
     
-    pprint.pprint(parser_args)
-    np.random.seed(parser_args.seed)
-    torch.manual_seed(parser_args.seed)
-    random.seed(parser_args.seed)
-    rng_for_algorithms = np.random.default_rng(parser_args.seed)
-
     environment_data = config[exp_parser_args.environment]
     
     society_data = society_config[exp_parser_args.environment][exp_parser_args.society_name]
     alg_config = environment_data['algorithm_config'][exp_parser_args.algorithm]
 
     opt_kwargs, opt_class = parse_optimizer_data(environment_data, alg_config)
-    
-
-    #single_state = np.zeros_like(data.env_state.initial_state_dist)
-    #single_state[323] = 1.0
-    #data.env_state.set_initial_state_distribution(single_state)
-    exp_estimated, exp_estimated_real, trajs_sampled = data.policies.calculate_value_grounding_expectancy(value_grounding=
-        lambda state=None, action=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action),
-        target_align_func=learned_al_aid,
-        seed=parser_args.seed,
-        n_rep_per_seed=1,
-        n_seeds=400,
-        stochastic=True,
-        initial_state_distribution=data.env_state.initial_state_dist,
-        #initial_state_distribution=single_state
-        )
-    exp_precise_estimated, exp_precise_real= data.policies.calculate_value_grounding_expectancy_precise(value_grounding=
-        lambda state=None, action=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action),
-        target_align_func=learned_al_aid,
-         initial_state_distribution=data.env_state.initial_state_dist,
-        #initial_state_distribution=single_state,
-        stochastic=True
-        )
-    print(f"Value grounding expectancy: {exp_estimated} vs precise: {exp_precise_estimated}")
-    print(f"Value grounding real: {exp_estimated_real} vs precise: {exp_precise_real}")
-    example_model: LinearVSLRewardFunction = list(data.reward_net_pair_agent_and_vs.values())[0]
-    env = example_model.remove_env()
-    example_model.set_env(env)
-
 
     path = os.path.join(
         DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=exp_parser_args.reward_epsilon))
+    
     try:
         dataset_train = VSLPreferenceDataset.load(
             os.path.join(path, "dataset_train.pkl"))
@@ -484,8 +455,21 @@ if __name__ == "__main__":
         dataset_train = VSLPreferenceDataset.load(
             os.path.join(path, "dataset.pkl"))
         dataset_test = []
+    
+    example_model: LinearVSLRewardFunction = list(data.reward_net_pair_agent_and_vs.values())[0]
+    env = example_model.remove_env()
+    assert env is not None, "The environment should not be None. It should be set in the reward net."
+    example_model.set_env(env)
     if exp_parser_args.algorithm == 'pc':
-
+        learning_policy_kwargs: Dict = alg_config['learning_policy_kwargs'][alg_config['learning_policy_class']]
+        learning_policy_class = alg_config['learning_policy_class']
+        epclass, epkwargs = parse_policy_approximator(
+                ref_class=learning_policy_class,
+                all_agent_groundings_to_save_files=None,
+                learner_or_expert= 'learner',
+                env_name=environment_data['name'], 
+                society_data=society_data, environment_data=environment_data,
+                ref_policy_kwargs=learning_policy_kwargs, environment=env)
         # TODO: K FOLD CROSS VALIDATION. AND ALSO TEST SET EVALUATION!!!
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
             env=env,
@@ -509,70 +493,213 @@ if __name__ == "__main__":
             reward_trainer_kwargs=alg_config['reward_trainer_kwargs'],
             query_schedule=alg_config['query_schedule'],
             vgl_target_align_funcs=environment_data['basic_profiles'],
-            approximator_kwargs=alg_config['approximator_kwargs'],
-            policy_approximator=PolicyApproximators(alg_config['policy_approximation_method']),
+            #approximator_kwargs=alg_config['approximator_kwargs'],
+            #policy_approximator=PolicyApproximators(alg_config['policy_approximation_method']),
             rng=rng_for_algorithms,
             # This is only used for testing purposes
             expert_is_stochastic=society_data['stochastic_expert'],
             loss_class=alg_config['loss_class'],
             loss_kwargs=alg_config['loss_kwargs'],
-            assume_variable_horizon=environment_data['assume_variable_horizon']
+            assume_variable_horizon=environment_data['assume_variable_horizon'],
+            learning_policy_class=epclass,
+            learning_policy_random_config_kwargs=epkwargs,
+            learning_policy_kwargs=learning_policy_kwargs,
 
         )
-    print(data.historic_assignments[0])
-    print(data.metrics['assignment_memory'])
+    vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
+    data = load_training_results(ref_vsl_algo=vsl_algo,
+        experiment_name=experiment_name)
+    print(list(data.target_agent_and_vs_to_learned_ones.values())[0])
+    
+    print(data.metrics['learned_rewards'](list(data.target_agent_and_vs_to_learned_ones.keys())[0],1))
+    
+    target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
+    
+    
+    
+    
+
+    # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
+    exp_estimated, exp_estimated_real, trajs_sampled = data.policies.calculate_value_grounding_expectancy(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,),
+        policy_align_func=learned_al_aid,
+        seed=parser_args.seed,
+        n_rep_per_seed=1,
+        n_seeds=400,
+        stochastic=society_data['stochastic_expert'],
+        initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None # TODO: this do not make sense in general...
+        #initial_state_distribution=single_state
+        )
+    # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
+    exp_precise_estimated = None
+    exp_precise_real = None
+    if society_data['is_tabular']:
+        exp_precise_estimated, exp_precise_real= data.policies.calculate_value_grounding_expectancy_precise(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done),
+        policy_align_func=learned_al_aid,
+         initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+        
+        stochastic=society_data['stochastic_expert']
+        )
+    
+    
+    print(f"For target agent {target_al_aid} to learned cluster {learned_al_aid}")
+    print(f"Value grounding learned from learned policiy: {exp_estimated} vs precise: {exp_precise_estimated}")
+    print(f"Value grounding real from learned policy: {exp_estimated_real} vs precise: {exp_precise_real}")
+    #exit(0)
+
+
+        
+    #print(data.historic_assignments[0])
+    #print(data.metrics['assignment_memory'])
     assignment_memory: ClusterAssignmentMemory = data.metrics['assignment_memory']
     assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
-    print(assignment_memory.memory[0])
-
+    #print(assignment_memory.memory[0])
+    
 
     target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
     unique_al = set([t[1] for t in data.target_agent_and_vs_to_learned_ones.keys()])
-    print(unique_al)
+    #print(unique_al)
     targets_all = []
     for t,v in  data.target_agent_and_vs_to_learned_ones.items():
         if t[1] in unique_al and t[1] not in [tt[1] for tt in targets_all]:
             targets_all.append(t)
-    print(targets_all)
+    #print(targets_all)
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
                                          learned_rewards_per_al_func=
-                                         lambda target: (lambda state=None, action=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action)))
-                                         , vsi_or_vgl='vgl',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-                                         namefig='prueba_rpairs.png', show=True,
+                                         lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
+                                         , vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig='prueba_rpairs_SAMPLED_WITH_LearnedPol.png', show=parser_args.show,
                                          trajs_sampled=trajs_sampled)
-    plot_learned_and_expert_rewards(vsl_algo=vsl_algo, 
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None, next_state=None, done=None,vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
+                                         , vsi_or_vgl='sim',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig='prueba_rpairs_ORIGINAL.png', show=parser_args.show,
+                                         trajs_sampled=list(dataset_train.fragments1) + list(dataset_train.fragments2))
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None,next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
+                                         , vsi_or_vgl='vgl',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig='prueba_rpairs_TEST_TRAJS.png', show=parser_args.show,
+                                         trajs_sampled=list(dataset_test.fragments1) + list(dataset_test.fragments2))
+    
+    if society_data['is_tabular']:
+        plot_learned_and_expert_rewards(vsl_algo=vsl_algo, 
                                     learned_rewards_per_al_func=lambda target: (
-                                        lambda state=None, action=None, vi=(int(
+                                        lambda state=None, action=None, next_state=None, done=None,vi=(int(
                                             np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(
                                                 data.metrics['learned_rewards'](target,vg_or_vs=vi)(
-                                                    state=state, action=action)))
+                                                    state=state, action=action,next_state=next_state, done=done,)))
                                     , vsi_or_vgl='vgl',
         target_align_funcs_to_learned_align_funcs={target_al_aid: data.target_agent_and_vs_to_learned_ones[target_al_aid]},
-        namefig='prueba_r.png', show=True,
+        namefig='prueba_r.png', show=parser_args.show,
          targets=targets_all,
         )
     if exp_parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
-    vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
+    
+    #vsl_algo.set_reward_net(list(data.reward_net_pair_agent_and_vs.values())[0])
+    #vsl_algo.reward_net_per_agent = data.reward_net_pair_agent_and_vs
+    #vsl_algo.learned_policy_per_va = data.policies
+    
+    print(vsl_algo)
+    
     env: TabularVAMDP = data.env_state
     
-    epi = VAlignedDictSpaceActionPolicy(policy_per_va_dict={t: mce_partition_fh(env, reward=env.reward_matrix_per_align_func(t[1]),
-                                        discount=1.0, deterministic=False)[2] for t in targets_all},env=env)
-    plot_learned_to_expert_policies(expert_policy=epi, learnt_policy=data.policies
+    
+    agent_groundings = [tuple(ag['grounding'])
+                        for ag in society_data['agents']]
+    grounding_files = society_config[exp_parser_args.environment]['groundings']
+    all_agent_groundings_to_save_files = dict(
+        {agg: [grounding_files[agg[i]] for i in range(len(agg))] for agg in set(agent_groundings)})
+    
+    expert_policy_kwargs: Dict = alg_config['expert_policy_kwargs'][alg_config['expert_policy_class']]
+    expert_policy_class = alg_config['expert_policy_class']
+
+    epclass, epkwargs = parse_policy_approximator(
+            ref_class=expert_policy_class,
+            all_agent_groundings_to_save_files=None,
+            learner_or_expert= 'expert',
+            env_name=environment_data['name'], 
+            society_data=society_data, environment_data=environment_data,
+            ref_policy_kwargs=expert_policy_kwargs, environment=env, grounding_variant='default')
+
+    epi = epclass.load(ref_env=env, path=calculate_expert_policy_save_path(
+            environment_name=exp_parser_args.environment, 
+            dataset_name=exp_parser_args.dataset_name,
+            society_name=exp_parser_args.society_name,
+            class_name=epclass.__name__,
+            grounding_name=agent_groundings[0]))
+    for target_ag_and_vs in data.target_agent_and_vs_to_learned_ones.keys():
+        epi.set_policy_for_va(target_ag_and_vs, epi.policy_per_va(target_ag_and_vs[1]))
+    """epi = VAlignedDictSpaceActionPolicy(policy_per_va_dict={t: mce_partition_fh(env, reward=env.reward_matrix_per_align_func(t[1]),
+                                        discount=1.0, deterministic=not society_data['stochastic_expert'])[2] for t in targets_all},env=env)
+    """
+    # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
+    exp_precise_estimated = None
+    exp_precise_real = None
+    if society_data['is_tabular']:
+        exp_precise_estimated, exp_precise_real= epi.calculate_value_grounding_expectancy_precise(value_grounding=
+            lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
+            policy_align_func=target_al_aid,
+            initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+            
+            stochastic=society_data['stochastic_expert']
+            )
+        
+    # This is the learned grounding and the real grounding expectation from the expert policies 
+    exp_estimated, exp_estimated_real, trajs_sampled2 = epi.calculate_value_grounding_expectancy(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
+        policy_align_func=target_al_aid,
+        seed=parser_args.seed,
+        n_rep_per_seed=1,
+        n_seeds=400,
+        stochastic=society_data['stochastic_expert'],
+        initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+        #initial_state_distribution=single_state
+        )
+    # This is the learned grounding and the real grounding expectation from the expert policies
+    exp_precise_estimated = None
+    exp_precise_real = None
+    if society_data['is_tabular']:
+        exp_precise_estimated, exp_precise_real= epi.calculate_value_grounding_expectancy_precise(value_grounding=
+            lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
+            policy_align_func=target_al_aid,
+            initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+            
+            stochastic=society_data['stochastic_expert']
+            )
+    print(f"Value grounding learned from expert policy: {exp_estimated} vs precise: {exp_precise_estimated}")
+    print(f"Value grounding real from expert policy: {exp_estimated_real} vs precise: {exp_precise_real}")
+    
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done)))
+                                         , vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig='prueba_rpairs_SAMPLED_WITH_EXPERT.png', show=parser_args.show,
+                                         trajs_sampled=trajs_sampled2)
+    
+    
+    
+    if society_data['is_tabular']:
+        plot_learned_to_expert_policies(expert_policy=epi, learnt_policy=data.policies
                                     , vsl_algo=vsl_algo,
         vsi_or_vgl='sim',
         target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-        namefig='prueba_r.png', show=True,
+        namefig='prueba_r.png', show=parser_args.show,
          targets=targets_all,)
-    plot_learned_and_expert_occupancy_measures(
-        vsl_algo=vsl_algo, 
-        learned_rewards_per_al_func=lambda target: (lambda state=None, action=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action)))
-        , vsi_or_vgl='vgl',
-        target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-        namefig='prueba_r.png', show=True,
-        targets=targets_all,
-    )
-    exit(0)
+        
+        plot_learned_and_expert_occupancy_measures(
+            vsl_algo=vsl_algo, 
+            learned_rewards_per_al_func=lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done,)))
+            , vsi_or_vgl='vgl',
+            target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+            namefig='prueba_r.png', show=parser_args.show,
+            assumed_expert_pi=epi,
+            targets=targets_all,
+        )
+    
     assignment_memory: ClusterAssignmentMemory = data.metrics['assignment_memory']
     assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
     num_digits = len(str(len(assignment_memory.memory)))
@@ -652,6 +779,7 @@ if __name__ == "__main__":
 
     plot_test = True
     if len(dataset_test) == 0:
+        exit(0)
         plot_test = False
 
     
@@ -669,29 +797,30 @@ if __name__ == "__main__":
         test_assignment_memory.maximum_conciseness_vs = assignment_memory.maximum_conciseness_vs
         test_assignment_memory.maximum_conciseness_gr = assignment_memory.maximum_conciseness_gr # these two are train estimations.
         for a in assignment_memory.memory:
+            a.set_env(env)
             test_assignment = vsl_algo.evaluate_assignment(a, dataset_test)
             test_assignment_memory.memory.append(test_assignment) # just insert it.
-        test_assignments_identifier_to_assignment = [
-            (f"assign_p{str(i+1).zfill(num_digits)}_in_train", test_assignment_memory.memory[i]) for i in range(0, len(test_assignment_memory.memory))
-        ]
+        test_assignments_identifier_to_assignment =  {f"assign_p{str(i+1).zfill(num_digits)}_in_train": test_assignment_memory.memory[i] for i in range(0, len(test_assignment_memory.memory))}
+        
         best_vs_then_gr_assignment_test = vsl_algo.evaluate_assignment(best_vs_then_gr_assignment, dataset_test)
         best_gr_then_vs_assignment_test = vsl_algo.evaluate_assignment(best_gr_then_vs_assignment, dataset_test)
 
     # 1: Context feature analysis
-    env: RouteChoiceEnvironmentApolloComfort
-    import matplotlib.pyplot as plt
+    if False:
+        env: RouteChoiceEnvironmentApolloComfort
+        import matplotlib.pyplot as plt
 
-    values_names = environment_data['values_names']
-    #contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
-    contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_assignment')
-    for aid, assignment in assignments_identifier_to_assignment.items():
-        contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
-    if plot_test:
-        #contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
-        contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_assignment')
-        for aid, assignment in test_assignments_identifier_to_assignment.items():
-            contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
-        
+        values_names = environment_data['values_names']
+        #contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
+        contextual_feature_analysis(experiment_name, values_names, dataset_train, best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_assignment')
+        for aid, assignment in assignments_identifier_to_assignment.items():
+            contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='train_set', assignment_identifier=aid)
+        if plot_test:
+            #contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
+            contextual_feature_analysis(experiment_name, values_names, dataset_test, best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_assignment')
+            for aid, assignment in test_assignments_identifier_to_assignment.items():
+                contextual_feature_analysis(experiment_name, values_names, dataset_train, assignment, label='test_set', assignment_identifier=aid)
+            
     # 2: tables.
     # Put for the first, middle, and last assignment in separated tables.
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
@@ -723,71 +852,72 @@ if __name__ == "__main__":
 
     
     # 3: Explainability
-    if isinstance(env, RouteChoiceEnvironmentApolloComfort):
-        if plot_test:
-            data_test = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_test.fragments1, dataset_test.fragments2)])
-        data_train = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_train.fragments1, dataset_train.fragments2)])
-    else:
-        env: TabularVAMDP
-        data_train =  np.concatenate([env.observation_matrix, env.observation_matrix], axis=1)
-        print(data_train.shape)
-        # TODO, explainability here is not straightforward...
-        data_test = None
+    if False:
+        if isinstance(env, RouteChoiceEnvironmentApolloComfort):
+            if plot_test:
+                data_test = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_test.fragments1, dataset_test.fragments2)])
+            data_train = np.array([[*t1.obs[0], *t2.obs[0]] for (t1, t2) in zip(dataset_train.fragments1, dataset_train.fragments2)])
+        else:
+            env: TabularVAMDP
+            data_train =  np.concatenate([env.observation_matrix, env.observation_matrix], axis=1)
+            print(data_train.shape)
+            # TODO, explainability here is not straightforward...
+            data_test = None
 
-    for i, (data_train_or_test, dataset_train_or_test) in enumerate(zip([data_train, data_test], [dataset_train, dataset_test])):
-        if not plot_test and i == 1:
-            continue
+        for i, (data_train_or_test, dataset_train_or_test) in enumerate(zip([data_train, data_test], [dataset_train, dataset_test])):
+            if not plot_test and i == 1:
+                continue
 
-        agent = dataset_train_or_test.agent_ids[0]
+            agent = dataset_train_or_test.agent_ids[0]
 
-        feature_names = ['Time T1', 'Cost T1', 'Headway T1', 'Interchanges T1', 'Time T2', ' Cost T2', 'Headway T2', 'Interchanges T2']
-        reward_model_per_value = []
-        obs_acts_next_obs_idxs = {'obs': list(range(4)), 'acts': [0]}
-        for value in range(dataset_train.n_values): 
-            def obs_shap_to_fragment_pairs(obs):
-                return (obs[..., :obs.shape[-1] // 2], obs[..., obs.shape[-1] // 2:])
-            reward_model_per_value.append( lambda obs: vsl_algo.preference_model.predict_proba(fragment_pairs=obs_shap_to_fragment_pairs(obs), 
-                                                                                            
-                                        obs_acts_next_obs_idxs=obs_acts_next_obs_idxs, alignment=vsl_algo.env.basic_profiles[value],
-                                        model=best_vs_then_gr_assignment.reward_model_per_agent_id[agent]))
-            
-            
-            s = b.MorrisSensitivity(data=data_train_or_test, model=reward_model_per_value[value], feature_names=feature_names)
-            
-            #explanation = s.explain_local(data[0:5], y=dataset_test.preferences_with_grounding[0:5,value])
-            explanation = s.explain_global( name="test_explanation")
-            fig = explanation.visualize()
+            feature_names = ['Time T1', 'Cost T1', 'Headway T1', 'Interchanges T1', 'Time T2', ' Cost T2', 'Headway T2', 'Interchanges T2']
+            reward_model_per_value = []
+            obs_acts_next_obs_idxs = {'obs': list(range(4)), 'acts': [0]}
+            for value in range(dataset_train.n_values): 
+                def obs_shap_to_fragment_pairs(obs):
+                    return (obs[..., :obs.shape[-1] // 2], obs[..., obs.shape[-1] // 2:])
+                reward_model_per_value.append( lambda obs: vsl_algo.preference_model.predict_proba(fragment_pairs=obs_shap_to_fragment_pairs(obs), 
+                                                                                                
+                                            obs_acts_next_obs_idxs=obs_acts_next_obs_idxs, alignment=vsl_algo.env.basic_profiles[value],
+                                            model=best_vs_then_gr_assignment.reward_model_per_agent_id[agent]))
+                
+                
+                s = b.MorrisSensitivity(data=data_train_or_test, model=reward_model_per_value[value], feature_names=feature_names)
+                
+                #explanation = s.explain_local(data[0:5], y=dataset_test.preferences_with_grounding[0:5,value])
+                explanation = s.explain_global( name="test_explanation")
+                fig = explanation.visualize()
 
-            explanations_dir = os.path.join('test_results', experiment_name, 'train_set' if i == 0 else 'test_set', 'explanations')
-            morris_dir = os.path.join(explanations_dir, "morris")
-            os.makedirs(morris_dir, exist_ok=True)
-            path = os.path.join(morris_dir, f"morris_{values_names[value]}.pdf")
-            print("Saving morris explanation to", path)
-            #os.makedirs(f"demo_images", exist_ok=True)
-            fig.write_image(path)
+                explanations_dir = os.path.join('test_results', experiment_name, 'train_set' if i == 0 else 'test_set', 'explanations')
+                morris_dir = os.path.join(explanations_dir, "morris")
+                os.makedirs(morris_dir, exist_ok=True)
+                path = os.path.join(morris_dir, f"morris_{values_names[value]}.pdf")
+                print("Saving morris explanation to", path)
+                #os.makedirs(f"demo_images", exist_ok=True)
+                fig.write_image(path)
 
-            # Create a SHAP explainer for the reward model
-            """explainer = shap.explainers.KernelExplainer(reward_model_per_value[value], data_train_or_test)"""
+                # Create a SHAP explainer for the reward model
+                """explainer = shap.explainers.KernelExplainer(reward_model_per_value[value], data_train_or_test)"""
 
-            # Generate global SHAP values
-            """shap_values = explainer(data_train_or_test[0:10])
+                # Generate global SHAP values
+                """shap_values = explainer(data_train_or_test[0:10])
 
-            # Visualize the global feature importance
-            explanations_dir = os.path.join('test_results', experiment_name, 'explanations')
-            shap_dir = os.path.join(explanations_dir, "shap")
-            os.makedirs(shap_dir, exist_ok=True)
-            path_summary = os.path.join(shap_dir, f"shap_summary_{values_names[value]}.pdf")
-            path_bar = os.path.join(shap_dir, f"shap_bar_{values_names[value]}.pdf")
+                # Visualize the global feature importance
+                explanations_dir = os.path.join('test_results', experiment_name, 'explanations')
+                shap_dir = os.path.join(explanations_dir, "shap")
+                os.makedirs(shap_dir, exist_ok=True)
+                path_summary = os.path.join(shap_dir, f"shap_summary_{values_names[value]}.pdf")
+                path_bar = os.path.join(shap_dir, f"shap_bar_{values_names[value]}.pdf")
 
-            print("Saving SHAP summary explanation to", path_summary)
-            shap.summary_plot(shap_values, data_train_or_test[0:10], feature_names=feature_names, show=False)
-            plt.savefig(path_summary)
-            plt.close()
+                print("Saving SHAP summary explanation to", path_summary)
+                shap.summary_plot(shap_values, data_train_or_test[0:10], feature_names=feature_names, show=False)
+                plt.savefig(path_summary)
+                plt.close()
 
-            print("Saving SHAP bar explanation to", path_bar)
-            shap.summary_plot(shap_values, data_train_or_test, feature_names=feature_names, plot_type="bar", show=False)
-            plt.savefig(path_bar)
-            plt.close()"""
+                print("Saving SHAP bar explanation to", path_bar)
+                shap.summary_plot(shap_values, data_train_or_test, feature_names=feature_names, plot_type="bar", show=False)
+                plt.savefig(path_bar)
+                plt.close()"""
 
 
     print(best_gr_then_vs_assignment)

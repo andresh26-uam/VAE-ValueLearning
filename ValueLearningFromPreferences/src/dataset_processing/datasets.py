@@ -11,7 +11,8 @@ from typing import Sequence
 
 
 
-def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None, debug_grounding=False,save=True):
+def create_dataset(parser_args, config, society_data={'name': "default", "same_trajectories_for_each_agent_type": False}, train_or_test=None, default_groundings=None, debug_grounding=False,save=True,
+                   split_ratio=0.25):
     environment_data = config[parser_args.environment]
 
     dataset_name = parser_args.dataset_name
@@ -45,18 +46,32 @@ def create_dataset(parser_args, config, society_data={'name': "default", "same_t
             epsilon=parser_args.reward_epsilon, dataset_name=dataset_name, environment_data=environment_data, society_data=society_data, ag=ag, dtype=parser_args.dtype, debug_grounding=debug_grounding)
         trajs_ag = np.asarray(load_trajectories(dataset_name=dataset_name,
                               ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype))
+        
+        if train_or_test is None:
+            trajs_ag_all = trajs_ag 
+        else:
+            ttrain = load_trajectories(dataset_name=dataset_name_pure+'_train',
+                              ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype)
+            ttest = load_trajectories(dataset_name=dataset_name_pure+'_test',
+                              ag=ag, environment_data=environment_data, society_data=society_data,  override_dtype=parser_args.dtype)
+            trajs_ag_all = np.concatenate((ttrain, ttest), axis=0)
+        n_pairs_per_agent = len(trajs_ag)//ag['n_agents']
+        n_pairs_prime = n_pairs_per_agent
+        #print(ag['data']['trajectory_pairs'], n_pairs_per_agent, len(trajs_ag))
+        #exit(0)
 
-        for t in range(ag['n_agents']-2):
-            np.testing.assert_allclose(idxs[0:ag['data']['trajectory_pairs']], (idxs[(
-                t+1)*ag['data']['trajectory_pairs']:(t+2)*ag['data']['trajectory_pairs']] - ag['data']['trajectory_pairs']*(t+1)))
+        if society_data['same_trajectories_for_each_agent_type']:
+            for t in range(ag['n_agents']-2):
+                np.testing.assert_allclose(idxs[0:n_pairs_prime], (idxs[(
+                    t+1)*n_pairs_prime:(t+2)*n_pairs_prime] - n_pairs_prime*(t+1)))
 
-            for traj_i in range(ag['data']['trajectory_pairs']):
+                for traj_i in range(n_pairs_prime):
 
-                np.testing.assert_allclose(trajs_ag[traj_i + t*ag['data']['trajectory_pairs']].obs, trajs_ag[(
-                    t+1)*ag['data']['trajectory_pairs'] + traj_i].obs)
+                            np.testing.assert_allclose(trajs_ag[traj_i + t*n_pairs_prime].obs, trajs_ag[(
+                                t+1)*n_pairs_prime + traj_i].obs)
 
         ag_point = 0
-        n_pairs_per_agent = len(idxs)//ag['n_agents']
+        
         for id in range(ag['n_agents']):
             agent_id = ag['name']+'_'+str(id)
             ag_idxs = idxs[ag_point:ag_point+n_pairs_per_agent]

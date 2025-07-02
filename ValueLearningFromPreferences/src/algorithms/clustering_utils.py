@@ -236,12 +236,19 @@ class ClusterAssignment():
 
         env_state = self.get_remove_env()
         env_path  = os.path.join(path, "env_state.pkl")
+        
 
-        if env_state is not None and not os.path.exists(env_path):
-            
-            with open(env_path, 'wb') as fe:
+        if env_state is not None: #and (not os.path.exists(env_path) or os.path.getsize(env_path) < 10):
+            try: 
+                fe = open(env_path, 'wb')
                 dill.dump(env_state, fe)
-            
+            except TypeError as e:
+                print(f"Error saving environment state: {e}")
+                print("Trying to save constructor to ", env_path)
+                #print(f"env_state.__init__: {env_state.__init__}")
+                with open(env_path, 'wb') as fe:
+                    dill.dump({'constructor': env_state.env_name, 'kwargs': env_state.init__kwargs}, fe)
+                
             with open(save_path, 'wb') as f:
                 dill.dump(self, f)
 

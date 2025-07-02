@@ -14,27 +14,30 @@ def save_preferences(idxs: np.ndarray, discounted_sums: np.ndarray, discounted_s
     path = calculate_preferences_save_path(
         dataset_name, ag, environment_data, society_data, epsilon)
     path = os.path.join(COMPARISONS_DATASETS_PATH, path)
+    print("SAVING REWARD PREFERENCES TO: ", path)
     os.makedirs(path, exist_ok=True)
     csv_path = os.path.join(path, 'agent_preferences_file.csv')
     with open(csv_path, 'w', newline='') as csvfile:
         fieldnames = ['Traj1', 'Traj2', 'CR1', 'CR2', 'Flag']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        for i in range(len(discounted_sums)-1):
+        for i in range(len(discounted_sums)):
+            inext = (i+1) % len(discounted_sums)
             if real_preference is not None:
-                if (idxs[i], idxs[i+1]) not in real_preference.keys():
+                if (idxs[i], idxs[(i+1)%len(discounted_sums)]) not in real_preference.keys():
                     continue
+            print("INSERTING", idxs[i], idxs[(i+1)%len(discounted_sums)])
+            assert idxs[i] < len(discounted_sums) and idxs[inext] < len(discounted_sums), f"idxs: {idxs[i]}, {idxs[i+1]} out of bounds for discounted_sums of length {len(discounted_sums)}"
             traj_i = discounted_sums[idxs[i]]
-            traj_j = discounted_sums[idxs[i+1]]
+            traj_j = discounted_sums[idxs[(i+1)%len(discounted_sums)]]
             comparison_flag = compare_trajectories(
                 traj_i, traj_j, epsilon=epsilon)
             if real_preference is not None:
                 comparison_flag_real = float(
-                    real_preference[(idxs[i], idxs[i+1])])
+                    real_preference[(idxs[i], idxs[(i+1)%len(discounted_sums)])])
 
                 assert comparison_flag_real == comparison_flag
-            writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
+            writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(i+1)%len(discounted_sums)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
 
     for vi in range(discounted_sums_per_grounding.shape[0]):
         csv_path = os.path.join(path, f'value_{vi}_preferences_file.csv')
@@ -43,22 +46,23 @@ def save_preferences(idxs: np.ndarray, discounted_sums: np.ndarray, discounted_s
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
 
-            for i in range(len(discounted_sums_per_grounding[vi])-1):
+            for i in range(len(discounted_sums_per_grounding[vi])):
+                inext = (i+1)%len(discounted_sums_per_grounding[vi])
+
                 traj_i = discounted_sums_per_grounding[vi][idxs[i]]
-                traj_j = discounted_sums_per_grounding[vi][idxs[(
-                    i+1)]]
+                traj_j = discounted_sums_per_grounding[vi][idxs[inext]]
                 comparison_flag = compare_trajectories(
                     traj_i, traj_j, epsilon=epsilon)
 
                 if real_grounding_preference is not None:
-                    if (idxs[i], idxs[i+1]) in real_grounding_preference[vi].keys():
+                    if (idxs[i], idxs[inext]) in real_grounding_preference[vi].keys():
                         comparison_flag_real = float(
-                            real_grounding_preference[vi][(idxs[i], idxs[i+1])])
+                            real_grounding_preference[vi][(idxs[i], idxs[inext])])
                         writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                            i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag_real})
+                            inext)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag_real})
                 else:
                     writer.writerow({'Traj1': idxs[i], 'Traj2': idxs[(
-                        i+1)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
+                        inext)], 'CR1': traj_i, 'CR2': traj_j, 'Flag': comparison_flag})
 
 
 def load_preferences(dataset_name, ag, environment_data, society_data, epsilon, dtype=np.float32, debug_grounding=True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -140,6 +144,7 @@ def load_preferences(dataset_name, ag, environment_data, society_data, epsilon, 
                 if debug_grounding:
                     assert compare_trajectories(
                     cr1, cr2, epsilon) == preferences_per_grounding[ir, vi]
+    
     if isinstance(dtype, torch.dtype):
         return np.array(idxs, dtype=np.int_), discounted_sums, discounted_sums_per_grounding, torch.tensor(preferences, dtype=dtype, requires_grad=False), preferences_per_grounding
     else:

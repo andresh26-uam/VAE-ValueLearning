@@ -215,9 +215,6 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         super().__init__(model, noise_prob, discount_factor, threshold)
         self.algorithm = algorithm
 
-        self.state_dim = self.algorithm.env.state_dim
-        self.action_dim = self.algorithm.env.action_dim
-
         self.dummy_models = []
 
     def conciseness_pairwise_gr(self, 
@@ -544,10 +541,13 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         state = None
         action = None
         next_state = None
-        state = util.safe_to_tensor(
+       
+        if self.model.use_state:
+            state = util.safe_to_tensor(
                 transitions.obs, device=self.model.device, dtype=self.model.dtype)
-        action = util.safe_to_tensor(
-            transitions.acts, device=self.model.device, dtype=self.model.dtype)
+        if self.model.use_action:
+            action = util.safe_to_tensor(
+                transitions.acts, device=self.model.device, dtype=self.model.dtype)
         if self.model.use_next_state:
             next_state = util.safe_to_tensor(
             transitions.next_obs, device=self.model.device, dtype=self.model.dtype)
@@ -588,8 +588,8 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
             #th.testing.assert_close(rews_gr[:,indexes], th.zeros((self.algorithm.env.n_values, len(deepcopy(states_i))), device=self.model.device, dtype=self.model.dtype))
 
             # done = transitions.dones
-            states_i = state[indexes]
-            action_i = action[indexes]
+            states_i = state[indexes] if state is not None else None
+            action_i = action[indexes] if action is not None else None
             next_states_i = next_state[indexes] if next_state is not None else None
 
             if only_with_alignment:
@@ -642,11 +642,11 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         if only_with_alignment:
             return rews, None
     
-        assert len(state) == len(action)
+        #assert len(state) == len(action)
         if not only_grounding:
-            assert rews.shape == (len(state),)
+            assert rews.shape == (len(transitions.obs),)
         assert rews_gr.shape == (
-            self.algorithm.env.n_values, len(state))
+            self.algorithm.env.n_values, len(transitions.obs))
         
         
         return rews, rews_gr
@@ -1083,7 +1083,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             metrics['loss_per_vi'][vi] = nl
             loss_gr += nl
         
-            assert not loss_gr.isnan()
+            assert not loss_gr.isnan(), probs_gr[0:10]
         
         metrics['loss_gr'] = loss_gr
         # end_time = time.time()

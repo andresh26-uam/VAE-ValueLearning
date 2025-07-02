@@ -18,12 +18,12 @@ import tqdm
 from src.algorithms.clustering_utils import ASSIGNMENT_CHECKPOINTS, ClusterAssignment, ClusterAssignmentMemory, assign_colors, check_assignment_consistency, check_grounding_value_system_networks_consistency_with_optim, check_optimizer_consistency
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 import torch as th
-
+import gymnasium as gym
 
 from src.algorithms.preference_based_vsl_lib import BasicRewardTrainerVSL, ConstrainedLoss, BaseVSLClusterRewardLoss, PrefLossClasses, PreferenceModelClusteredVSL, SobaLoss, SobaOptimizer, VSLCustomLoss, VSLOptimizer, calculate_accuracies, discordance, likelihood_x_is_target
 from src.algorithms.utils import PolicyApproximators, convert_nested_list_to_tuple, mce_partition_fh
 from src.dataset_processing.data import VSLPreferenceDataset
-from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy, ValueSystemLearningPolicy
+from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy, VAlignedDiscretePolicy, ValueSystemLearningPolicy
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, TrainingModes
 
 from imitation.algorithms import preference_comparisons
@@ -1427,10 +1427,15 @@ def load_historic_assignments(experiment_name, sample=20):
     file_list = os.listdir(save_folder)
     env_state = None
     if 'env_state.pkl' in file_list:
+        place_env = os.path.join(save_folder, 'env_state.pkl')
+        print("trying to load environment state from", place_env)
+        with open(place_env, 'rb') as f:
+                env_state = dill.load(f)
 
-        with open(os.path.join(save_folder, 'env_state.pkl'), 'rb') as f:
-            env_state = dill.load(f)
-            print("Loaded environment state:", env_state)
+        if isinstance(env_state, dict):
+            print("ENVSTATE", env_state)
+            env_state = gym.make(env_state.get('constructor', None), **env_state.get('kwargs', {}))
+        print("Loaded environment state:", env_state)
         file_list.remove('env_state.pkl')
 
     total_files = len(file_list)
@@ -1453,6 +1458,7 @@ def load_historic_assignments(experiment_name, sample=20):
 
 class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
     
+
     def __init__(self, env,
                  reward_net,
                  optimizer_cls=th.optim.Adam,
@@ -1470,8 +1476,8 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                  cluster_sizes=None,
                  vs_cluster_sizes=None,
                  vgl_target_align_funcs=[],
-                 approximator_kwargs={},
-                 policy_approximator=PolicyApproximators.MCE_ORIGINAL,
+                 #approximator_kwargs={},
+                 #policy_approximator=PolicyApproximators.MCE_ORIGINAL,
                  # 0 for deterministic preference sampling, 1 for totally random according to softmax probabilities
                  preference_sampling_temperature=0,
                  assume_variable_horizon=False,
@@ -1480,8 +1486,12 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                      'epochs': 5, 'lr': 0.05, 'regularizer_factory': None, 'batch_size': 32, 'minibatch_size': None, },
                  loss_class=preference_comparisons.CrossEntropyRewardLoss, loss_kwargs={},
 
+                 learning_policy_class=VAlignedDictSpaceActionPolicy,
+                 learning_policy_kwargs={'expose_state': True, 'policy_per_va_dict': {}},
+                 learning_policy_random_config_kwargs={'policy_per_va_dict': lambda env, targets: {pr: np.ones((env.state_dim, env.action_dim))/env.action_dim for pr in targets}},
+                    
                  *, custom_logger='disable'):
-
+        
         self.cluster_sizes = cluster_sizes
         self.debug_mode = debug_mode
         self.vs_L_clusters = vs_cluster_sizes if vs_cluster_sizes is not None else []
@@ -1506,8 +1516,6 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         self.allow_variable_horizon = assume_variable_horizon
 
         self.use_logger = custom_logger != 'disable'
-        self.policy_approximator = policy_approximator
-        self.approximator_kwargs = approximator_kwargs
         self.rng = rng
         if discount_factor_preferences is None:
             self.discount_factor_preferences = discount
@@ -1515,10 +1523,17 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
             self.discount_factor_preferences = discount_factor_preferences
 
         self.sample = not use_quantified_preference
+        
 
-        self.learned_policy_per_va = VAlignedDictSpaceActionPolicy(env=self.env, policy_per_va_dict={pr: np.ones(
-            (self.env.state_dim, self.env.action_dim))/self.env.action_dim for pr in self.vgl_target_align_funcs}, expose_state=True)
+        self.learning_policy_kwargs = learning_policy_kwargs
+        self.learning_policy_kwargs_random_config = deepcopy(self.learning_policy_kwargs)
+        self.learning_policy_kwargs_random_config.update(learning_policy_random_config_kwargs)
+        self.learning_policy_class = learning_policy_class
 
+        self.learned_policy_per_va = self.learning_policy_class(env=self.env, 
+                        **self.learning_policy_kwargs_random_config)
+        
+        
         self.dataset = dataset
 
         self.reward_trainer_kwargs = reward_trainer_kwargs
@@ -1803,10 +1818,12 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         return self.current_net.get_learned_align_function()
 
     def calculate_learned_policies(self, target_align_funcs) -> ValueSystemLearningPolicy:
-        self.learned_policy_per_va = VAlignedDictSpaceActionPolicy(
-            policy_per_va_dict={}, env=self.env, state_encoder=None, expose_state=True)
+        
+        # TODO: Learned policy agnostic of mce_partition_fh.
+        
         rewards = self.state_action_callable_reward_from_reward_net_per_target_align_func(
-            targets=target_align_funcs)
+            targets=target_align_funcs, return_groundings=True, )
+        # TODO TODO
 
         for target_align_func in target_align_funcs:
             """aid, target_profile = target_align_func
@@ -1822,13 +1839,20 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                 _, rewards[:, a] = self.calculate_rewards(align_func=learned_al_function, obs_mat=th.arange(self.env.state_dim), action_mat=th.tensor([a]*self.env.state_dim), next_state_obs_mat=next_states[:, a], 
                                                        reward_mode=self.training_mode, recover_previous_config_after_calculation=True, requires_grad=False, custom_model=reward_net, forward_groundings=False,)"""
 
-            _, _, pi = mce_partition_fh(self.env, reward=rewards(target_align_func)(),
-                                        discount=self.discount, deterministic=not self.learn_stochastic_policy)
+            #_, _, pi = self.env.__class__.compute_policy(self.env, reward=rewards(target_align_func), discount=self.discount, stochastic=self.learn_stochastic_policy)
 
             # self.learned_policy_per_va.set_policy_for_va(target_align_func, pi)
-            self.learned_policy_per_va.set_policy_for_va(
-                self.target_agent_and_align_func_to_learned_ones[target_align_func], pi)
+            grounding = rewards(target_align_func, vg_or_vs='vg')
+            reward_real = rewards(target_align_func, vg_or_vs='vs')
 
+            self.learned_policy_per_va.learn(
+                alignment_function=self.target_agent_and_align_func_to_learned_ones[target_align_func], 
+                grounding_function=grounding,
+                reward= reward_real,
+                **self.learning_policy_kwargs)
+            """self.learned_policy_per_va.set_policy_for_va(
+                self.target_agent_and_align_func_to_learned_ones[target_align_func], self.learned_policy_per_va.policy_per_va(self.target_agent_and_align_func_to_learned_ones[target_align_func]))
+            """
         return self.learned_policy_per_va
 
     def get_metrics(self):

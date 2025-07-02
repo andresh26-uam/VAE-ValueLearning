@@ -1,4 +1,5 @@
 import csv
+from functools import partial
 import pprint
 import matplotlib.pyplot as plt
 import itertools
@@ -8,7 +9,7 @@ import torch
 
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 from src.algorithms.utils import  mce_partition_fh, mce_occupancy_measures
-from src.policies.vsl_policies import VAlignedDiscreteSpaceActionPolicy
+from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy
 
 
 def get_color_gradient(c1, c2, mix):
@@ -193,7 +194,7 @@ def filter_values(data1, data2, min_value=-10):
     return combined_mask
 
 
-def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='reward_pairs', show=False, targets=None, trajs_sampled=None):
+def plot_learned_and_expert_reward_pairs(vsl_algo: BaseVSLAlgorithm, learned_rewards_per_al_func, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='reward_pairs', show=False, targets=None, trajs_sampled=None):
     # Select target alignment functions based on vsi_or_vgl
     targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
         vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
@@ -207,7 +208,7 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
     else:
         rows = 1  # If there are 3 or fewer targets, use a single row
         cols = num_targets
-    print(rows, cols, "NOOOO")
+        
     # Create figure and subplots with dynamic layout
     fig, axes = plt.subplots(rows, cols, figsize=(
         16, 8), constrained_layout=True)
@@ -232,31 +233,60 @@ def plot_learned_and_expert_reward_pairs(vsl_algo, learned_rewards_per_al_func, 
         else:
             learned_al = all_learned_al
             std_learned_al = [0 for _ in learned_al]
-
-        if isinstance(learned_rewards_per_al_func, list):
-            lr_per_round = [learned_rewards_per_al_func[j](
-                al)() for j in range(len(learned_rewards_per_al_func))]
-            learned_reward_al = np.mean(lr_per_round, axis=0)
-            std_reward_al = np.mean(np.std(lr_per_round, axis=0))
-        else:
-            learned_reward_al = learned_rewards_per_al_func(al)()
-
-        # Get expert rewards
-        expert_reward_al = vsl_algo.env.reward_matrix_per_align_func(al)
-
-        # Check shape consistency
-        assert learned_reward_al.shape == expert_reward_al.shape, "Learned and expert rewards must have the same shape"
-
-        # if sampling trajs, plot the aggregated rewards.
-        if trajs_sampled is not None:
-            if isinstance(trajs_sampled, list):
-                print([len(t) for t in trajs_sampled])
-                expert_reward_al =  np.array([np.sum(expert_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
-                learned_reward_al = np.array([np.sum(learned_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+        
+        # TODO: put it callable learner reward?
+        if hasattr(vsl_algo.learned_policy_per_va, 'state_dim'):
+            if isinstance(learned_rewards_per_al_func, list):
                 
+                
+                lr_per_round = [learned_rewards_per_al_func[j](
+                al)() for j in range(len(learned_rewards_per_al_func))]
+                learned_reward_al = np.mean(lr_per_round, axis=0)
+                std_reward_al = np.mean(np.std(lr_per_round, axis=0))
+            else:
+                learned_reward_al = learned_rewards_per_al_func(al)()
+
+            # Get expert rewards
+            expert_reward_al = vsl_algo.env.reward_matrix_per_align_func(al)
+
+            # Check shape consistency
+            assert learned_reward_al.shape == expert_reward_al.shape, "Learned and expert rewards must have the same shape"
+
+            # if sampling trajs, plot the aggregated rewards.
+            if trajs_sampled is not None:
+                traj_expert_rewards_al =  np.array([np.sum(expert_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+                traj_learned_rewards_al = np.array([np.sum(learned_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+        else:
+            # If the environment does not have state_dim, we assume it is a single value
+            
+            if isinstance(learned_rewards_per_al_func, list):
+                lr_per_round = [learned_rewards_per_al_func[j](
+                    al) for j in range(len(learned_rewards_per_al_func))]
+                
+            else:
+                lr_per_round  = [learned_rewards_per_al_func(al), ]
+            traj_expert_rewards_al = [0.0 for _ in range(len(lr_per_round))]
+            traj_learned_rewards_al = [0.0 for _ in range(len(lr_per_round))]
+            expert_reward_al = partial(vsl_algo.env.get_reward_per_align_func, align_func=al)
+                
+            for round_ in range(len(lr_per_round)):
+                learned_reward_al = lr_per_round[round_]
+                traj_expert_rewards_al[round_] = np.array(
+                    [np.sum(
+                        [expert_reward_al(state=s, action=a, next_state=ns, done=None) for s,a,ns in zip(
+                            trajs_sampled[j].obs[:-1], trajs_sampled[j].acts, trajs_sampled[j].obs[1:])])
+                              for j in range(len(trajs_sampled))])
+                traj_learned_rewards_al[round_] = np.array(
+                    [np.sum(
+                        [learned_reward_al(state=s, action=a, next_state=ns, done=None) for s,a,ns in zip(
+                            trajs_sampled[j].obs[:-1], trajs_sampled[j].acts, trajs_sampled[j].obs[1:])])
+                              for j in range(len(trajs_sampled))])
+            traj_learned_rewards_al = np.mean(np.array(traj_learned_rewards_al), axis=0)
+            traj_expert_rewards_al = np.mean(np.array(traj_expert_rewards_al), axis=0)
+            
         # Flatten rewards for plotting as pairs
-        learned_rewards_flat = learned_reward_al.flatten()
-        expert_rewards_flat = expert_reward_al.flatten()
+        learned_rewards_flat = traj_learned_rewards_al.flatten()
+        expert_rewards_flat = traj_expert_rewards_al.flatten()
 
         # Remove outliers and filter values smaller than a threshold
         """combined_mask = remove_outliers(
@@ -367,7 +397,7 @@ def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap=
 
 def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm, 
         learned_rewards_per_al_func,  vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, 
-        namefig='mce_vsl_test', show=False, targets=None):
+        namefig='mce_vsl_test', show=False, targets=None, assumed_expert_pi: VAlignedDictSpaceActionPolicy = None):
     targets = targets if targets is not None else (vsl_algo.vsi_target_align_funcs if vsi_or_vgl == 'vsi' else vsl_algo.vgl_target_align_funcs if vsi_or_vgl == 'vgl' else itertools.chain(
         vsl_algo.vsi_target_align_funcs, vsl_algo.vgl_target_align_funcs))
 
@@ -380,6 +410,7 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm,
     axesUp = subfigs[0].subplots(nrows=1, ncols=len(targets), sharey=True)
     axesDown = subfigs[1].subplots(nrows=1, ncols=len(targets), sharey=True)
 
+    assert isinstance(vsl_algo.learned_policy_per_va, VAlignedDictSpaceActionPolicy)
     for i, al in enumerate(targets):
 
         # Plot the first matrix
@@ -400,11 +431,10 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm,
                 occupancies.append(mce_occupancy_measures(
                     env=vsl_algo.env,
                     reward=learned_rewards_per_al_func[j](al)(),
+                    pi = vsl_algo.learned_policy_per_va.policy_per_va(target_align_funcs_to_learned_align_funcs[al]),
                     discount=vsl_algo.discount,
                     deterministic=not vsl_algo.learn_stochastic_policy,
-                    approximator_kwargs=vsl_algo.approximator_kwargs,
-                    policy_approximator=vsl_algo.policy_approximator,
-                    initial_state_distribution=vsl_algo.initial_state_distribution_test,
+                    initial_state_distribution=vsl_algo.env.initial_state_dist,
                     use_action_visitations=use_action_visitations)[1])
             learned_oc = np.mean(occupancies, axis=0)
             std_oc = np.mean(np.std(occupancies, axis=0))
@@ -412,31 +442,22 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm,
         else:
 
             std_oc = 0.0
-            print("PO", vsl_algo.policy_approximator)
             learned_oc = mce_occupancy_measures(env=vsl_algo.env,
                                                 reward=learned_rewards_per_al_func(al)(),
                                                 discount=vsl_algo.discount,
+                                                pi=vsl_algo.learned_policy_per_va.policy_per_va(target_align_funcs_to_learned_align_funcs[al]),
                                                 deterministic=not vsl_algo.learn_stochastic_policy,
-                                                approximator_kwargs=vsl_algo.approximator_kwargs,
-                                                policy_approximator=vsl_algo.policy_approximator,
                                                 initial_state_distribution=vsl_algo.env.initial_state_dist,
                                                 use_action_visitations=use_action_visitations)[1]
         ocs = np.transpose(learned_oc)
 
-        _, _, assumed_expert_pi = mce_partition_fh(vsl_algo.env, discount=vsl_algo.discount,
-                                                   reward=vsl_algo.env.reward_matrix_per_align_func(
-                                                       al),
-                                                   approximator_kwargs=vsl_algo.approximator_kwargs,
-                                                   policy_approximator=vsl_algo.policy_approximator,
-                                                    deterministic=not vsl_algo.stochastic_expert)
+        
 
         eocs = np.transpose(mce_occupancy_measures(env=vsl_algo.env,
                                                    reward=vsl_algo.env.reward_matrix_per_align_func(al),
                                                    discount=vsl_algo.discount,
-                                                   pi=assumed_expert_pi,
+                                                   pi=assumed_expert_pi.policy_per_va(al),
                                                    deterministic=not vsl_algo.learn_stochastic_policy,
-                                                   approximator_kwargs=vsl_algo.approximator_kwargs,
-                                                   policy_approximator=vsl_algo.policy_approximator,
                                                    initial_state_distribution=vsl_algo.env.initial_state_dist,
                                                    use_action_visitations=use_action_visitations)[1])
         # eocs2 = np.transpose(vsl_algo.mce_occupancy_measures(pi=expert_policy.policy_per_va(al), deterministic=not vsl_algo.expert_is_stochastic,  use_action_visitations=use_action_visitations)[1])

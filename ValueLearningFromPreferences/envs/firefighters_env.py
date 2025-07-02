@@ -1,5 +1,6 @@
 from copy import deepcopy
 import enum
+from functools import partial
 import os
 from typing import Any, SupportsFloat
 import numpy as np
@@ -11,7 +12,7 @@ from use_cases.firefighters_use_case.env import HighRiseFireEnv
 
 from gymnasium import spaces
 
-from envs.tabularVAenv import TabularVAMDP, encrypt_state
+from envs.tabularVAenv import TabularVAMDP, encrypt_state, grounding_func_from_matrix
 
 def calculate_s_trans_ONE_HOT_FEATURES(vec, state_space, action_space):
 
@@ -49,7 +50,10 @@ class FireFightersEnv(TabularVAMDP):
     def render(self):
         return self.real_env.render()
 
-    def __init__(self, feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):
+    def __init__(self, env_name= 'FireFighters-v0', feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):
+        self.init__kwargs = locals()
+        self.init__kwargs.pop('self', None)
+        self.init__kwargs.pop('__class__', None)
         self.real_env = HighRiseFireEnv()
 
         if feature_selection == FeatureSelectionFFEnv.ORIGINAL_OBSERVATIONS:
@@ -147,11 +151,12 @@ class FireFightersEnv(TabularVAMDP):
         # self._cur_state = self.real_env.state
 
         self.reward_matrix_per_va_dict = reward_matrix_per_va
-        super(FireFightersEnv, self).__init__(n_values=2,
+        super(FireFightersEnv, self).__init__(env_name=env_name,n_values=2,
                                               transition_matrix=transition_matrix, observation_matrix=observation_matrix,
                                               reward_matrix_per_va=self._get_reward_matrix_per_va,
                                               default_reward_matrix=reward_matrix_per_va[(0.0, 1.0)], horizon=horizon, initial_state_dist=self.initial_state_dist)
         self.set_align_func((1.0, 0.0))
+        self.is_stochastic = False
 
     def _get_reward_matrix_per_va(self, align_func, custom_grounding=None):
         if isinstance(align_func[0], str):
@@ -166,6 +171,7 @@ class FireFightersEnv(TabularVAMDP):
         # custom grounding 0 might is only used for trajectories
             if isinstance(custom_grounding, tuple):
                 custom_grounding = custom_grounding[1]
+            custom_grounding = custom_grounding() # Call the function to get the matrix
             if custom_grounding.shape == (400,5,2):
                 v = custom_grounding[:,:,0]*align_func[0] + custom_grounding[:,:,1]*align_func[1]
             
@@ -197,8 +203,9 @@ class FireFightersEnv(TabularVAMDP):
             assumed_grounding[:, 1] = np.reshape(self.obtain_grounding( variant=variants[1] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
 , (self.state_dim*self.action_dim,))
-            self.current_assumed_grounding = assumed_grounding, assumed_grounding
-            return assumed_grounding, assumed_grounding
+            self.set_grounding_func(grounding_func_from_matrix(assumed_grounding))
+
+            return self.get_grounding_func()
         elif self.feature_selection == FeatureSelectionFFEnv.ONE_HOT_FEATURES:
             assumed_grounding = np.zeros(
                 (self.state_dim, self.action_dim, 2), dtype=np.float64)
@@ -207,18 +214,18 @@ class FireFightersEnv(TabularVAMDP):
             assumed_grounding[:, :, 1] = self.obtain_grounding( variant=variants[1] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
 
-            t_assumed_grounding = torch.tensor(
-                assumed_grounding, dtype=torch.float32).requires_grad_(False)
+            #t_assumed_grounding = torch.tensor(assumed_grounding, dtype=torch.float32).requires_grad_(False)
 
-            def processing_obs(torch_obs):
+            """def processing_obs(torch_obs):
                 states, actions = calculate_s_trans_ONE_HOT_FEATURES(
                     torch_obs, self.real_env.state_space, self.real_env.action_space)
 
                 ret = t_assumed_grounding[states, actions]
-                return ret
-            self.current_assumed_grounding = processing_obs, assumed_grounding
+                return ret"""
+            self.set_grounding_func(grounding_func_from_matrix(assumed_grounding))
 
-            return processing_obs, assumed_grounding
+
+            return self.get_grounding_func()
         else:
             raise ValueError(f"Feature selection not registered {self.feature_selection}")
         

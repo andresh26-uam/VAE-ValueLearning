@@ -1,15 +1,15 @@
 from copy import deepcopy
 from functools import partial
 import os
+from typing import Callable
 from typing_extensions import override
-from envs.tabularVAenv import ContextualEnv, TabularVAMDP
+from envs.tabularVAenv import ContextualEnv, TabularVAMDP, grounding_func_from_matrix
 from use_cases.roadworld_env_use_case.network_env import DATA_FOLDER, FeaturePreprocess, FeatureSelection, RoadWorldGymPOMDP
 import numpy as np
 
 
 from use_cases.roadworld_env_use_case.utils.load_data import ini_od_dist
 from use_cases.roadworld_env_use_case.values_and_costs import BASIC_PROFILES
-
 
 
 class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
@@ -71,12 +71,14 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                 file_save=os.path.join(save_folder, variants_save_files[1]) if variants_save_files is not None else None, recalculate=recalculate)
             assumed_grounding[:,:, 2] = self.obtain_grounding( variant=variants[2] if variants is not None else None, 
                 file_save=os.path.join(save_folder, variants_save_files[2]) if variants_save_files is not None else None, recalculate=recalculate)
-            self.current_assumed_grounding = assumed_grounding, assumed_grounding
+            self.set_grounding_func(grounding_func_from_matrix(assumed_grounding))
 
-            return assumed_grounding, assumed_grounding
+            return self.get_grounding_func()
         
         else:
             raise ValueError(f"Feature selection not registered {self.real_environ.feature_selection}")
+
+    
 
     def _get_reward_matrix_for_profile(self, profile: tuple, custom_grounding=None):
         if isinstance(profile[0], str):
@@ -104,6 +106,8 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         # custom grounding 0 might is only used for trajectories
             if isinstance(custom_grounding, tuple):
                 custom_grounding=custom_grounding[1]
+            if isinstance(custom_grounding, Callable):
+                custom_grounding = custom_grounding()
             if custom_grounding.shape == (self.real_environ.state_dim,self.real_environ.action_dim,3):
                 v = custom_grounding[:,:,0]*profile[0] + custom_grounding[:,:,1]*profile[1] + custom_grounding[:,:,2]*profile[2]
             
@@ -152,9 +156,13 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         return env
 
 
-    def __init__(self, horizon=50, with_destination=None, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, env_kwargs={
+    def __init__(self, env_name='FixedDestRoadWorld-v0', horizon=50, with_destination=None, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, env_kwargs={
         'feature_selection': FeatureSelection.ONLY_COSTS, 
         'feature_preprocessing': FeaturePreprocess.NORMALIZATION}):
+
+        self.init__kwargs = locals()
+        self.init__kwargs.pop('self', None) 
+        self.init__kwargs.pop('__class__', None)
         self.reward_matrix_dict = dict()
 
         self._base_rw_per_al = dict()
@@ -173,7 +181,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
         self._invalid_states = [s for s in range(
             env.n_states) if s not in env.valid_edges]
         
-        super().__init__(horizon=self.horizon
+        super().__init__(env_name=env_name, horizon=self.horizon
                          ,n_values= len(BASIC_PROFILES),
                          initial_state_dist=env.initial_state_dist,
                          transition_matrix=env.transition_matrix,
@@ -184,6 +192,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                          done_when_horizon_is_met=done_when_horizon_is_met, 
                          trunc_when_horizon_is_met=trunc_when_horizon_is_met)
         self.set_align_func(env.last_profile)
+        self.is_stochastic = False
 
     def step(self, action):
         s, r, d, t, i = super().step(action)
@@ -211,22 +220,27 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
 
     
     def real_reset(self, *, seed = None, options = None, to_destination=None,contextualize=False):
-        print("RESET FROM", self.real_environ.cur_des)
+        #print("RESET FROM", self.real_environ.cur_des)
         if contextualize:
             self.contextualize(context=to_destination, seed=seed, options=options)
         else:
             self.real_environ.reset(seed=seed, options=options, des=None, profile=self.real_environ.last_profile, full_random=True)
-        print("RESET TO", self.real_environ.cur_des)
+        #print("RESET TO", self.real_environ.cur_des)
         shouldbe_, i_should_be = super().real_reset(seed=seed, options=options)
         print("S", "O", "NEW", self.state, shouldbe_, self.real_environ.cur_des)
         return shouldbe_, i_should_be
 class VariableDestRoadWorldGymPOMDP(FixedDestRoadWorldGymPOMDP, ContextualEnv):
 
+    init_kwargs: dict
 
-    def __init__(self, horizon=50, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, env_kwargs={
+    def __init__(self, env_name='VariableDestRoadWorld-v0', horizon=50, done_when_horizon_is_met=False, trunc_when_horizon_is_met=True, env_kwargs={
         'feature_selection': FeatureSelection.ONLY_COSTS, 
         'feature_preprocessing': FeaturePreprocess.NORMALIZATION}):
-        super().__init__(horizon=horizon, with_destination=None, done_when_horizon_is_met=done_when_horizon_is_met, trunc_when_horizon_is_met=trunc_when_horizon_is_met, env_kwargs=env_kwargs)
+
+        self.init__kwargs = locals()
+        self.init__kwargs.pop('self', None) 
+        self.init__kwargs.pop('__class__', None)
+        super().__init__(env_name=env_name, horizon=horizon, with_destination=None, done_when_horizon_is_met=done_when_horizon_is_met, trunc_when_horizon_is_met=trunc_when_horizon_is_met, env_kwargs=env_kwargs)
         self.cached_reward_by_context = dict()
 
     def contextualize(self, context, seed=None, options=None):

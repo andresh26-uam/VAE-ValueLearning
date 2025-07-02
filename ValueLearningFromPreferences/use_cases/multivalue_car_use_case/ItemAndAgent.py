@@ -1,5 +1,5 @@
 import numpy as np
-from ValuesNorms import ProblemName
+from use_cases.multivalue_car_use_case.ValuesNorms import ProblemName
 
 # un altre intent de veure si els canvis del github i tal i qual funcionen correctament!
 
