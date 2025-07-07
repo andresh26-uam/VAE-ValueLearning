@@ -1439,6 +1439,7 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                          vgl_optimizer_kwargs=optimizer_kwargs, vsi_optimizer_kwargs=optimizer_kwargs, discount=discount,
                          log_interval=log_interval, vgl_expert_policy=None, vsi_expert_policy=None, vsi_target_align_funcs=vsi_target_align_funcs_per_agent,
                          vgl_target_align_funcs=vgl_target_align_funcs_per_agent, training_mode=training_mode, custom_logger=None, learn_stochastic_policy=learn_stochastic_policy, stochastic_expert=expert_is_stochastic)
+        self.env= env
         self.use_logger = custom_logger != 'disable'
         self.policy_approximator = policy_approximator
         self.approximator_kwargs = approximator_kwargs

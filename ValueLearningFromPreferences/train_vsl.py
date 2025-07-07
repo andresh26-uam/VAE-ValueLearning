@@ -1,4 +1,5 @@
 import argparse
+import time
 import dill
 import pprint
 import random
@@ -16,7 +17,7 @@ from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabular
 from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
 from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, TrainingModes, parse_layer_name
-from src.dataset_processing.data import VSLPreferenceDataset
+from src.dataset_processing.data import TrajectoryWithValueSystemRews, VSLPreferenceDataset
 import os
 from src.utils import filter_none_args, load_json_config
 
@@ -290,7 +291,28 @@ if __name__ == "__main__":
         os.path.join(path, "dataset_train.pkl"))
     dataset_test = VSLPreferenceDataset.load(
         os.path.join(path, "dataset_test.pkl"))
-
+    if parser_args.algorithm == 'btMM':
+        import choix
+        # TODO: This is the Bradley Terry MM algorithm...
+        for v in dataset_train.n_values:
+            matrix = list()
+            items = {}
+            f1: TrajectoryWithValueSystemRews
+            
+            for f1,f2 , pr in zip(list(dataset_train.fragments1), dataset_train.fragments2, dataset_train.preferences_with_grounding[v]):
+                assert isinstance(pr, float)
+                if pr == 0.5:
+                    continue
+                items.add(f1.obs[0])
+                items.add(f2.obs[0])
+                if pr < 0.5:
+                    matrix.append((f2, f1))
+                    
+                elif pr > 0.5:
+                    matrix.append((f1, f2))
+        params = choix.mm_pairwise(len(items), matrix, max_iter=100,)
+        print (params)
+            
     if parser_args.algorithm == 'pc':
 
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
@@ -329,8 +351,12 @@ if __name__ == "__main__":
         )
     if parser_args.algorithm == 'pc':
         alg_config['train_kwargs']['experiment_name'] = experiment_name
+    
+    train_time = time.time()
     target_agent_and_vs_to_learned_ones_s, reward_net_pair_agent_and_vs_s, metrics_s, historic_assignments_s = vsl_algo.train(mode=TrainingModes.SIMULTANEOUS,
                                                                                                                               assumed_grounding=None, **alg_config['train_kwargs'])
+    train_time = time.time() - train_time
+    
     # Now we need to train.
     save_training_results(experiment_name, target_agent_and_vs_to_learned_ones_s,
                           reward_net_pair_agent_and_vs_s, metrics_s, parser_args={'parser_args': parser_args, 'config': config, 'society_config': society_config})
@@ -344,3 +370,5 @@ if __name__ == "__main__":
     assert reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(
     ), "Mismatch in reward_net_pair_agent_and_vs"
     assert metrics.keys() == metrics_s.keys(), "Mismatch in metrics"
+
+    print(f"Training time: {train_time:.2f} seconds")

@@ -218,8 +218,8 @@ def parse_args():
 
 
 def contextual_feature_analysis(experiment_name, values_names, dataset_reference: VSLPreferenceDataset, assignment: ClusterAssignment, label='train_set', assignment_identifier=''):
-    all_context_features = [dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]
-                            ['agent_context'] for agent_id in dataset_reference.agent_ids]
+    #print(list(dataset_reference.data_per_agent[dataset_reference.agent_ids[0]].fragments1[0].infos))
+    all_context_features = [dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]['agent_context'] for agent_id in dataset_reference.agent_ids]
     max_context_features = np.max(all_context_features, axis=0)
     context_features_per_cluster = []
 
@@ -558,6 +558,8 @@ if __name__ == "__main__":
 
     path = os.path.join(
         DATASETS_PATH, calculate_dataset_save_path(dataset_name, environment_data, society_data, epsilon=exp_parser_args.reward_epsilon))
+    
+    
     try:
         dataset_train = VSLPreferenceDataset.load(
             os.path.join(path, "dataset_train.pkl"))
@@ -579,7 +581,7 @@ if __name__ == "__main__":
     if exp_parser_args.algorithm == 'pc':
 
         vsl_algo = PreferenceBasedClusteringTabularMDPVSL(
-            env=env_state,
+            env=env,
             reward_net=example_model,
             optimizer_cls=opt_class,
             optimizer_kwargs=opt_kwargs,

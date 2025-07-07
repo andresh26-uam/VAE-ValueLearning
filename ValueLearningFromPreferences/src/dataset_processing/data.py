@@ -251,11 +251,11 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
         return np.asarray(self.l_agent_ids)
 
     @property
-    def fragments1(self):
+    def fragments1(self) -> List[TrajectoryWithValueSystemRews]:
         return np.asarray(self.l_fragments1)
 
     @property
-    def fragments2(self):
+    def fragments2(self) -> List[TrajectoryWithValueSystemRews]:
         return np.asarray(self.l_fragments2)
 
     def push(
