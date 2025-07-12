@@ -686,7 +686,7 @@ class ClusterAssignmentMemory():
 
     def __str__(self):
         
-        self.sort_lexicographic(lexicographic_vs_first=True)
+        self.sort_lexicographic(lexicographic_vs_first=False)
         result = "Cluster Assignment Memory:\n"
         mgr = self.maximum_conciseness_vs 
         mgr_gr = self.maximum_conciseness_gr
@@ -964,7 +964,7 @@ class ClusterAssignmentMemory():
         if self.last_selected_assignment is not None:
             self.last_selected_assignment = new_indices[self.last_selected_assignment]
         return new_indices  
-    def get_random_weighted_assignment(self, consider_only_unexplored=False, lexicographic_vs_first=True)-> ClusterAssignment:
+    def get_random_weighted_assignment(self, consider_only_unexplored=False, lexicographic_vs_first=False)-> ClusterAssignment:
         self.sort_lexicographic(lexicographic_vs_first=lexicographic_vs_first)
         if consider_only_unexplored:
             indices_selectable = [i for i, assignment in enumerate(self.memory) if not assignment.explored]

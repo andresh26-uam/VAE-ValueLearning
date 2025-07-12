@@ -703,16 +703,17 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy,BasePolicy):
 
         else:
             #assert True is False  # This should never ever occur
+            valid_distribution = None
             if len(valid_actions) == 0:
-                a = menv.action_space.sample()
+                a = int(menv.action_space.sample())
             else:
-                a = np.random.choice(valid_actions)
+                a = int(np.random.choice(valid_actions))
+
             assert isinstance(a, int)
             next_policy_state = None if policy_state is None else policy_state + \
                 1  # (Not used)
         # pf_total_finish = time.perf_counter()
         assert a in valid_actions
-        assert valid_distribution[a] > 0
         return a, next_policy_state, valid_distribution
 
 

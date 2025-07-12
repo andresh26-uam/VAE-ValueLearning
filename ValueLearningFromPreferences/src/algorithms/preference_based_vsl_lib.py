@@ -4,7 +4,7 @@ from copy import deepcopy
 import enum
 import itertools
 import time
-from typing import Dict, Iterable, List, Sequence, Union
+from typing import Dict, Iterable, List, Sequence, Union, override
 import imitation
 import imitation.algorithms
 import imitation.algorithms.base
@@ -730,8 +730,8 @@ class BasicRewardTrainerVSL(preference_comparisons.BasicRewardTrainer):
         
         super().__init__(preference_model, loss, rng, batch_size,
                          minibatch_size, epochs, lr, custom_logger, regularizer_factory)
-        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
-        optim_kwargs['weight_decay'] = 0.0
+        # Maybe neeed... WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
+        # optim_kwargs['weight_decay'] = 0.0
         self.optim_kwargs = optim_kwargs
         self.optim_cls = optim_cls
         self.n_values= n_values
@@ -752,8 +752,9 @@ class BasicRewardTrainerVSL(preference_comparisons.BasicRewardTrainer):
         )
 
     def reset_optimizer_with_params(self, parameters):
-        # WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
-        assert self.optim_kwargs['weight_decay'] == 0.0
+        # Maybe needed... WEIGHT DECAY MUST BE 0, otherwise not affected networks may decay without reason!!!!!!!
+        #assert self.optim_kwargs['weight_decay'] == 0.0, f"Weight decay must be 0, otherwise not affected networks may decay without reason. Current value: {self.optim_kwargs['weight_decay']}"
+
         if isinstance(parameters, dict):
             self.optim = self.optim_cls(params_gr=OrderedSet(parameters['params_gr']), params_vs=OrderedSet(parameters['params_vs']), n_values=self.n_values, **self.optim_kwargs)
         else:
@@ -872,7 +873,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         
         if self.confident_penalty > 0.0 or self.loss_object.label_smoothing > 0.0:
             
-            s = th.sum(self.loss_object.forward(probs_l, target_probs_l)- self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
+            s = th.sum(self.loss_object.forward(probs_l, target_probs_l) + self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
         else:
             s = th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='sum')
         return s / len(probs)
@@ -891,13 +892,16 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         preferences_per_agent_id: np.ndarray = None,
         preferences_per_agent_id_with_grounding: np.ndarray = None,
 
-        value_system_network_per_cluster: List =None,
+        value_system_network_per_cluster: List[LinearAlignmentLayer] = None,
         grounding_per_value_per_cluster: List =None,
         agent_to_vs_cluster_assignments: Dict[str, int] = None,
 
     ) -> preference_comparisons.LossAndMetrics:
         """Computes the loss. Same as Cross Entropy but does not overfit to class certainty, i.e. does not consider examples that are already correct."""
         # start_time = time.time()
+        #print(f"Preferences: {preferences[0:5]}, preferences_with_grounding: {preferences_with_grounding[0:5]}")
+        #print(f"Grounding per value per cluster: {list(grounding_per_value_per_cluster[0][0].parameters())[0:5]}")
+        print(f"VS per cluster: {[value_system_network_per_cluster[i].get_alignment_layer()[0] for i in range(len(value_system_network_per_cluster))]}")
 
         probs_vs, probs_gr, probs_vs_per_agent, probs_gr_per_agent, rews_vs_per_agent, rews_gr_per_agent, rews_vs, rews_gr= preference_model.forward(fragment_pairs_per_agent_id=fragment_pairs_per_agent_id, custom_model_per_agent_id=reward_model_per_agent_id,
                                                                                               fragment_pairs_idxs_per_agent_id=fragment_idxs_per_aid, only_for_alignment_function=None, 
@@ -1082,7 +1086,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
             nl = self.loss_func(probs_gr[:, vi], preferences_with_grounding[:, vi], misclassified_pairs=missclassified_gr[vi], apply_on_misclassified_only=self.gr_apply_on_misclassified_only)
             metrics['loss_per_vi'][vi] = nl
             loss_gr += nl
-        
+            #print("LOSS GR", vi, nl, loss_gr, probs_gr[0:5])
             assert not loss_gr.isnan(), probs_gr[0:10]
         
         metrics['loss_gr'] = loss_gr
@@ -1280,6 +1284,12 @@ class ConstrainedOptimizer(VSLOptimizer):
         print("LAGRANGE MULTIPLIERS AT SET STATE:", self.lambdas)
         self.optim_lambdas = th.optim.Adam(self.lambdas, lr=self.lr_lambda, betas=(0.5,0.9))
 
+    """@override
+    def set_parameters(self, params_gr, params_vs, optim_state={}):
+        self.params_gr = params_gr
+        self.params_vs = params_vs
+        self.optimx = self.sub_optimizer_class(params_gr, lr=self.lr_grounding, **self.optimizer_kwargs)
+        self.optimy = self.sub_optimizer_class(params_vs, lr=self.lr_value_system, **self.optimizer_kwargs)"""
     def zero_grad(self, set_to_none = True):
         super().zero_grad(set_to_none)
         self.optim_lambdas.zero_grad(set_to_none)
@@ -1336,7 +1346,9 @@ class ConstrainedLoss(VSLCustomLoss):
                     #self.best_gr_losses[vi] = min(gr_loss_vi, self.best_gr_losses[vi])
                     
         real_loss = self.vs_loss * renormalization + sum(self.lagrange_multipliers[vi] * self.gr_loss_per_vi[vi] * renormalization for vi in range(len(self.gr_loss_per_vi)))
-        
+        #l2_norm = sum(p.pow(2).sum() for p in self.params_gr)
+        #real_loss = real_loss + 0.001 * l2_norm # L2 regularization on the grounding parameters
+        # TODO: this is not the best way to do it, but it is the only one that works with the current implementation.
         b = real_loss.backward()
         with th.no_grad():
             #print("LAMBDA b", self.lagrange_multipliers,  self.last_accuracy_gr, self.best_accuracies)  

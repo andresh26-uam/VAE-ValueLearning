@@ -1137,7 +1137,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             best_assignments_list.initializing = False
             
             
-            starting_assignment = best_assignments_list.get_random_weighted_assignment()
+            starting_assignment = best_assignments_list.get_random_weighted_assignment(lexicographic_vs_first=True)
             if starting_assignment.explored:
                 use_random = True
                 
@@ -1195,7 +1195,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             #assert starting_assignment.optimizer_state['time'] != 0
             print("BEST ASSIGNMENTS so far:", best_assignments_list)
 
-            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, lexicographic_vs_first=True)
+            best_assignment: ClusterAssignment = best_assignments_list.get_best_assignment(consider_only_unexplored=False, lexicographic_vs_first=False)
             # Save the best assignment of each iteration
             best_assignment.save(historical_assignments_save_folder, f"best_assignment_iter_{global_iter}.pkl")
 
@@ -1824,32 +1824,44 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         rewards = self.state_action_callable_reward_from_reward_net_per_target_align_func(
             targets=target_align_funcs, return_groundings=True, )
         # TODO TODO
+        already_learnt_va = set()
 
         for target_align_func in target_align_funcs:
-            """aid, target_profile = target_align_func
-            learned_al_function = target_profile if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.target_agent_and_align_func_to_learned_ones[
-                aid]
-            reward_net: AbstractVSLRewardFunction = self.training_reward_nets_per_agent[aid]
-            reward_net.set_alignment_function(learned_al_function)
+            
+            learned_va = self.target_agent_and_align_func_to_learned_ones[target_align_func]
+            va = learned_va[1] if isinstance(learned_va[0], str) else learned_va
+            if va not in already_learnt_va:
+                    
+                """aid, target_profile = target_align_func
+                learned_al_function = target_profile if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.target_agent_and_align_func_to_learned_ones[
+                    aid]
+                reward_net: AbstractVSLRewardFunction = self.training_reward_nets_per_agent[aid]
+                reward_net.set_alignment_function(learned_al_function)
 
-            rewards = np.zeros_like(self.env.reward_matrix)
-            next_states = th.tensor(self._resample_next_states(), dtype=th.int64)
-            for a in range(self.env.action_dim):
+                rewards = np.zeros_like(self.env.reward_matrix)
+                next_states = th.tensor(self._resample_next_states(), dtype=th.int64)
+                for a in range(self.env.action_dim):
 
-                _, rewards[:, a] = self.calculate_rewards(align_func=learned_al_function, obs_mat=th.arange(self.env.state_dim), action_mat=th.tensor([a]*self.env.state_dim), next_state_obs_mat=next_states[:, a], 
-                                                       reward_mode=self.training_mode, recover_previous_config_after_calculation=True, requires_grad=False, custom_model=reward_net, forward_groundings=False,)"""
+                    _, rewards[:, a] = self.calculate_rewards(align_func=learned_al_function, obs_mat=th.arange(self.env.state_dim), action_mat=th.tensor([a]*self.env.state_dim), next_state_obs_mat=next_states[:, a], 
+                                                        reward_mode=self.training_mode, recover_previous_config_after_calculation=True, requires_grad=False, custom_model=reward_net, forward_groundings=False,)"""
 
-            #_, _, pi = self.env.__class__.compute_policy(self.env, reward=rewards(target_align_func), discount=self.discount, stochastic=self.learn_stochastic_policy)
+                #_, _, pi = self.env.__class__.compute_policy(self.env, reward=rewards(target_align_func), discount=self.discount, stochastic=self.learn_stochastic_policy)
 
-            # self.learned_policy_per_va.set_policy_for_va(target_align_func, pi)
-            grounding = rewards(target_align_func, vg_or_vs='vg')
-            reward_real = rewards(target_align_func, vg_or_vs='vs')
+                # self.learned_policy_per_va.set_policy_for_va(target_align_func, pi)
+                grounding = rewards(target_align_func, vg_or_vs='vg')
+                reward_real = rewards(target_align_func, vg_or_vs='vs')
 
-            self.learned_policy_per_va.learn(
-                alignment_function=self.target_agent_and_align_func_to_learned_ones[target_align_func], 
-                grounding_function=grounding,
-                reward= reward_real,
-                **self.learning_policy_kwargs)
+                self.learned_policy_per_va.learn(
+                    alignment_function=self.target_agent_and_align_func_to_learned_ones[target_align_func], 
+                    grounding_function=grounding,
+                    reward= reward_real,
+                    **self.learning_policy_kwargs)
+                already_learnt_va.add(va)
+            else:
+                self.learned_policy_per_va.set_policy_for_va(
+                    self.target_agent_and_align_func_to_learned_ones[target_align_func],
+                    self.learned_policy_per_va.policy_per_va(self.target_agent_and_align_func_to_learned_ones[target_align_func]))
+            
             """self.learned_policy_per_va.set_policy_for_va(
                 self.target_agent_and_align_func_to_learned_ones[target_align_func], self.learned_policy_per_va.policy_per_va(self.target_agent_and_align_func_to_learned_ones[target_align_func]))
             """

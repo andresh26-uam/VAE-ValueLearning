@@ -329,11 +329,25 @@ if __name__ == "__main__":
         for w in agent_profiles:
             eap_agg = expert_policy_per_grounding_combination[agg]
             if epclass != LearnerValueSystemLearningPolicy:
+                try:
+                    otrajs = eap_agg.obtain_trajectories(n_seeds=100, seed=DEFAULT_SEED, stochastic=society_data['stochastic_expert'], exploration=0.0, align_funcs_in_policy=[
+                                                        w], repeat_per_seed=1, with_reward=True, with_grounding=True, alignments_in_env=[w], end_trajectories_when_ended=parser_args.end_trajs_when_ended)
+                    print("O trajs mean reward: ", np.mean(
+                        [t.vs_rews.sum() for t in otrajs]))
+                except:
+                    print("Error obtaining trajectories, skipping...")
+                    
             
+                
                 eap_agg.learn(
                 alignment_function=w, grounding_function=all_agent_groundings[agg],
                 reward=None, stochastic=society_data['stochastic_expert'], **expert_policy_kwargs)
 
+                otrajs = eap_agg.obtain_trajectories(n_seeds=100, seed=DEFAULT_SEED, stochastic=society_data['stochastic_expert'], exploration=0.0, align_funcs_in_policy=[
+                                                     w], repeat_per_seed=1, with_reward=True, with_grounding=True, alignments_in_env=[w], end_trajectories_when_ended=parser_args.end_trajs_when_ended)
+                print("N trajs mean reward: ", np.mean(
+                    [t.vs_rews.sum() for t in otrajs]))
+                
 
                 """policy_per_va_precalc = dict()
                 
@@ -368,14 +382,14 @@ if __name__ == "__main__":
                 print("O trajs mean reward: ", np.mean(
                     [t.vs_rews.sum() for t in otrajs]))
                 evaluationo = stable_baselines3.common.evaluation.evaluate_policy(eap_agg.get_learner_for_alignment_function(
-                    w).policy, eap_agg.get_environ(w), n_eval_episodes=50, deterministic=True, return_episode_rewards=False)
+                    w).policy, eap_agg.get_environ(w), n_eval_episodes=50, deterministic=not society_data['stochastic_expert'], return_episode_rewards=False)
 
                 if parser_args.retrain:
                     eap_agg.learn(
-                        alignment_function=w, grounding_function=all_agent_groundings[agg], total_timesteps=100000, tb_log_name=f'expert_policy_{w}')
+                        alignment_function=w, grounding_function=all_agent_groundings[agg], stochastic=society_data['stochastic_expert'], **expert_policy_kwargs, tb_log_name=f'expert_policy_{w}')
                     #eap_agg.save(path=f'expert_policy_{w}')
 
-                # print(f"Evaluation before for {w}: {evaluationo}")
+                print(f"Evaluation before for {w}: {evaluationo}")
                 # print(environment.observation_space)
 
                 #
@@ -387,19 +401,19 @@ if __name__ == "__main__":
                     ref_env=environment, path=f'expert_policy_{w}')"""
                 print(eap_agg.get_learner_for_alignment_function(w).policy)
                 evaluation = stable_baselines3.common.evaluation.evaluate_policy(eap_agg.get_learner_for_alignment_function(
-                    w).policy, eap_agg.get_environ(w), n_eval_episodes=100, deterministic=True, return_episode_rewards=False)
+                    w).policy, eap_agg.get_environ(w), n_eval_episodes=100, deterministic=not society_data['stochastic_expert'], return_episode_rewards=False)
                 print(f"Evaluation after for {w}: {evaluation}")
                 
                 ntrajs = eap_agg.obtain_trajectories(n_seeds=100, seed=DEFAULT_SEED, stochastic=False, exploration=0.0, align_funcs_in_policy=[
                                                      w], repeat_per_seed=1, with_reward=True, with_grounding=True, alignments_in_env=[w], end_trajectories_when_ended=parser_args.end_trajs_when_ended)
-                for t in ntrajs:
-                    print(np.where(t.obs[0]==1.0), t.obs[-1], t.acts[0], t.acts[-1])
+                
                     
                 print("N trajs mean reward: ", np.mean(
                     [t.vs_rews.sum() for t in ntrajs]))
-                print("N trajs mean reward: ", np.mean(
-                    [t.v_rews.sum(axis=0) for t in ntrajs]))
-                exit(0)
+                print("N trajs mean reward per value: ", np.mean(
+                    [t.v_rews.sum(axis=-1) for t in ntrajs],axis=0))
+                
+                
         eap_agg.save(path=calculate_expert_policy_save_path(
             environment_name=parser_args.environment, 
             dataset_name=parser_args.dataset_name,
@@ -412,6 +426,7 @@ if __name__ == "__main__":
             society_name=parser_args.society_name,
             class_name=eap_agg.__class__.__name__,
             grounding_name=agg))
+        #exit(0)
         
     # TODO: Generate dataset of trajectories.
     if parser_args.end_trajs_when_ended is True and parser_args.gen_trajs is False:

@@ -245,12 +245,21 @@
             "same_trajectories_for_each_agent_type": true,
             "is_tabular": false,
             "agents": [{
+                "name": "ethical",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.43478261, 0.32608696, 0.23913043],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
                 "name": "100agent",
                 "grounding": ["default_ach", "default_com", "default_saf"], 
                 "value_system": [1.0, 0.0, 0.0],
-                "n_agents": 3,
+                "n_agents": 2,
                 "data": {
-                    "trajectory_pairs": 100,
+                    "trajectory_pairs": 50,
                     "rationality": 0.9, "random_traj_proportion": 0.2
                 }
             },
@@ -258,9 +267,9 @@
                 "name": "010agent",
                 "grounding": ["default_ach", "default_com", "default_saf"], 
                 "value_system": [0.0, 1.0, 0.0],
-                "n_agents": 3,
+                "n_agents": 2,
                 "data": {
-                    "trajectory_pairs": 100,
+                    "trajectory_pairs": 50,
                     "rationality": 0.9, "random_traj_proportion": 0.2
                 }
             },
@@ -268,7 +277,102 @@
                 "name": "001agent",
                 "grounding": ["default_ach", "default_com", "default_saf"], 
                 "value_system": [0.0, 0.0, 1.0],
-                "n_agents": 3,
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+            {
+                "name": "05050agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.5, 0.5, 0.0],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+            {
+                "name": "05005agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.5, 0.0, 0.5],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+            {
+                "name": "080101agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.8, 0.1, 0.1],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
+                "name": "010108agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.1, 0.1, 0.8],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
+                "name": "010801agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.1, 0.8, 0.1],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
+                "name": "080200agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.8, 0.2, 0.0],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
+                "name": "080002agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.8, 0.0, 0.2],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 50,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+        {
+                "name": "030303agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.34, 0.33, 0.33],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 100,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },
+        {
+                "name": "02008agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.2, 0.0, 0.8],
+                "n_agents": 2,
+                "data": {
+                    "trajectory_pairs": 100,
+                    "rationality": 0.9, "random_traj_proportion": 0.2
+                }
+            },{
+                "name": "02080agent",
+                "grounding": ["default_ach", "default_com", "default_saf"], 
+                "value_system": [0.2, 0.8, 0.0],
+                "n_agents": 2,
                 "data": {
                     "trajectory_pairs": 100,
                     "rationality": 0.9, "random_traj_proportion": 0.2

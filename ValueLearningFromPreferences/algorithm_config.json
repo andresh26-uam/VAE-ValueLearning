@@ -282,7 +282,7 @@
         "n_values": 3,
         "K": 1,
         "L": 5,
-        "horizon": 50,
+        "horizon": 40,
 
         "is_contextual": false,
 
@@ -301,12 +301,12 @@
             "use_action": false,
             "use_next_state": true,
             "use_done": false,
-            "basic_layer_classes": ["nn.Linear", "nn.Linear", "nn.Linear",  "nn.Linear", "nn.Linear",  "ConvexAlignmentLayer"],
-            "activations": ["nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Tanh", "nn.Identity"],
-            "use_bias": [true, true, true, true, true, false],
-            "hid_sizes": [40,40,40,40,3],
+            "basic_layer_classes": ["nn.Linear", "nn.Linear", "nn.Linear",  "ConvexAlignmentLayer"],
+            "activations": ["nn.LeakyReLU", "nn.LeakyReLU", "nn.LeakyReLU", "nn.Identity"],
+            "use_bias": [true, true, true, false],
+            "hid_sizes": [40,40,3],
             "negative_grounding_layer": false,
-            "clamp_rewards": false
+            "clamp_rewards": [-100,100]
         },
         "reward_feature_extractor": "FeatureExtractorFromVAEnv",
         "policy_state_feature_extractor": "OneHotFeatureExtractor",
@@ -321,24 +321,25 @@
                 "reward_net": {},
                 "optimizer_kwargs": {
                     "lr": 0.0005,
-                    "lr_grounding": 0.0005,
-                    "lr_value_system": 0.001,
-                    "lr_lambda": 0.01,
-                    "initial_lambda":5.0,
+                    "lr_grounding": 0.0001,
+                    "lr_value_system": 0.0001,
+                    "lr_lambda": 0.1,
+                    "initial_lambda": 1.0,
                     "weight_decay": 0.0000
                 },
                 "optimizer_class": "lagrange",
                 "learn_stochastic_policy": false,
                 "loss_class": "lagrange",
                 "loss_kwargs": {
-                    "model_indifference_tolerance": 0.05,
+                    "model_indifference_tolerance": 0.1, 
                     "gr_apply_on_misclassified_pairs_only": false, 
                     "vs_apply_on_misclassified_pairs_only": false, 
                     "repr_apply_on_worst_clusters_only": false,
                     "conc_apply_on_worst_clusters_only": true,
-                    "confident_penalty":5.0,
+                    "confident_penalty": 10.0,
+                    "label_smoothing": 0.1,
                     "cluster_similarity_penalty": 0.0,
-                    "lambda_decay": 5e-9},
+                    "lambda_decay": 0.0001},
                 "_loss_class_options": ["cross_entropy_cluster", "soba", "lagrange"],
                 "discount_factor_preferences": 1.0,
 
@@ -347,11 +348,13 @@
                 "preference_sampling_temperature": 0,
                 "query_schedule": "constant",
                 "train_kwargs": {
-                    "max_iter": 2,
+                    "max_iter": 300,
                     "trajectory_batch_size": "full",
                     "fragment_length": "horizon",
                     "comparisons_per_agent_per_step": null,
-                    "max_assignment_memory": 7
+                    "max_assignment_memory": 6,
+                    "mutation_prob": 0.1,
+                    "mutation_scale": 0.1
                 },
                 "expert_policy_class": "CustomPolicy",
                 "expert_policy_kwargs": {
@@ -367,24 +370,25 @@
                         "use_expert_grounding": true
                     },"LearningValueSystemLearningPolicy": {
                         "policy_kwargs": {
-                        "net_arch": {"pi": [64, 64], "vf": [64, 64]}
+                        "net_arch": {"pi": [], "vf": []}
                         },
+                        "total_timesteps": 200000,
                         "policy_class": "MaskedPolicySimple",
 
                         "learner_policy_class": "PPO",
                         
                         "learner_policy_kwargs" : 
                         {
-                            "batch_size": 50,
-                            "n_steps": 50,
-                            "ent_coef": 0.05,
-                            "learning_rate": 0.001,
+                            "batch_size": 40,
+                            "n_steps": 40,
+                            "ent_coef": 0.3,
+                            "learning_rate": 0.0001,
                             "gamma": 1.0,
                             "gae_lambda": 0.999,
-                            "clip_range": 0.1,
-                            "vf_coef": 0.1,
+                            "clip_range": 0.05,
+                            "vf_coef": 0.2,
                             "n_epochs": 5,
-                            "normalize_advantage": false,
+                            "normalize_advantage": true,
                             "tensorboard_log": "./ppo_tensorboard_expert_mvc/"
                         }
                     }
@@ -408,19 +412,19 @@
                         "policy_class": "MaskedPolicySimple",
 
                         "learner_policy_class": "PPO",
-                        
+                        "total_timesteps": 200000,
                         "learner_policy_kwargs" : 
                         {
-                            "batch_size": 50,
-                            "n_steps": 50,
-                            "ent_coef": 0.05,
-                            "learning_rate": 0.001,
+                            "batch_size": 40,
+                            "n_steps": 40,
+                            "ent_coef": 0.3,
+                            "learning_rate": 0.0001,
                             "gamma": 1.0,
                             "gae_lambda": 0.999,
-                            "clip_range": 0.1,
-                            "vf_coef": 0.1,
+                            "clip_range": 0.05,
+                            "vf_coef": 0.2,
                             "n_epochs": 5,
-                            "normalize_advantage": false,
+                            "normalize_advantage": true,
                             "tensorboard_log": "./ppo_tensorboard_learner_mvc/"
                         }
                     }
@@ -428,10 +432,10 @@
                 
                 
                 "reward_trainer_kwargs": {
-                    "epochs": 3,
+                    "epochs": 2,
                     "refining_steps_after_cluster_assignment": 4,
                     "qualitative_cluster_assignment": false,
-                    "initial_refining_steps": 12,
+                    "initial_refining_steps": 6,
                     "initial_exploration_rate": 0.3,
                     "batch_size": "full",
                     "inner_k_fold_validation_divisions_per_epoch": null
