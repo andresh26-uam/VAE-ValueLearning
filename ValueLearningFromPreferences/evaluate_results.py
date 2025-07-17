@@ -217,7 +217,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def contextual_feature_analysis(experiment_name, values_names, dataset_reference: VSLPreferenceDataset, assignment: ClusterAssignment, label='train_set', assignment_identifier=''):
+def contextual_feature_analysis(experiment_name, values_names, dataset_reference: VSLPreferenceDataset, assignment: ClusterAssignment, label='train_set', assignment_identifier='', fontsize=16):
     #print(list(dataset_reference.data_per_agent[dataset_reference.agent_ids[0]].fragments1[0].infos))
     all_context_features = [dataset_reference.data_per_agent[agent_id].fragments1[0].infos[0]['agent_context'] for agent_id in dataset_reference.agent_ids]
     max_context_features = np.max(all_context_features, axis=0)
@@ -260,14 +260,14 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
         plt.bar(range(1, len(means) + 1), perc_increase_over_mean,
                 yerr=std_errors, capsize=5, alpha=0.7, color='skyblue')
         plt.xticks(range(1, len(means) + 1),
-                   [feature_names[i] for i in range(len(means))], fontsize=16)
+                   [feature_names[i] for i in range(len(means))], fontsize=fontsize)
         plt.ylim(-1.4 * 100, 1.4 * 100)  # Set y-axis
         plt.yticks(np.arange(-1.4 * 100, 1.5 * 100, 0.1 * 100),
-                   rotation=45, fontsize=16)
+                   rotation=45, fontsize=fontsize)
         plt.title(
-            f"Barplot of Context Features for Cluster {cluster_idx + 1} (Agents: {num_agents})\n(Value System: {value_system_str})", fontsize=16)
-        plt.xlabel("Features", fontsize=16)
-        plt.ylabel("Percentage increase/decrease over average", fontsize=16)
+            f"Barplot of Context Features for Cluster {cluster_idx + 1} (Agents: {num_agents})\n(Value System: {value_system_str})", fontsize=fontsize)
+        plt.xlabel("Features", fontsize=fontsize)
+        plt.ylabel("Percentage increase/decrease over average", fontsize=fontsize)
         plt.grid(axis='y')
 
         # Save the plot
@@ -318,7 +318,7 @@ def contextual_feature_analysis(experiment_name, values_names, dataset_reference
         f"Saved context features table to {table_path_csv} and {table_path_latex}")
 
 
-def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[ClusterAssignment]], experiment_names, assignment_memories: Dict[str, ClusterAssignmentMemory], n_iterations_real=500):
+def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[ClusterAssignment]], experiment_names, assignment_memories: Dict[str, ClusterAssignmentMemory], n_iterations_real=500, fontsize=16):
     """
     Plots conciseness, representativity, and combined score vs for each assignment in historic assignments
     of each experiment. Each experiment has a different color, and each metric is a different line shape.
@@ -328,6 +328,7 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
         "Conciseness": "--",
         "Representativity": "-.",
         "Dunn Index": "-x",
+        #"Ray Turi Index": "-x",
         "Grounding Coherence": "-o",
     }
 
@@ -338,6 +339,7 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
         "Conciseness": [],
         "Representativity": [],
         "Dunn Index": [],
+        #"Ray Turi Index": [],
         "Grounding Coherence": [],
     }
 
@@ -352,10 +354,13 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
             aggr=np.min) for assignment in historic_assignments]
         combined_score_ename = [assignment.combined_cluster_score_vs(
             aggr_repr=np.min) for assignment in historic_assignments]
+        combined_score_ename_rt = [1.0/assignment.combined_cluster_score_vs(
+            aggr_repr=np.min) for assignment in historic_assignments]
         grounding_scores_ename = [
             np.mean(assignment.gr_score) for assignment in historic_assignments]
         isl1 = [assignment.L == 1 for assignment in historic_assignments]
         metrics['Dunn Index'].append(combined_score_ename)
+        #metrics['Ray Turi Index'].append(combined_score_ename_rt)
         metrics['Conciseness'].append(conciseness_ename)
         metrics['Representativity'].append(representativity_ename)
         metrics['Grounding Coherence'].append(grounding_scores_ename)
@@ -372,12 +377,12 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
         plt.fill_between(x, mean_values - std_error, mean_values + std_error, color=colors[idx_color % len(colors)],
                          alpha=0.2)
 
-    plt.xlabel("Iteration", fontsize=16)
+    plt.xlabel("Iteration", fontsize=fontsize)
     plt.xticks(x, labels=[int(xi/len(x)*n_iterations_real)
-               for xi in x], fontsize=16)
-    plt.ylabel("Metric Value", fontsize=16)
-    plt.title("Learning curves", fontsize=16)
-    plt.legend(fontsize=16)
+               for xi in x], fontsize=fontsize)
+    plt.ylabel("Metric Value", fontsize=fontsize)
+    plt.title("Learning curves", fontsize=fontsize)
+    plt.legend(fontsize=fontsize)
     plt.grid(True)
     plt.tight_layout()
 
@@ -391,7 +396,7 @@ def plot_metrics_for_experiments(historic_assignments_per_lre: Dict[str, List[Cl
     print(f"Saved metrics plot to {plot_path}")
 
 
-def plot_di_scores_for_experiments(experiment_name, scores, repres, conc):
+def plot_di_scores_for_experiments(experiment_name, scores, repres, conc, fontsize=16):
 
     sorted_keys = sorted(
         scores.keys(), key=lambda x: tuple(map(int, x.split('/'))))
@@ -416,6 +421,20 @@ def plot_di_scores_for_experiments(experiment_name, scores, repres, conc):
               if len(values) > 1 else 0 for values in sorted_scores.values()]
     plt.errorbar(x_positions, means, yerr=errors, fmt='o-',
                  capsize=5, label="Dunn Index", color='green', alpha=0.7)
+    
+    sorted_scores_rt = {key: [1.0/score for score in values] for key, values in sorted_scores.items()}
+    max_score_rt = 0
+    for values in sorted_scores_rt.values():
+        max_score_rt = max(max_score_rt, max(values))
+    if isinstance(max_score_rt, torch.Tensor):
+        max_score_rt = float(max_score_rt.detach().cpu().numpy())
+    #print(sorted_scores_rt, max_score_rt)
+    means = [np.mean(np.array(values)/max_score_rt)
+             for values in sorted_scores_rt.values()]
+    errors = [np.std(np.array(values)/max_score_rt)/np.sqrt(len(values))
+              if len(values) > 1 else 0 for values in sorted_scores_rt.values()]
+    #plt.errorbar(x_positions, means, yerr=errors, fmt='o-',
+    #             capsize=5, label="Ray Turi Index", color='green', alpha=0.7)
 
     means = [np.mean(values) for values in sorted_repres.values()]
     errors = [np.std(values)/np.sqrt(len(values)) if len(values)
@@ -430,17 +449,17 @@ def plot_di_scores_for_experiments(experiment_name, scores, repres, conc):
                  capsize=5, label="Conciseness", color='blue', alpha=0.7)
 
     plt.xticks(x_positions, x_labels, rotation=45,
-               fontsize=16)  # Increased font size by 75%
+               fontsize=fontsize)  # Increased font size by 75%
     plt.xlabel("L / Number of Clusters",
-               fontsize=16)  # Increased font size by 75%
-    plt.ylabel("Cluster Score", fontsize=16)  # Increased font size by 75%
+               fontsize=fontsize)  # Increased font size by 75%
+    plt.ylabel("Cluster Score", fontsize=fontsize)  # Increased font size by 75%
     plt.ylim(0, 1.05)
     plt.yticks(np.arange(0, 1.05, 0.1),
-               fontsize=16)  # Increased font size by 75%
+               fontsize=fontsize)  # Increased font size by 75%
     plt.title("Scores by Number of Clusters",
-              fontsize=16)  # Increased font size by 75%
+              fontsize=fontsize)  # Increased font size by 75%
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.legend(fontsize=16)  # Increased font size by 75%
+    plt.legend(fontsize=fontsize)  # Increased font size by 75%
     plt.tight_layout()
 
     # Save the plot
@@ -494,7 +513,7 @@ if __name__ == "__main__":
                 lexicographic_vs_first=True)
 
         plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve,
-                                     assignment_memories=assignment_memories_per_lre, n_iterations_real=n_iterations_real)
+                                     assignment_memories=assignment_memories_per_lre, n_iterations_real=n_iterations_real,fontsize=parser_args.plot_fontsize)
         assignments_identifier_to_assignment_lre = {
             key: [assignment_memories_per_lre[ename_clean].memory[ikey] if len(assignment_memories_per_lre[ename_clean].memory) > ikey else None for ename_clean in enames_for_lr_curve] for ikey, key in enumerate(list(assignments_identifier_to_assignment.keys()))
         }
@@ -531,7 +550,7 @@ if __name__ == "__main__":
                              1 else max_conciseness)
             del best
 
-        plot_di_scores_for_experiments(experiment_name, scores, repres, conc)
+        plot_di_scores_for_experiments(experiment_name, scores, repres, conc, fontsize=parser_args.plot_fontsize)
 
     # This will look again into the config files to see if there are new fields (wont update the old ones)
     config_actual = load_json_config(exp_parser_args.config_file)
@@ -649,17 +668,17 @@ if __name__ == "__main__":
     values_names = environment_data['values_names']
     # contextual_feature_analysis(experiment_name, values_names, dataset_train, best_vs_then_gr_assignment, label='train_set', assignment_identifier='best_vs_then_gr')
     contextual_feature_analysis(experiment_name, values_names, dataset_train,
-                                best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_assignment')
+                                best_gr_then_vs_assignment, label='train_set', assignment_identifier='best_assignment', fontsize=parser_args.plot_fontsize)
     for aid, assignment in assignments_identifier_to_assignment.items():
         contextual_feature_analysis(experiment_name, values_names, dataset_train,
-                                    assignment, label='train_set', assignment_identifier=aid)
+                                    assignment, label='train_set', assignment_identifier=aid, fontsize=parser_args.plot_fontsize)
     if plot_test:
         # contextual_feature_analysis(experiment_name, values_names, dataset_test, best_vs_then_gr_assignment_test, label='test_set', assignment_identifier='best_vs_then_gr')
         contextual_feature_analysis(experiment_name, values_names, dataset_test,
-                                    best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_assignment')
+                                    best_gr_then_vs_assignment_test, label='test_set', assignment_identifier='best_assignment', fontsize=parser_args.plot_fontsize)
         for aid, assignment in test_assignments_identifier_to_assignment.items():
             contextual_feature_analysis(experiment_name, values_names, dataset_train,
-                                        assignment, label='test_set', assignment_identifier=aid)
+                                        assignment, label='test_set', assignment_identifier=aid, fontsize=parser_args.plot_fontsize)
 
     # 2: tables.
     # Put for the first, middle, and last assignment in separated tables.

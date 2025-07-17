@@ -3,6 +3,8 @@ import time
 import dill
 import pprint
 import random
+from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPRegressor
 from typing import Any, Dict, List, Tuple, Union
 import numpy as np
 import torch
@@ -16,7 +18,7 @@ from src.algorithms.clustering_utils import ClusterAssignment
 from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabularMDPVSL, load_historic_assignments
 from src.dataset_processing.datasets import calculate_dataset_save_path
 from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
-from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, LinearVSLRewardFunction, TrainingModes, parse_layer_name
+from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, ConvexAlignmentLayer, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from src.dataset_processing.data import TrajectoryWithValueSystemRews, VSLPreferenceDataset
 import os
 from src.utils import filter_none_args, load_json_config
@@ -164,7 +166,7 @@ def parse_args():
         '-s', '--seed', type=int, default=DEFAULT_SEED, required=False, help='Random seed')
 
     general_group.add_argument('-a', '--algorithm', type=str, choices=[
-                               'pc'], default='pc', help='Algorithm to use (preference comparison - pc)')
+                               'pc','rlhf'], default='pc', help='Algorithm to use (preference comparison - pc) or vanilla RLHF based loss fit with 1 cluster - rlhf')
 
     general_group.add_argument('-cf', '--config_file', type=str, default='algorithm_config.json',
                                help='Path to JSON general configuration file (overrides other defaults here, but not the command line arguments)')
@@ -199,6 +201,175 @@ def parse_args():
 
     return parser.parse_args()
 
+
+def rlhfFit(dataset_train: VSLPreferenceDataset, v, lr, hidden_layer_sizes=(16,24,16), maxiter=1000000, net_vs=None):
+    matrix = list()
+    items = set()
+    f1: TrajectoryWithValueSystemRews
+    agent_ids = dataset_train.agent_ids
+    
+    preferences = list( dataset_train.preferences_with_grounding[:,v]) if v != 'vs' else dataset_train.preferences
+    pair_to_agent_ids = [agent_ids[if1] for if1, p1 in enumerate(preferences)]
+    print("NPREFS", len(preferences))
+
+    for f1,f2 , pr in zip(list(dataset_train.fragments1), list(dataset_train.fragments2),preferences):
+        assert isinstance(pr, float)
+                #print(dataset_train.preferences_with_grounding.shape)
+                #print(pr)
+        if pr == 0.5:
+            continue
+        items.add(f1.infos[0]['state'])
+        items.add(f2.infos[0]['state'])
+        
+        if pr <= 0.5:
+            matrix.append((f2.infos[0]['state'], f1.infos[0]['state']))
+                    
+        elif pr >= 0.5:
+            matrix.append((f1.infos[0]['state'], f2.infos[0]['state']))
+        #matrixnp = np.array(matrix, dtype=object)
+                #print(matrixnp.shape)
+    params = choix.mm_pairwise(max(items)+1, data=matrix, alpha=1.0, max_iter=maxiter,tol=1e-16)
+    print(params.shape)
+    pair_to_agent_ids = [agent_ids[if1] for if1, p1 in enumerate(dataset_train.preferences)]
+    acc = accuracy(matrix, params, pair_to_agent_ids)
+    print(f"Accuracy for {v} is {acc}")
+            # Prepare data for regression
+    X = np.zeros((len(dataset_train.fragments1) + len(dataset_train.fragments2), 4))
+    y = np.zeros((len(dataset_train.fragments1) + len(dataset_train.fragments2),))
+    for f in list(dataset_train.fragments1) + list(dataset_train.fragments2):
+                # Extract features from f.obs (flatten if needed)
+        obs = np.array(f.obs).flatten()
+        state_idx = f.infos[0]['state']
+        X[state_idx] = obs[0:4]
+                # Target is the corresponding value in params for the fragment's state
+        
+        y[state_idx] = params[state_idx]
+
+    X = np.array(X)
+    y = np.array(y)
+
+            # Fit regression model
+            
+            # Fit a simple neural network regressor
+    import torch.nn as nn
+    import torch.optim as optim
+
+    class PreferenceNet(nn.Module):
+        def __init__(self, input_dim, v, hidden_layer_sizes, nets_grounding=None, freeze_grounding=False):
+            super().__init__()
+            if v != 'vs':
+                layers = []
+                prev_dim = input_dim
+                for ih, h in enumerate(hidden_layer_sizes):
+                    layers.append(nn.Linear(prev_dim, h))
+                    if h == dataset_train.n_values and v=='vs':
+                        layers.append(nn.Softplus())
+                    else:
+                        layers.append(nn.Tanh())
+                    prev_dim = h
+            
+                layers.append(nn.Linear(prev_dim, 1))
+                layers.append(nn.Softplus())
+                self.net = nn.Sequential(*layers)
+                self.negative=True
+            else:
+                if nets_grounding is None:
+                    nets_grounding = []
+                    for v_ in range(dataset_train.n_values):
+    
+                        nets_grounding.append(PreferenceNet(input_dim, v=v_, hidden_layer_sizes=hidden_layer_sizes[:-1],nets_grounding=None, freeze_grounding=False))
+                assert len(nets_grounding) == dataset_train.n_values, "Number of nets must match the number of value systems"
+                self.nets_grounding = nn.ModuleList(nets_grounding)
+                if freeze_grounding:
+                        for net in self.nets_grounding:
+                            for param in net.parameters():
+                                param.requires_grad = False
+                self.final_linear = ConvexAlignmentLayer(len(self.nets_grounding), 1, bias=False, dtype=torch.float32)
+                # Compose self.net: outputs of net_vs -> final_linear
+                def combined_net(x):
+                    outputs = [net(x) for net in self.nets_grounding]
+                    stacked = torch.stack(outputs, dim=1)
+                    return self.final_linear(stacked)
+                self.net = combined_net
+                self.negative=False
+                
+
+        def forward(self, x):
+            return -self.net(x).squeeze(-1) if self.negative else self.net(x).squeeze(-1)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    X_tensor = torch.tensor(X, dtype=torch.float32, device=device)
+    matrix_tensor = torch.tensor(matrix, dtype=torch.long, device=device)
+
+    net = PreferenceNet(X.shape[1], v=v, hidden_layer_sizes=hidden_layer_sizes, nets_grounding=net_vs, freeze_grounding=(net_vs is not None)).to(device)
+    optimizer = optim.Adam(net.parameters(), lr=lr)
+    loss_fn = nn.BCELoss()
+
+    # Targets are always 1.0: p1 should be preferred over p2
+    targets = torch.ones(len(matrix), dtype=torch.float32, device=device)
+
+    for epoch in range(maxiter):
+        optimizer.zero_grad()
+        p1_idx = matrix_tensor[:, 0]
+        p2_idx = matrix_tensor[:, 1]
+        out1 = net(X_tensor[p1_idx])
+        out2 = net(X_tensor[p2_idx])
+        logits = out1 - out2
+        preds = torch.sigmoid(logits)
+        loss = loss_fn(preds, targets)
+        loss.backward()
+        optimizer.step()
+        if epoch % 500 == 0:
+            print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+
+    # Use the trained network to estimate params
+    estimated_params_v = None
+    with torch.no_grad():
+        estimated_params = net(X_tensor).detach().cpu().numpy()
+    if v=='vs':
+        with torch.no_grad():
+            estimated_params_v = [net_v(X_tensor).detach().cpu().numpy()  for net_v in net.nets_grounding]
+            print("Estimated params vector for v:", estimated_params_v)
+    print("Estimated params vector:", estimated_params)
+
+    acc = accuracy(matrix, estimated_params, pair_to_agent_ids)
+    print(f"Accuracy estimated for {v} is {acc}")
+
+            #print("Regression coefficients:", reg.coefs_)
+            #print("Regression intercept:", reg.intercept_)
+            # Create the estimated version of the params vector using the regression model
+    """reg = MLPRegressor(hidden_layer_sizes=hidden_layer_sizes, learning_rate_init=0.001, activation='tanh', max_iter=200000, random_state=parser_args.seed)
+    reg.fit(X, y)
+    estimated_params = reg.predict(X)
+    print("Estimated params vector:", estimated_params)
+    counts = 0
+    for p1, p2 in matrix:
+        p =  choix.probabilities((p1,p2), estimated_params)
+        correct = p[0] > 0.5
+        if correct:
+            counts += 1
+    print(f"Accuracy estimated for {v} is {counts/len(matrix)}")
+    print (params)"""
+    return net, matrix, estimated_params, estimated_params_v
+
+def accuracy(matrix, estimated_params, pair_to_agent_ids):
+    counts = 0
+    counts_by_agent = {agent_id: 0 for agent_id in set(pair_to_agent_ids)}
+    n_by_agent = {agent_id: 0 for agent_id in set(pair_to_agent_ids)}
+    
+    for ip, (p1, p2) in enumerate(matrix):
+        agent_id = pair_to_agent_ids[ip]
+        p = choix.probabilities((p1, p2), estimated_params)
+        correct = p[0] > 0.5
+        if correct:
+            counts += 1
+            counts_by_agent[agent_id] += 1
+        n_by_agent[agent_id] += 1
+        
+    #acc = counts/len(matrix)
+    representativeness = np.mean([counts_by_agent[agent_id] / n_by_agent[agent_id] for agent_id in n_by_agent.keys() if n_by_agent[agent_id] > 0])
+    # Because each agent ranks the same number of pairs, the representativeness (per agent avg accuracy) is the same as full-batch accuracy
+    return representativeness
 
 if __name__ == "__main__":
     # This script will generate a total of n_agents * trajectory_pairs of trajectories, and a chain of comparisons between them, per agent type, for the society selected
@@ -291,27 +462,94 @@ if __name__ == "__main__":
         os.path.join(path, "dataset_train.pkl"))
     dataset_test = VSLPreferenceDataset.load(
         os.path.join(path, "dataset_test.pkl"))
-    if parser_args.algorithm == 'btMM':
+    if parser_args.algorithm == 'rlhf':
         import choix
-        # TODO: This is the Bradley Terry MM algorithm...
-        for v in dataset_train.n_values:
-            matrix = list()
-            items = {}
-            f1: TrajectoryWithValueSystemRews
-            
-            for f1,f2 , pr in zip(list(dataset_train.fragments1), dataset_train.fragments2, dataset_train.preferences_with_grounding[v]):
-                assert isinstance(pr, float)
-                if pr == 0.5:
-                    continue
-                items.add(f1.obs[0])
-                items.add(f2.obs[0])
-                if pr < 0.5:
-                    matrix.append((f2, f1))
-                    
-                elif pr > 0.5:
-                    matrix.append((f1, f2))
-        params = choix.mm_pairwise(len(items), matrix, max_iter=100,)
-        print (params)
+        n_repeats = 10
+        align_bypassed = []
+        align_full = []
+        acc_vs_bypassed = []
+        acc_gr_bypassed = []
+        acc_vs_full = []
+        acc_gr_full = []
+
+        for repeat in range(n_repeats):
+            torch.manual_seed(parser_args.seed + repeat)
+            np.random.seed(parser_args.seed + repeat)
+            random.seed(parser_args.seed + repeat)  
+
+            print(f"Repeat {repeat+1}/{n_repeats}")
+            net_vs = []
+            matrix_v = []
+            for v in range(dataset_train.n_values):
+                net_v, matrix, _, _ = rlhfFit(dataset_train, v, lr=0.005, hidden_layer_sizes=(16, 24, 16), maxiter=2000, net_vs=None)
+                net_vs.append(net_v)
+                matrix_v.append(matrix)
+
+            net_bypassed, matrix_b, estimated_params_b, estimated_params_v_b  = rlhfFit( dataset_train, 'vs', lr=0.005, hidden_layer_sizes=(16, 24, 16,3), maxiter=20000, net_vs=None)
+            net_full, matrix_vs, estimated_params, estimated_params_v = rlhfFit( dataset_train, 'vs', lr=0.01, hidden_layer_sizes=(16, 24, 16,3), maxiter=20000, net_vs=net_vs)
+
+            # Collect alignment layers
+            align_bypassed.append(net_bypassed.final_linear.get_alignment_layer()[0].detach().cpu().numpy().flatten())
+            align_full.append(net_full.final_linear.get_alignment_layer()[0].detach().cpu().numpy().flatten())
+
+            # Collect accuracies
+            pair_to_agent_ids = [dataset_train.agent_ids[if1] for if1, p1 in enumerate(dataset_train.preferences)]
+            acc_vs_bypassed.append(accuracy(matrix_b, estimated_params_b, pair_to_agent_ids))
+            acc_gr_bypassed.append([accuracy(matrix_v[i], estimated_params_v_b[i], pair_to_agent_ids) for i in range(len(estimated_params_v_b))])
+            acc_vs_full.append(accuracy(matrix_vs, estimated_params, pair_to_agent_ids))
+            acc_gr_full.append([accuracy(matrix_v[i], estimated_params_v[i], pair_to_agent_ids) for i in range(len(estimated_params_v))])
+
+        align_bypassed = np.array(align_bypassed)
+        align_full = np.array(align_full)
+        acc_vs_bypassed = np.array(acc_vs_bypassed)
+        acc_gr_bypassed = np.array(acc_gr_bypassed)
+        acc_vs_full = np.array(acc_vs_full)
+        acc_gr_full = np.array(acc_gr_full)
+
+
+        print("\n=== Alignment Layer (RLHF for original preferences with the same network architecture) ===")
+        print("Average Value System:", np.mean(align_bypassed, axis=0))
+        print("Std Value System:", np.std(align_bypassed, axis=0))
+
+        print("\n=== Alignment Layer (Sequential RLHF: first fit grounding, then value system) ===")
+        print("Average Value System:", np.mean(align_full, axis=0))
+        print("Std Value System:", np.std(align_full, axis=0))
+
+        print("\n=== Accuracies (RLHF for original preferences with the same network architecture) ===")
+        print("VS representativeness Mean:", np.mean(acc_vs_bypassed, axis=0))
+        print("VS representativeness Std:", np.std(acc_vs_bypassed, axis=0))
+        print(" GR coherence Mean:", np.mean(acc_gr_bypassed, axis=0))
+        print(" GR coherence Std:", np.std(acc_gr_bypassed, axis=0))
+
+        print("\n=== Accuracies (Sequential RLHF: first fit grounding, then value system) ===")
+        print("VS representativeness Mean:", np.mean(acc_vs_full, axis=0))
+        print("VS representativeness Std:", np.std(acc_vs_full, axis=0))
+        print(" GR coherence Mean:", np.mean(acc_gr_full, axis=0))
+        print(" GR coherence Std:", np.std(acc_gr_full, axis=0))
+
+        results_filename = f'supplementary_RLHFtest_and_sequential_SVSL_{n_repeats}_{parser_args.experiment_name}.txt'
+        with open(results_filename, 'w') as f:
+            f.write("\n=== Alignment Layer (RLHF for original preferences with the same network architecture) ===\n")
+            f.write(f"Average Value System: {np.mean(align_bypassed, axis=0)}\n")
+            f.write(f"Std Value System: {np.std(align_bypassed, axis=0)}\n")
+
+            f.write("\n=== Accuracies (RLHF for original preferences with the same network architecture) ===\n")
+            f.write(f"VS representativeness Mean: {np.mean(acc_vs_bypassed)}\n")
+            f.write(f"VS representativeness Std: {np.std(acc_vs_bypassed)}\n")
+            f.write(f" GR coherence Mean: {np.mean(acc_gr_bypassed, axis=0)}\n")
+            f.write(f" GR coherence Std: {np.std(acc_gr_bypassed, axis=0)}\n")
+
+            f.write("\n=== Alignment Layer (Sequential RLHF: first fit grounding, then value system) ===\n")
+            f.write(f"Average Value System: {np.mean(align_full, axis=0)}\n")
+            f.write(f"Std Value System: {np.std(align_full, axis=0)}\n")
+
+            f.write("\n=== Accuracies (Sequential RLHF: first fit grounding, then value system) ===\n")
+            f.write(f"VS representativeness Mean: {np.mean(acc_vs_full)}\n")
+            f.write(f"VS representativeness Std: {np.std(acc_vs_full)}\n")
+            f.write(f" GR coherence Mean: {np.mean(acc_gr_full, axis=0)}\n")
+            f.write(f" GR coherence Std: {np.std(acc_gr_full, axis=0)}\n")
+        print(f"Results written to {results_filename}")
+        exit(0)    
             
     if parser_args.algorithm == 'pc':
 

@@ -31,3 +31,8 @@ To set up the environment and run the code, follow these steps:
     ```
 
 After installation, you can open the `execute_experiments.ipynb` notebook in your preferred Jupyter environment to explore the code and replicate the experiments.
+
+We added some experiments in the reviewed paper. These are executed with:
+`python -O train_vsl.py --dataset_name ecai_apollo -ename 'additionalTest' -e apollo -cf='algorithm_config.json' -a='rlhf'`
+
+It produces a `.txt` file that presents all the information summarized in the "Additional results" section of the supplementary material. 

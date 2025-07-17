@@ -1,0 +1,20 @@
+
+=== Alignment Layer (RLHF for original preferences with the same network architecture) ===
+Average Value System: [0.35023585 0.34868705 0.30107704]
+Std Value System: [0.10679699 0.09959349 0.09483744]
+
+=== Accuracies (RLHF for original preferences with the same network architecture) ===
+VS representativeness Mean: 0.9641179839633448
+VS representativeness Std: 0.01567620294351029
+ GR coherence Mean: [0.47365407, 0.46738259, 0.59136]
+ GR coherence Std: [0.17211111, 0.14155768, 0.12455074]
+
+=== Alignment Layer (Sequential RLHF: first fit grounding, then value system) ===
+Average Value System: [0.4331413  0.40884718 0.15801148]
+Std Value System: [0.00403651 0.00482867 0.00430862]
+
+=== Accuracies (Sequential RLHF: first fit grounding, then value system) ===
+VS representativeness Mean: 0.7503722794959907
+VS representativeness Std: 0.010060516911022653
+ GR coherence Mean: [1. 1. 1.]
+ GR coherence Std: [0. 0. 0.]
