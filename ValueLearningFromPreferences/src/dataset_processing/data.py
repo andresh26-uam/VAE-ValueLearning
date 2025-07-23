@@ -1,7 +1,7 @@
 import dataclasses
 from functools import partial
 import dill
-from typing import List, Sequence, Tuple, TypeVar, overload
+from typing import List, Self, Sequence, Tuple, TypeVar, overload
 
 import logging
 import os
@@ -236,7 +236,7 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
         self.n_values = n_values
         self.l_agent_ids = []
         self.agent_data = {}
-
+        self.fidxs_per_agent = {}
         if not single_agent:
             self.data_per_agent = {}
     @property
@@ -247,6 +247,9 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
     def agent_ids(self):
         return np.asarray(self.l_agent_ids)
     
+    @property
+    def n_agents(self):
+        return len(set(self.l_agent_ids))
    
     @property
     def fragments1(self):
@@ -262,7 +265,7 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
         preferences_with_grounding: np.ndarray,
         agent_ids = None,
         agent_data = None,
-    ) -> None:
+    ) -> Self:
         """Add more samples to the dataset.
 
         Args:
@@ -275,8 +278,13 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
                 has non-float32 dtype.
         """
         assert len(preferences_with_grounding.shape) == 2 and preferences_with_grounding.shape == (len(preferences), self.n_values)
+        
         if agent_ids is not None:
             self.l_agent_ids.extend(agent_ids)
+            for agent_id in set(agent_ids):
+                if agent_id not in self.fidxs_per_agent.keys():
+                    self.fidxs_per_agent[agent_id] = []
+                self.fidxs_per_agent[agent_id].extend(np.where(np.asarray(agent_ids) == agent_id)[0])   
         if agent_data is not None:
             self.agent_data.update(agent_data)
             for agent_id in set(agent_ids):
@@ -299,7 +307,7 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
         self.preferences = np.concatenate((self.preferences, preferences))
         for i in range(self.n_values):
             self.list_preferences_with_grounding[i] = np.concatenate((self.list_preferences_with_grounding[i], preferences_with_grounding[:, i]))
-        
+        return self
         
 
     @overload
@@ -332,7 +340,34 @@ class VSLPreferenceDataset(preference_comparisons.PreferenceDataset):
     def load(path: AnyPath) -> "VSLPreferenceDataset":
         with open(path, "rb") as file:
             return dill.load(file)
-        
+
+    def select_batch(self, batch_size: int) -> "VSLPreferenceDataset":
+        """Selects a random batch of size `batch_size` from the dataset, ensuring equal representation of all agents.
+
+        Args:
+            batch_size: The number of samples to select per agent.
+
+        Returns:
+            fragment_pairs, preferences, preferences_with_grounding, agent_ids: A tuple containing the selected preferences, preferences with grounding, and agent IDs.
+        """
+
+        # Select a random batch of fragments for each agent
+        fragment_pairs = []
+        preferences = []
+        preferences_with_grounding = []
+        agent_ids = []
+
+        for agent in np.unique(self.agent_ids):
+            agent_indices = np.where(self.agent_ids == agent)[0]
+            selected_indices = np.random.choice(agent_indices, size=batch_size, replace=False)
+
+            fragment_pairs.extend([(self.l_fragments1[i], self.l_fragments2[i]) for i in selected_indices])
+            preferences.extend(self.preferences[selected_indices])
+            preferences_with_grounding.extend(self.preferences_with_grounding[selected_indices, :])
+            agent_ids.extend(self.agent_ids[selected_indices])
+
+        return fragment_pairs, preferences, preferences_with_grounding, agent_ids
+
     def k_fold_split(self, k: int):
         """Generates k-fold train and validation datasets, ensuring equal agent representation.
 

@@ -108,6 +108,7 @@ class FixedDestRoadWorldGymPOMDP(TabularVAMDP):
                 custom_grounding=custom_grounding[1]
             if isinstance(custom_grounding, Callable):
                 custom_grounding = custom_grounding()
+            
             if custom_grounding.shape == (self.real_environ.state_dim,self.real_environ.action_dim,3):
                 v = custom_grounding[:,:,0]*profile[0] + custom_grounding[:,:,1]*profile[1] + custom_grounding[:,:,2]*profile[2]
             

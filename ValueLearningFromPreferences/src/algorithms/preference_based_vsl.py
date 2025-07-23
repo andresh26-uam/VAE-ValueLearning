@@ -1051,7 +1051,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
         vec_schedule = np.vectorize(self.query_schedule)
         unnormalized_probs = vec_schedule(
             np.linspace(0, 1, self.num_iterations))
-        probs = unnormalized_probs / np.sum(unnormalized_probs)
+        probs = unnormalized_probs / (np.sum(unnormalized_probs)+1e-8)
         shares = util.oric(
             probs * comparisons_per_agent_per_step * num_iterations)
         schedule = shares.tolist()
@@ -1090,6 +1090,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
             
             dataset_batch = VSLPreferenceDataset(
                 n_values=self.complete_dataset.n_values, single_agent=False)
+            
             for aid, adata in self.complete_dataset.data_per_agent.items():
                 selection = np.random.choice(len(
                     adata), size=num_pairs, replace=True if try_without_replacement and len(adata) < num_pairs else False)
@@ -1414,6 +1415,7 @@ class PreferenceComparisonVSL(preference_comparisons.PreferenceComparisons):
 
 def load_historic_assignments(experiment_name, sample=20):
     save_folder = os.path.join(ASSIGNMENT_CHECKPOINTS, experiment_name)
+    print("SV", save_folder)
     if not os.path.exists(save_folder):
         parent_folder = ASSIGNMENT_CHECKPOINTS
         matching_folders = [folder for folder in os.listdir(parent_folder) if folder.startswith(experiment_name)]
@@ -1824,13 +1826,14 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
         rewards = self.state_action_callable_reward_from_reward_net_per_target_align_func(
             targets=target_align_funcs, return_groundings=True, )
         # TODO TODO
-        already_learnt_va = set()
+        already_learnt_va_to_cluster_representant = dict()
 
         for target_align_func in target_align_funcs:
             
             learned_va = self.target_agent_and_align_func_to_learned_ones[target_align_func]
-            va = learned_va[1] if isinstance(learned_va[0], str) else learned_va
-            if va not in already_learnt_va:
+            composite_al = isinstance(learned_va[0], str)
+            va = learned_va[1] if composite_al else learned_va
+            if va not in already_learnt_va_to_cluster_representant.keys():
                     
                 """aid, target_profile = target_align_func
                 learned_al_function = target_profile if self.training_mode == TrainingModes.VALUE_GROUNDING_LEARNING else self.target_agent_and_align_func_to_learned_ones[
@@ -1856,11 +1859,12 @@ class PreferenceBasedClusteringTabularMDPVSL(BaseVSLAlgorithm):
                     grounding_function=grounding,
                     reward= reward_real,
                     **self.learning_policy_kwargs)
-                already_learnt_va.add(va)
+                already_learnt_va_to_cluster_representant[va] = learned_va[0] if composite_al else learned_va
             else:
+                existent_va = tuple([already_learnt_va_to_cluster_representant[va]] + [va] if composite_al else va)
                 self.learned_policy_per_va.set_policy_for_va(
                     self.target_agent_and_align_func_to_learned_ones[target_align_func],
-                    self.learned_policy_per_va.policy_per_va(self.target_agent_and_align_func_to_learned_ones[target_align_func]))
+                    self.learned_policy_per_va.policy_per_va(existent_va))
             
             """self.learned_policy_per_va.set_policy_for_va(
                 self.target_agent_and_align_func_to_learned_ones[target_align_func], self.learned_policy_per_va.policy_per_va(self.target_agent_and_align_func_to_learned_ones[target_align_func]))

@@ -268,10 +268,7 @@ class MultiValuedCarEnv(ValueAlignedEnvironment):
         if custom_grounding is None:
             gr = self._grounding(obs=state,action=action, next_obs=next_state, done=done)
         else:
-            if next_state is not None:
-                gr = custom_grounding(None, None, next_state, None)
-            else:
-                gr = custom_grounding(state, action, next_state, None) 
+            gr = custom_grounding(state, action, next_state, None) 
         if isinstance(align_func[0], str):
             align_func = [float(a) for a in align_func[1]]
             

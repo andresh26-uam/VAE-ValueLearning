@@ -18,9 +18,9 @@ from src.algorithms.preference_based_vsl import PreferenceBasedClusteringTabular
 from src.algorithms.preference_based_vsl_lib import ConstrainedOptimizer, SobaOptimizer
 from src.dataset_processing.data import VSLPreferenceDataset
 from src.dataset_processing.datasets import calculate_dataset_save_path
-from src.feature_extractors import ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
+from src.feature_extractors import BaseRewardFeatureExtractor, ContextualFeatureExtractorFromVAEnv, FeatureExtractorFromVAEnv, OneHotFeatureExtractor
 from src.policies.vsl_policies import ValueSystemLearningPolicy
-from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, GroundingEnsemble, LinearVSLRewardFunction, TrainingModes, parse_layer_name
+from src.reward_nets.vsl_reward_functions import AbstractVSLRewardFunction, VectorModule, LinearVSLRewardFunction, TrainingModes, parse_layer_name
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
 from src.utils import filter_none_args, load_json_config
 
@@ -78,6 +78,9 @@ class VSLTrainResults:
         policy_class: ValueSystemLearningPolicy = d.get("policy_class", ValueSystemLearningPolicy)
         print("PC", policy_class)
         policies_parsed = policy_class.load(ref_env=env_state, path=policy_file)
+
+        print("GETTING POLICY FROM ", policy_file, d.get("experiment_name"))
+        #exit(0)
         return cls(
             experiment_name=d.get("experiment_name"),
             target_agent_and_vs_to_learned_ones=d.get("target_agent_and_vs_to_learned_ones"),
@@ -105,6 +108,7 @@ def save_training_results(experiment_name, target_agent_and_vs_to_learned_ones,
                 society_name=parser_args['parser_args'].society_name,
                 environment_name=parser_args['parser_args'].environment, 
                 dataset_name=parser_args['parser_args'].dataset_name, 
+                experiment_name=experiment_name,
                 class_name=policies.__class__.__name__, 
                 grounding_name='clust')
             policies.env = None
@@ -141,6 +145,7 @@ def load_training_results(experiment_name, ref_vsl_algo: PreferenceBasedClusteri
 
     # Get the saved best assignments per iteration
     historic_assignments, env_state, n_iterations_real = load_historic_assignments(experiment_name,sample=sample_historic_assignments)
+
     print("ENV STATE TRAINING RESULTS", env_state)
     for assignment in historic_assignments:
         assignment: ClusterAssignment
@@ -244,6 +249,9 @@ def parse_cluster_sizes(k, n_values):
 
 def parse_feature_extractors(environment, environment_data, dtype=torch.float32):
     # Dummy implementation, replace with actual logic
+    if environment_data['reward_feature_extractor'] == "BaseRewardFeatureExtractor":
+        reward_net_features_extractor_class = BaseRewardFeatureExtractor
+        reward_net_features_extractor_kwargs = dict()
     if environment_data['reward_feature_extractor'] == "FeatureExtractorFromVAEnv":
         reward_net_features_extractor_class = FeatureExtractorFromVAEnv
         reward_net_features_extractor_kwargs = dict(
@@ -352,7 +360,7 @@ if __name__ == "__main__":
 
     data_reward_net = environment_data['default_reward_net']
     data_reward_net.update(alg_config['reward_net'])
-    GroundingEnsemble
+    VectorModule
     reward_net = LinearVSLRewardFunction(
         environment=environment,
         use_state=data_reward_net['use_state'],
@@ -485,7 +493,7 @@ if __name__ == "__main__":
     
     assignment: ClusterAssignment = data.historic_assignments[-1]
     
-    assignment.plot_vs_assignments("demo.png")
+    #assignment.plot_vs_assignments("demo.png")
     
     assert data.target_agent_and_vs_to_learned_ones == target_agent_and_vs_to_learned_ones_s, "Mismatch in target_agent_and_vs_to_learned_ones"
     assert data.reward_net_pair_agent_and_vs.keys() == reward_net_pair_agent_and_vs_s.keys(

@@ -3,7 +3,8 @@ from copy import deepcopy
 import enum
 import os
 import time
-from typing import Callable, Iterator, Self, Tuple, override
+from typing import Any, Callable, Dict, Iterator, Optional, Self, Tuple, override
+import dill
 import gymnasium as gym
 from imitation.rewards import reward_nets
 from matplotlib import pyplot as plt
@@ -16,9 +17,28 @@ from stable_baselines3.common import preprocessing
 from itertools import chain
 
 from envs.tabularVAenv import ValueAlignedEnvironment
-from src.feature_extractors import ContextualFeatureExtractorFromVAEnv
+from src.feature_extractors import BaseRewardFeatureExtractor, ContextualFeatureExtractorFromVAEnv
 from defines import CHECKPOINTS
 
+RewardVectorDtype = Callable[[Optional[th.Tensor], 
+                        Optional[th.Tensor], 
+                        Optional[th.Tensor], 
+                        Optional[th.Tensor], 
+                        Optional[Dict[str, Any]]], th.Tensor]
+
+
+def create_alignment_layer(new_align_func, n_values, basic_layer_class, bias=False, dtype=th.float32):
+    new_alignment_net: LinearAlignmentLayer = basic_layer_class(
+            n_values, 1, bias=bias, dtype=dtype)
+    if new_align_func is not None:
+            with th.no_grad():
+                assert isinstance(new_align_func, tuple)
+                state_dict = new_alignment_net.state_dict()
+                state_dict['weight'] = th.log(
+                    th.as_tensor([list(new_align_func)], dtype=dtype).clone()+1e-8)
+
+                new_alignment_net.load_state_dict(state_dict)
+    return new_alignment_net
 class TrainingModes(enum.Enum):
     VALUE_SYSTEM_IDENTIFICATION = 'profile_learning'
     VALUE_GROUNDING_LEARNING = 'value_learning'
@@ -33,7 +53,7 @@ class ConvexLinearModule(th.nn.Linear):
             *(state_dict['weight'].shape), requires_grad=True)*10
 
         state_dict['weight'] = state_dict['weight'] / \
-            th.sum(state_dict['weight'])
+            (th.sum(state_dict['weight']) + 1e-8)
         
         self.load_state_dict(state_dict)
 
@@ -145,9 +165,9 @@ class PositiveBoundedLinearModule(ConvexAlignmentLayer):
         return output
 
 
-class GroundingEnsemble(th.nn.Module):
+class VectorModule(th.nn.Module):
     def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, dtype=th.float32, **kwargs):
-        super(GroundingEnsemble, self).__init__()
+        super(VectorModule, self).__init__()
         
         self.hid_sizes = hid_sizes
         self.num_outputs = self.hid_sizes[-1]
@@ -164,7 +184,21 @@ class GroundingEnsemble(th.nn.Module):
             self._create_single_output_net() for _ in range(self.num_outputs)
         ])
         
+    def reset(self):
+        new_networks = th.nn.ModuleList([
+            self._create_single_output_net() for _ in range(self.num_outputs)
+        ])
+        for i, net in enumerate(new_networks):
+            self.networks[i].load_state_dict(deepcopy(net.state_dict()))
+    def copy_new(self):
+        """Creates a new copy of the ensemble with the same structure but different weights."""
+        return VectorModule(self.basic_layer_classes, self.input_size, self.hid_sizes, self.activations, self.use_bias, self.debug, self.desired_dtype)
 
+    def get_network_for_value(self, value_id: int) -> th.nn.Module:
+        """Returns the network corresponding to the given value ID."""
+        if value_id < 0 or value_id >= len(self.networks):
+            raise ValueError(f"Value ID {value_id} is out of bounds for the ensemble with {len(self.networks)} networks.")
+        return self.networks[value_id]
     def _create_single_output_net(self):
         """Creates a single-output version of the original network structure."""
         modules = []
@@ -207,35 +241,63 @@ class GroundingEnsemble(th.nn.Module):
         # Run input `x` through each network in self.networks and concatenate outputs
         outputs = [net(x) for net in self.networks]
         outputs =  th.cat(outputs, dim=1)
-        if self.debug:
-            if th.is_grad_enabled():
-                # Define a loss function that only considers the output at `target_output_index`
-                target = th.tensor([[1.0]], dtype=self.desired_dtype)  # Example target value for selected output
-                profile = [0]*self.hid_sizes[-1]
-                profile[0] = 1.0
-                loss: th.Tensor = th.nn.MSELoss()(th.nn.functional.linear(outputs, th.tensor(profile, dtype=self.desired_dtype), bias=None), target)
-
-                # Backward pass to calculate gradients
-                loss.backward(retain_graph=False)
-                
-                
-                # Check gradients for isolation: verify only target network parameters have gradients
-                if __debug__:
-                    for idx, network in enumerate(self.networks):
-                        #print(f"Gradients for network {idx}:")
-                        for param in network.parameters():
-                            if param.grad is not None:
-                                if idx == 0:
-                                    assert param.grad is not None
-                                    assert th.all(param.grad == 0)
-                                    continue
-                                else:
-                                    none_grad = param.grad is None
-                                    if not none_grad:
-                                        
-                                        assert th.all(param.grad == 0), f"Network {idx} should not have gradients!"
-        
         return outputs
+
+class RewardVectorModule(VectorModule):
+    def __init__(self, *args, 
+                 basic_classes, input_size, hid_sizes, activations, use_bias,
+                 feature_extractor: BaseRewardFeatureExtractor = BaseRewardFeatureExtractor,
+                 clamp_rewards=None, # or use, e.g. [-100, 100]
+                     debug=False, **kwargs):
+        super().__init__(*args, basic_classes=basic_classes, input_size=input_size, hid_sizes=hid_sizes, activations=activations, use_bias=use_bias, debug=debug, 
+                         dtype=feature_extractor.dtype, **kwargs)
+        
+        self.feature_extractor = feature_extractor
+        self.clamp_rewards = clamp_rewards
+    def save(self, path: str, file_name: str = 'reward_vector'):
+        # Save ALL  with dill.dump without the feature extractor
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.feature_extractor = None  # Remove feature extractor to avoid saving it
+        with open(os.path.join(path, f'{file_name}.pkl'), 'wb') as f:
+            dill.dump(self, f)
+    
+    def requires_grad_(self, requires_grad=True):
+        return super().requires_grad_(requires_grad)
+    @staticmethod
+    def load(path: str, file_name: str = 'reward_vector', feature_extractor=None) -> Self:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Path {path} does not exist.")
+        with open(os.path.join(path, f'{file_name}.pkl'), 'rb') as f:
+            obj: RewardVectorModule = dill.load(f)
+        if feature_extractor is not None:
+            obj.feature_extractor = feature_extractor
+
+    def forward(self, x):
+        ret = super().forward(x)
+        if self.clamp_rewards:
+            ret = th.clamp(ret, min=self.clamp_rewards[0], max=self.clamp_rewards[1])
+        return ret
+
+    def __call__(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: bool, info=None) -> th.Tensor:
+        return self.forward(self.feature_extractor(state, action, next_state, done, info=info))
+
+class RewardVectorModuleWithKnownRewards(VectorModule):
+    def __init__(self, *args, basic_classes, input_size, hid_sizes, activations, use_bias, debug=False, dtype=th.float32, known_rewards: RewardVectorDtype=None, **kwargs):
+        super().__init__(*args, basic_classes=basic_classes, input_size=input_size, hid_sizes=hid_sizes, activations=activations, use_bias=use_bias, debug=debug, dtype=dtype, **kwargs)
+        self.known_rewards = known_rewards
+
+    def set_known_rewards(self, known_rewards):
+        self.known_rewards = known_rewards
+
+    def __call__(self, state: th.Tensor, action: th.Tensor, next_state: th.Tensor, done: bool, info=None) -> th.Tensor:
+        if self.known_rewards(state, action, next_state, done, info=info) is not None:
+            # If known rewards are provided, use them
+            reward = self.known_rewards(state, action, next_state, done, info=info)
+        else:
+            reward = super().__call__(state, action, next_state, done, info=info)
+        return reward
+
 class AbstractVSLRewardFunction(reward_nets.RewardNet):
     def set_mode(self, mode):
         self.mode = mode
@@ -379,7 +441,6 @@ class AbstractVSLRewardFunction(reward_nets.RewardNet):
         ...
 
     def _forward(self, features, align_func=None, grounding=None):
-
         x = self.value_grounding_layer(custom_layer=grounding)(features)
 
         x = self.value_system_layer(align_func=align_func)(x)
@@ -676,16 +737,8 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
         self.trained_profile_net = nn
 
     def reset_learned_alignment_function(self, new_align_func: tuple = None):
-        self.trained_profile_net: LinearAlignmentLayer = self.basic_layer_classes[-1](
-            self.hid_sizes[-1], 1, bias=self.use_bias[-1], dtype=self.desired_dtype)
-        with th.no_grad():
-            if new_align_func is not None and isinstance(self.trained_profile_net, PositiveBoundedLinearModule):
-                assert isinstance(new_align_func, tuple)
-                state_dict = self.trained_profile_net.state_dict()
-                state_dict['weight'] = th.log(
-                    th.as_tensor([list(new_align_func)], dtype=self.desired_dtype).clone())
-
-                self.trained_profile_net.load_state_dict(state_dict)
+        
+        self.trained_profile_net = create_alignment_layer(new_align_func, self.hid_sizes[-1], self.basic_layer_classes[-1], bias=self.use_bias[-1], dtype=self.desired_dtype)
 
     def clamp_tensor(self, x):
         if self.clamp_rewards is not None and self.clamp_rewards != False:
@@ -756,7 +809,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def reset_learned_grounding_function(self, new_grounding_func=None):
 
         if self.independent_groundings:
-            self.values_net = GroundingEnsemble(basic_classes=self.basic_layer_classes,input_size=self.input_size,hid_sizes=self.hid_sizes,activations=self.activations,use_bias=self.use_bias, dtype=self.desired_dtype)
+            self.values_net = VectorModule(basic_classes=self.basic_layer_classes,input_size=self.input_size,hid_sizes=self.hid_sizes,activations=self.activations,use_bias=self.use_bias, dtype=self.desired_dtype)
         else:
             modules = []
             if new_grounding_func is None:
@@ -820,7 +873,7 @@ class LinearVSLRewardFunction(AbstractVSLRewardFunction):
     def get_learned_align_function(self):
         return self.get_learned_profile()
 
-    def get_learned_grounding(self) -> GroundingEnsemble:
+    def get_learned_grounding(self) -> VectorModule:
         return self.values_net
 
     def set_network_for_value(self, value_id, network) :

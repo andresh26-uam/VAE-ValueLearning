@@ -10,6 +10,7 @@ import torch
 from src.algorithms.base_vsl_algorithm import BaseVSLAlgorithm
 from src.algorithms.utils import  mce_partition_fh, mce_occupancy_measures
 from src.policies.vsl_policies import VAlignedDictSpaceActionPolicy
+import os
 
 
 def get_color_gradient(c1, c2, mix):
@@ -35,7 +36,7 @@ def pad(array, length):
         new_arr[len(array):] = array[-1]
     return new_arr
 
-
+"""
 def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='Linf', name_method='test_lc', align_func_colors=lambda al: 'black', ylim=(0.0,1.1), show=False, usecmap='viridis'):
     plt.figure(figsize=(6, 6))
     plt.title(
@@ -80,7 +81,7 @@ def plot_learning_curves(algo: BaseVSLAlgorithm, historic_metric, name_metric='L
     plt.savefig(f'plots/Learning_curves_{name_method}.pdf')
     if show:
         plt.show()
-    plt.close()
+    plt.close()"""
 
 
 def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, vsi_or_vgl='vsi', target_align_funcs_to_learned_align_funcs=None, namefig='mce_vsl_test', show=False, learnt_policy=None, targets=None):
@@ -155,6 +156,8 @@ def plot_learned_to_expert_policies(expert_policy, vsl_algo: BaseVSLAlgorithm, v
         im2, ax=axesDown, orientation='vertical', label='State-Action Prob.')
     # Adjust layout to prevent overlap
     # fig.tight_layout()
+    dirr = os.path.join('test_results', namefig)
+    os.makedirs(dirr, exist_ok=True)
     fig.savefig('test_results/' + namefig + '_policy_dif.pdf')
     # Show the plot
     if show:
@@ -235,19 +238,23 @@ def plot_learned_and_expert_reward_pairs(vsl_algo: BaseVSLAlgorithm, learned_rew
             std_learned_al = [0 for _ in learned_al]
         
         # TODO: put it callable learner reward?
-        if hasattr(vsl_algo.learned_policy_per_va, 'state_dim'):
+        if hasattr(vsl_algo.policy, 'state_dim'):
             if isinstance(learned_rewards_per_al_func, list):
                 
                 
                 lr_per_round = [learned_rewards_per_al_func[j](
                 al)() for j in range(len(learned_rewards_per_al_func))]
                 learned_reward_al = np.mean(lr_per_round, axis=0)
+                
                 std_reward_al = np.mean(np.std(lr_per_round, axis=0))
             else:
                 learned_reward_al = learned_rewards_per_al_func(al)()
+                #print("SH", np.asarray(learned_reward_al).shape)
+                #exit(0)
 
             # Get expert rewards
             expert_reward_al = vsl_algo.env.reward_matrix_per_align_func(al)
+            
 
             # Check shape consistency
             assert learned_reward_al.shape == expert_reward_al.shape, "Learned and expert rewards must have the same shape"
@@ -256,6 +263,8 @@ def plot_learned_and_expert_reward_pairs(vsl_algo: BaseVSLAlgorithm, learned_rew
             if trajs_sampled is not None:
                 traj_expert_rewards_al =  np.array([np.sum(expert_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
                 traj_learned_rewards_al = np.array([np.sum(learned_reward_al[trajs_sampled[j].obs[:-1], trajs_sampled[j].acts]) for j in range(len(trajs_sampled))])
+            print(traj_learned_rewards_al[0:5])
+            exit(0)
         else:
             # If the environment does not have state_dim, we assume it is a single value
             
@@ -269,21 +278,24 @@ def plot_learned_and_expert_reward_pairs(vsl_algo: BaseVSLAlgorithm, learned_rew
             traj_learned_rewards_al = [0.0 for _ in range(len(lr_per_round))]
             expert_reward_al = partial(vsl_algo.env.get_reward_per_align_func, align_func=al)
                 
+            
             for round_ in range(len(lr_per_round)):
                 learned_reward_al = lr_per_round[round_]
                 traj_expert_rewards_al[round_] = np.array(
                     [np.sum(
-                        [expert_reward_al(state=s, action=a, next_state=ns, done=None) for s,a,ns in zip(
+                        [float(expert_reward_al(state=s, action=a, next_state=ns, done=None)) for s,a,ns in zip(
                             trajs_sampled[j].obs[:-1], trajs_sampled[j].acts, trajs_sampled[j].obs[1:])])
                               for j in range(len(trajs_sampled))])
                 traj_learned_rewards_al[round_] = np.array(
                     [np.sum(
-                        [learned_reward_al(state=s, action=a, next_state=ns, done=None) for s,a,ns in zip(
+                        [float(learned_reward_al(state=s, action=a, next_state=ns, done=None)) for s,a,ns in zip(
                             trajs_sampled[j].obs[:-1], trajs_sampled[j].acts, trajs_sampled[j].obs[1:])])
                               for j in range(len(trajs_sampled))])
-            traj_learned_rewards_al = np.mean(np.array(traj_learned_rewards_al), axis=0)
-            traj_expert_rewards_al = np.mean(np.array(traj_expert_rewards_al), axis=0)
             
+            traj_learned_rewards_al = np.mean(traj_learned_rewards_al, axis=0)
+            traj_expert_rewards_al = np.mean(traj_expert_rewards_al, axis=0)
+            
+
         # Flatten rewards for plotting as pairs
         learned_rewards_flat = traj_learned_rewards_al.flatten()
         expert_rewards_flat = traj_expert_rewards_al.flatten()
@@ -326,7 +338,9 @@ def plot_learned_and_expert_reward_pairs(vsl_algo: BaseVSLAlgorithm, learned_rew
         fig.delaxes(axes[-1])
 
     # Save the figure
-    fig.savefig('test_results/' + namefig + '_reward_dif_correlation.pdf')
+    dirr = os.path.join('test_results', namefig)
+    os.makedirs(dirr, exist_ok=True)
+    fig.savefig(os.path.join(dirr, 'reward_dif_correlation.pdf'))
 
     # Show the plot if requested
     if show:
@@ -388,7 +402,9 @@ def plot_learned_and_expert_rewards(vsl_algo, learned_rewards_per_al_func, cmap=
     # subfigs[0].tight_layout(pad=3.0)
     # subfigs[1].tight_layout(pad=3.0)
     # Adjust layout to prevent overlap
-    fig.savefig('test_results/' + namefig + '_reward_dif.pdf')
+    dirr = os.path.join('test_results', namefig)
+    os.makedirs(dirr, exist_ok=True)
+    fig.savefig(os.path.join(dirr, 'reward_dif.pdf'))
     # Show the plot
     if show:
         fig.show()
@@ -494,7 +510,9 @@ def plot_learned_and_expert_occupancy_measures(vsl_algo: BaseVSLAlgorithm,
         im2, ax=axesDown, orientation='vertical', label='Visitation Freq.')
     # Adjust layout to prevent overlap
     # fig.tight_layout()
-    fig.savefig('test_results/' + namefig + '_occupancy_dif.pdf')
+    dirr = os.path.join('test_results', namefig)
+    os.makedirs(dirr, exist_ok=True)
+    fig.savefig(os.path.join(dirr, 'occupancy_dif.pdf'))
     # Show the plot
     if show:
         fig.show()
@@ -609,7 +627,9 @@ def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=F
         plt.tight_layout()
         
         #plt.savefig('results/'+ 'f1_score_' + namefig + f'_{n}_runs.pdf')
-        plt.savefig('results/'+ 'acc_score_' + namefig + f'_{n}_runs.pdf')
+        dirr = os.path.join('test_results', namefig)
+        os.makedirs(dirr, exist_ok=True)
+        plt.savefig(os.path.join(dirr, 'acc_score_' + f'_{n}_runs.pdf'))
         # Show the plot
         if show:
             plt.show()
@@ -654,8 +674,9 @@ def plot_vs_preference_metrics(metrics_per_ratio, namefig='test_metrics', show=F
         plt.tight_layout()
 
         #plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
-
-        plt.savefig('results/' + 'jsd_score_' + namefig + f'_{n}_runs.pdf')
+        dirr = os.path.join('test_results', namefig)
+        os.makedirs(dirr, exist_ok=True)
+        plt.savefig(os.path.join(dirr, 'jsd_score_' + f'_{n}_runs.pdf'))
         # Show the plot
         if show:
             plt.show()

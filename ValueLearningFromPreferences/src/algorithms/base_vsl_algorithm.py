@@ -606,7 +606,7 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                     reward_func_from_matrix(rewards_per_target_agent_and_al[target_aid_and_al])\
                           if vg_or_vs == 'vs'\
                           else \
-                    grounding_func_from_matrix(groundings_per_target_agent_and_al[target][..., int(vg_or_vs)])\
+                    grounding_func_from_matrix(groundings_per_target_agent_and_al[target], vi=int(vg_or_vs))\
                       if isinstance(vg_or_vs, int) else \
                         grounding_func_from_matrix(groundings_per_target_agent_and_al[target])
 
@@ -622,12 +622,15 @@ class BaseVSLAlgorithm(base.DemonstrationAlgorithm):
                 act = None
                 next_obs = None
                 if state is not  None and reward_net.use_state:
-                    obs = util.safe_to_tensor([state] if isinstance(state, int) else np.asarray(
-                        state) if isinstance(state, np.ndarray) else state.detach().numpy())
+                    #obs = util.safe_to_tensor(np.array([state, ]) if (isinstance(state, int) or isinstance(state, np.int64)) else np.asarray(
+                    #    state) if isinstance(state, np.ndarray) else state.detach().numpy())
+                    obs = util.safe_to_tensor(np.array([state]) ,  dtype=reward_net.dtype, device=reward_net.device)
+                    
+                    #print("OBS", obs.shape)
                 if action is not None and reward_net.use_action:
-                    act = util.safe_to_tensor([action] if isinstance(action, int) else np.asarray(
-                        action) if isinstance(action, np.ndarray) else action.detach().numpy())
-                
+                    act = util.safe_to_tensor((np.array([action, ]) if (isinstance(action, int) or isinstance(action, np.int64)) else np.asarray(
+                        action) if (isinstance(action, np.ndarray)) else action.detach().numpy()))
+                    #print("ACT", act.shape)
                 rew = 0
                 grounding = np.zeros((1, self.env.n_values), dtype=np.float32)
                 #TODO: check if this is needed.

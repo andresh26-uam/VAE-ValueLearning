@@ -50,7 +50,7 @@ class FireFightersEnv(TabularVAMDP):
     def render(self):
         return self.real_env.render()
 
-    def __init__(self, env_name= 'FireFighters-v0', feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='uniform'):
+    def __init__(self, env_name= 'FireFighters-v0', feature_selection=FeatureSelectionFFEnv.ONE_HOT_FEATURES, horizon=100, initial_state_distribution='good_state'):
         self.init__kwargs = locals()
         self.init__kwargs.pop('self', None)
         self.init__kwargs.pop('__class__', None)

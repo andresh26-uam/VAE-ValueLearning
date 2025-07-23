@@ -681,8 +681,9 @@ if __name__ == "__main__":
         dataset_test = create_dataset(parser_args, config, society_data, train_or_test='test',
                                       default_groundings=society_config[parser_args.environment]['groundings'])
         print("TEST SIZE", len(dataset_test))
+        print([t.obs[0] for t in dataset_train.fragments1])
     else:
         dataset = create_dataset(parser_args, config, society_data,
                                  default_groundings=society_config[parser_args.environment]['groundings'])
         print("Dataset generated correctly.")
-        print("Dataset size", len(dataset))
+        #print("Dataset size", len(dataset))

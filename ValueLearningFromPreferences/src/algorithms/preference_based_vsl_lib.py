@@ -166,7 +166,7 @@ def likelihood_x_is_target(pred_probs, target_probs, mode='numpy', slope=1, adap
             # if slope = a, the minimum possible probability value would be 1 - a, for instance, if slope = 0.3, the minimum possible probability value would be 0.7
             # If slope is bigger than 1, the minimum possible probability value would be 0, in a segment of the input space bigger as the slope increases.
             probs = 1 - slope * \
-                minfun(1/target_probs, 1/(1-target_probs)) * \
+                minfun(1/(target_probs+1e-8), 1/(1-(target_probs+1e-8))) * \
                 absfun(target_probs - pred_probs)
     else:
             # Here the slope is the slope of the linear , and it will always give bigger or equal probabilities than the adaptive slope. It is then, more lax but "unfair" method
@@ -436,9 +436,10 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
                 
             all_rews_vs_aid, all_rews_gr_aid = self.rewards(
                 all_transitions_aid, only_with_alignment=only_for_alignment_function is not None, alignment=only_for_alignment_function, custom_model=model, only_grounding=only_grounding)
-            
-                
-
+            """if all_rews_gr_aid is not None: 
+                print("RW??", all_rews_gr_aid[0:10])
+                print("VS??", all_rews_vs_aid[0:10])
+"""
             idx = 0
 
             if self.algorithm.allow_variable_horizon:
@@ -542,11 +543,9 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         action = None
         next_state = None
        
-        if self.model.use_state:
-            state = util.safe_to_tensor(
+        state = util.safe_to_tensor(
                 transitions.obs, device=self.model.device, dtype=self.model.dtype)
-        if self.model.use_action:
-            action = util.safe_to_tensor(
+        action = util.safe_to_tensor(
                 transitions.acts, device=self.model.device, dtype=self.model.dtype)
         if self.model.use_next_state:
             next_state = util.safe_to_tensor(
@@ -701,6 +700,7 @@ class PreferenceModelClusteredVSL(preference_comparisons.PreferenceModel):
         # We take the softmax of the returns. model_probability
         # is the first dimension of that softmax, representing the
         # probability that fragment 1 is preferred.
+        assert not any(returns_diff.isnan()), f"returns_diff is NaN. rews1: {rews1}, rews2: {rews2}, returns_diff: {returns_diff}"
         probability = 1.0 / (1.0 + returns_diff.exp())
         if self.noise_prob > 0:
             probability = self.noise_prob * 0.5 + \
@@ -873,7 +873,7 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
         
         if self.confident_penalty > 0.0 or self.loss_object.label_smoothing > 0.0:
             
-            s = th.sum(self.loss_object.forward(probs_l, target_probs_l) + self.confident_penalty*th.multiply(probs_l, th.log(probs_l)))
+            s = th.sum(self.loss_object.forward(probs_l, target_probs_l) + self.confident_penalty*th.multiply(probs_l, th.log(probs_l+1e-6)))
         else:
             s = th.nn.functional.binary_cross_entropy(probs_l, target_probs_l, reduction='sum')
         return s / len(probs)
@@ -1168,11 +1168,11 @@ class BaseVSLClusterRewardLoss(preference_comparisons.RewardLoss):
                 with th.no_grad():
                     worst_conciseness_idx_real = th.argwhere(conciseness_real == th.amin(conciseness_real)).flatten()
                 #not needed, it is an equivalent solution. weights = (1.0 - conciseness_real[worst_conciseness_idx_real])/np.sum(conciseness_real[worst_conciseness_idx_real])
-                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])/len(worst_conciseness_idx_real)
+                conc_penalty = th.sum(stacked_penalties[worst_conciseness_idx_real])/(1e-8 + len(worst_conciseness_idx_real))
             else:
                 with th.no_grad():
                     weights = (1.0 - conciseness_real) # The closer to 0 the conciseness, the more important the penalty.
-                conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights))
+                conc_penalty = th.dot(stacked_penalties, weights)/(th.sum(weights)+1e-8)
             #conc_penalty = th.mean(th.stack(conc_penalties))
                 
             

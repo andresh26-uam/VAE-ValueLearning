@@ -28,5 +28,5 @@ def calculate_trajectory_save_path(dataset_name, ag, environment_data, society_d
 
 def calculate_expert_policy_save_path(environment_name, society_name, dataset_name, class_name, grounding_name):
     return f'{environment_name}/{society_name}/{dataset_name}/{class_name}/expert_policy_G_{grounding_name}'
-def calculate_learned_policy_save_path(environment_name, society_name, dataset_name, class_name, grounding_name):
-    return f'{environment_name}/{society_name}/{dataset_name}/{class_name}/learned_policy_G_{grounding_name}'
+def calculate_learned_policy_save_path(environment_name, society_name, dataset_name, experiment_name, class_name, grounding_name):
+    return f'{environment_name}/{society_name}/{dataset_name}/{experiment_name}/{class_name}/learned_policy_G_{grounding_name}'

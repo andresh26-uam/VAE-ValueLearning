@@ -427,8 +427,8 @@ class TabularVAMDP(ValueAlignedEnvironment):
         return self.observation_matrix[state]
     
 
-def grounding_func_from_matrix(assumed_grounding: np.ndarray):
-    return partial(grounding_func_from_matrix_partial, assumed_grounding)
+def grounding_func_from_matrix(assumed_grounding: np.ndarray, vi=None):
+    return partial(grounding_func_from_matrix_partial, assumed_grounding, vi)
 
 def reward_func_from_matrix(reward_matrix: np.ndarray):
     return partial(reward_func_from_matrix_partial, reward_matrix)
@@ -450,26 +450,26 @@ def reward_func_from_matrix_partial(reward_matrix: np.ndarray, state=None, actio
                         reward_matrix[next_state,: ] if next_state is not None else \
                         reward_matrix
         elif len(reward_matrix.shape) == 3:
-            return reward_matrix[state,action,next_state, :] if state is not None and action is not None and next_state is not None else \
-                        reward_matrix[state,action,:, :] if state is not None and action is not None else \
-                        reward_matrix[state, :, next_state, :] if state is not None and next_state is not None else \
-                        reward_matrix[:, action, next_state, :] if action is not None and next_state is not None else \
-                        reward_matrix[state, :, :, :, :] if state is not None else \
+            return reward_matrix[state,action,next_state] if state is not None and action is not None and next_state is not None else \
+                        reward_matrix[state,action,:] if state is not None and action is not None else \
+                        reward_matrix[state, :, next_state] if state is not None and next_state is not None else \
+                        reward_matrix[:, action, next_state] if action is not None and next_state is not None else \
+                        reward_matrix[state, :, :] if state is not None else \
                         reward_matrix[:, action, :] if action is not None else \
-                        reward_matrix[:, :, next_state, :] if next_state is not None else \
+                        reward_matrix[:, :, next_state] if next_state is not None else \
                         reward_matrix
         elif len(reward_matrix.shape) == 4:
             if done is not None:
-                return reward_matrix[state, action, next_state, :, done] if state is not None and action is not None and next_state is not None else \
+                return reward_matrix[state, action, next_state, done] if state is not None and action is not None and next_state is not None else \
                         reward_matrix[state, action, :, done] if state is not None and action is not None else \
                         reward_matrix[state, :, next_state, done] if state is not None and next_state is not None else \
                         reward_matrix[:, action, next_state, done] if action is not None and next_state is not None else \
                         reward_matrix[state, :, :, done] if state is not None else \
                         reward_matrix[:, action, :, done] if action is not None else \
                         reward_matrix[:, :, next_state, done] if next_state is not None else \
-                        reward_matrix[..., done,:]
+                        reward_matrix[..., done]
             else:
-                return reward_matrix[state, action, next_state, :, :] if state is not None and action is not None and next_state is not None else \
+                return reward_matrix[state, action, next_state, :] if state is not None and action is not None and next_state is not None else \
                         reward_matrix[state, action, :, :] if state is not None and action is not None else \
                         reward_matrix[state, :, next_state, :] if state is not None and next_state is not None else \
                         reward_matrix[:, action, next_state, :] if action is not None and next_state is not None else \
@@ -477,34 +477,35 @@ def reward_func_from_matrix_partial(reward_matrix: np.ndarray, state=None, actio
                         reward_matrix[:, action, :, :] if action is not None else \
                         reward_matrix[:, :, next_state, :] if next_state is not None else \
                         reward_matrix
-def grounding_func_from_matrix_partial(assumed_grounding: np.ndarray, state=None, action=None, next_state=None, done=None, info=None):
+def grounding_func_from_matrix_partial(assumed_grounding: np.ndarray, vi, state=None, action=None, next_state=None, done=None, info=None):
         if len(assumed_grounding.shape) == 3:
+            
             if action is not None:
-                return assumed_grounding[state,action,:] if state is not None and action is not None else\
+                ret= assumed_grounding[state,action,:] if (state is not None) and (action is not None) else\
                             assumed_grounding[state, :, :] if state is not None else \
                             assumed_grounding[:, action, :] if action is not None else \
                             assumed_grounding
             else:
-                return assumed_grounding[state,next_state,:] if state is not None and next_state is not None else\
+                ret= assumed_grounding[state,next_state,:] if state is not None and next_state is not None else\
                             assumed_grounding[state, :, :] if state is not None else \
                             assumed_grounding[:, next_state, :] if next_state is not None else \
                             assumed_grounding
         elif len(assumed_grounding.shape) == 2:
-            return assumed_grounding[state, :] if state is not None else \
+            ret= assumed_grounding[state, :] if state is not None else \
                         assumed_grounding[next_state,: ] if next_state is not None else \
                         assumed_grounding
         elif len(assumed_grounding.shape) == 4:
-            return assumed_grounding[state,action,next_state, :] if state is not None and action is not None and next_state is not None else \
-                        assumed_grounding[state,action,:, :] if state is not None and action is not None else \
-                        assumed_grounding[state, :, next_state, :] if state is not None and next_state is not None else \
-                        assumed_grounding[:, action, next_state, :] if action is not None and next_state is not None else \
-                        assumed_grounding[state, :, :, :, :] if state is not None else \
-                        assumed_grounding[:, action, :] if action is not None else \
-                        assumed_grounding[:, :, next_state, :] if next_state is not None else \
+            ret= assumed_grounding[state,action,next_state, :] if (state is not None) and (action is not None) and (next_state is not None) else \
+                        assumed_grounding[state,action,:, :] if (state is not None) and (action is not None) else \
+                        assumed_grounding[state, :, next_state, :] if (state is not None) and (next_state is not None) else \
+                        assumed_grounding[:, action, next_state, :] if (action is not None) and (next_state is not None) else \
+                        assumed_grounding[state, :, :, :, :] if (state is not None) else \
+                        assumed_grounding[:, action, :] if (action is not None) else \
+                        assumed_grounding[:, :, next_state, :] if (next_state is not None) else \
                         assumed_grounding
         elif len(assumed_grounding.shape) == 5:
             if done is not None:
-                return assumed_grounding[state, action, next_state, :, done, :] if state is not None and action is not None and next_state is not None else \
+                ret= assumed_grounding[state, action, next_state, :, done, :] if (state is not None) and (action is not None) and (next_state is not None) else \
                         assumed_grounding[state, action, :, done, :] if state is not None and action is not None else \
                         assumed_grounding[state, :, next_state, done, :] if state is not None and next_state is not None else \
                         assumed_grounding[:, action, next_state, done, :] if action is not None and next_state is not None else \
@@ -513,7 +514,7 @@ def grounding_func_from_matrix_partial(assumed_grounding: np.ndarray, state=None
                         assumed_grounding[:, :, next_state, done, :] if next_state is not None else \
                         assumed_grounding[..., done]
             else:
-                return assumed_grounding[state, action, next_state, :, :, :] if state is not None and action is not None and next_state is not None else \
+                ret= assumed_grounding[state, action, next_state, :, :, :] if state is not None and action is not None and next_state is not None else \
                         assumed_grounding[state, action, :, :, :] if state is not None and action is not None else \
                         assumed_grounding[state, :, next_state, :, :] if state is not None and next_state is not None else \
                         assumed_grounding[:, action, next_state, :, :] if action is not None and next_state is not None else \
@@ -521,7 +522,7 @@ def grounding_func_from_matrix_partial(assumed_grounding: np.ndarray, state=None
                         assumed_grounding[:, action, :, :, :] if action is not None else \
                         assumed_grounding[:, :, next_state, :, :] if next_state is not None else \
                         assumed_grounding
-
+        return ret[...,vi] if vi is not None else ret
 class ContextualEnv(ValueAlignedEnvironment):
 
     @property

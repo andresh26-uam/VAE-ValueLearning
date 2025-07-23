@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from copy import deepcopy
 import pickle
+import random
 import dill
 from stable_baselines3.ppo import MlpPolicy
 from sb3_contrib.common.wrappers import ActionMasker
@@ -12,7 +13,7 @@ import os
 from seals import base_envs
 import signal
 import sys
-from typing import Any, Callable, Dict, List, Tuple, Union, override
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, override
 import gymnasium as gym
 import numpy as np
 
@@ -26,11 +27,198 @@ import torch
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.base_class import BaseAlgorithm
 from envs.tabularVAenv import TabularVAMDP, ValueAlignedEnvironment
+from morl_baselines.common.morl_algorithm import MOAgent, MOPolicy
 from src.algorithms.utils import PolicyApproximators, concentrate_on_max_policy, mce_partition_fh
 from src.dataset_processing.data import TrajectoryWithValueSystemRews
 from defines import CHECKPOINTS
 
+from src.reward_nets.vsl_reward_functions import RewardVectorDtype
 from src.utils import NpEncoder, deconvert, deserialize_policy_kwargs, serialize_lambda, deserialize_lambda, import_from_string, serialize_policy_kwargs
+
+class ModifyStepWrapper(gym.wrappers.OrderEnforcing):
+    """ A wrapper for environments that allows storing the previous observation and info """
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        self.prev_obs = None
+        self.prev_info = None
+
+    def reset(self, *, seed=None, options=None):
+        self.prev_obs, self.prev_info = self.env.reset(seed=seed, options=options)
+        
+        return self.prev_obs, self.prev_info
+
+    def modify_step(self, obs: np.ndarray, action: np.ndarray, next_obs: np.ndarray, reward: np.ndarray, done: bool, truncated: bool, prev_info: Dict[str, Any], info: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, bool, bool, Dict[str, Any]]:
+        return next_obs, reward, done, truncated, info
+    
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool, bool, Dict[str, Any]]:
+        next_obs, reward, done, truncated, info = self.env.step(action)
+        next_obs, reward, done, truncated, info = self.modify_step(self.prev_obs, action, next_obs, reward, done, truncated, self.prev_info, info)
+        self.prev_obs = next_obs
+        self.prev_info = info
+        return next_obs, reward, done, truncated, info
+class RewardVectorFunctionWrapper(ModifyStepWrapper):
+    """
+    A wrapper for environments that allows setting a custom reward vector function.
+    """
+
+    def __init__(self, env: gym.Env, reward_vector_function: RewardVectorDtype):
+        super().__init__(env)
+        self.reward_vector_function = reward_vector_function
+
+    def set_reward_vector_function(self, reward_vector_function: RewardVectorDtype) -> None:
+        self.reward_vector_function = reward_vector_function
+
+    def modify_step(self, obs, action, next_obs, reward, done, truncated, prev_info, info):
+        if self.reward_vector_function is not None:
+            reward = self.reward_vector_function(obs, action, next_obs, done, prev_info)
+        
+        return next_obs, reward, done, truncated, info
+def obtain_trajectory_and_eval_mo(
+    agent: Union[MOPolicy, MOAgent],
+    env: gym.Env,
+    w: Optional[np.ndarray] = None,
+    w_eval: Optional[np.ndarray] = None,
+    reward_vector: Optional[RewardVectorDtype] = None,
+    scalarization=np.dot,
+    exploration=0.0,
+    seed=None,
+    render: bool = False,
+    agent_name: str = 'unk',
+) -> Tuple[TrajectoryWithValueSystemRews, Tuple[float, float, np.ndarray, np.ndarray]]:
+    """Evaluates one episode of the agent in the environment.
+
+    Args:
+        agent: Agent
+        env: MO-Gymnasium environment with LinearReward wrapper
+        scalarization: scalarization function, taking weights and reward as parameters
+        w (np.ndarray): Weight vector
+        render (bool, optional): Whether to render the environment. Defaults to False.
+        reward_vector: Optional callable for reward vector function
+        seed: Random seed for reproducibility
+        exploration (float, optional): Exploration rate for the agent. Defaults to 0.0.
+        agent_name: Name of the agent for logging purposes
+
+
+    Returns:
+        (TrajectoryWithValueSystemRews, (float, float, np.ndarray, np.ndarray)): Trajectory with value system rewards and evaluation metrics [Scalarized return, scalarized discounted return, vectorized return, vectorized discounted return].
+    """
+    observations = []
+    actions = []
+    v_rews = []
+    rews = []
+    infos = []
+    if reward_vector is not None:
+        if env.has_wrapper_attr('set_reward_vector_function'):
+            env.get_wrapper_attr('set_reward_vector_function')(reward_vector)
+        else:
+            env = RewardVectorFunctionWrapper(env, reward_vector)
+
+    obs, info = env.reset(seed=seed)
+    
+    
+    vec_return, disc_vec_return = np.zeros_like(w), np.zeros_like(w)
+    w_eval = w_eval if w_eval is not None else w
+    w = np.asarray(w, dtype=np.float32) if w is not None else None
+    w_eval = np.asarray(w_eval, dtype=np.float32) if w_eval is not None else None
+    agent.set_weights(w)
+    
+    gamma = 1.0 
+    
+    observations.append(obs)
+    terminated = False
+    truncated = False
+    while not (terminated or truncated):
+        if render:
+            env.render()
+        if exploration > 0.0:
+            if random.random() < exploration:
+                a = env.action_space.sample()
+            else:
+                a = agent.eval(obs, w)
+        else:
+            a = agent.eval(obs, w)
+        obs, r, terminated, truncated, info = env.step(a)
+        if isinstance(r, torch.Tensor): r = r.detach().cpu().numpy()
+        assert r.shape == w.shape, f"Reward shape {r.shape} does not match weight vector {w.shape}"
+        assert len(r.shape) == 1, f"Reward shape {r.shape} should be 1-dimensional"
+        
+        vec_return += r
+        disc_vec_return += gamma * r
+        observations.append(obs)
+        actions.append(a)
+        v_rews.append(r)
+        infos.append(info)
+        rews.append(scalarization(w_eval, r))
+
+        gamma *= agent.gamma
+
+    if w is None:
+        scalarized_return = scalarization(vec_return)
+        scalarized_discounted_return = scalarization(disc_vec_return)
+    else:
+        scalarized_return = scalarization(w_eval, vec_return)
+        scalarized_discounted_return = scalarization(w_eval, disc_vec_return)
+    # maybe a problem with the terminal state...
+    return TrajectoryWithValueSystemRews(obs=np.array(observations), 
+                                         acts=np.array(actions), 
+                                         infos=np.array(infos), rews=np.array(rews), terminal=terminated, n_vals=w.shape[0], v_rews=np.array(v_rews).T, agent=agent_name), (
+        scalarized_return,
+        scalarized_discounted_return,
+        vec_return,
+        disc_vec_return,
+    )
+
+def obtain_trajectories_and_eval_mo(
+    agent: Union[MOPolicy, MOAgent],
+    env: gym.Env,
+    ws: Optional[List] = [None],
+    ws_eval: Optional[np.ndarray] = [None],
+    reward_vector: Optional[RewardVectorDtype] = None,
+    exploration=0.0, 
+    scalarization=np.dot,
+    seed=None,
+    n_seeds: int = 100,
+    repeat_per_seed: int = 1,
+    render: bool = False,
+    agent_name: str = 'unk') -> Tuple[TrajectoryWithValueSystemRews, Tuple[float, float, np.ndarray, np.ndarray]]:
+    """Obtains trajectories from the agent in the environment.
+    Args:
+        agent: Agent
+        env: MO-Gymnasium environment with LinearReward wrapper
+        scalarization: scalarization function, taking weights and reward as parameters
+        w (np.ndarray): Weight vector
+        render (bool, optional): Whether to render the environment. Defaults to False.
+        exploration (float, optional): Exploration rate for the agent. Defaults to 0.0.
+        reward_vector: Optional callable for reward vector function 
+        seed: Random seed for reproducibility
+        n_seeds: Number of seeds to use for evaluation
+        repeat_per_seed: Number of times to repeat the evaluation for each seed
+        agent_name: Name of the agent for logging purposes
+
+    Returns:
+        List[TrajectoryWithValueSystemRews], (float, float, np.ndarray, np.ndarray): List of trajectories with value system rewards and evaluation metrics (see eval_mo_w_trajectory for details).
+    """
+    trajectories = []
+    count_evals = 0
+    total_eval = None
+    for si in range(n_seeds):
+        for w, w_eval in zip(ws, ws_eval):
+            for r in range(repeat_per_seed):
+                traj, evaluation = obtain_trajectory_and_eval_mo(
+                    agent=agent, env=env, w=w, w_eval=w_eval, reward_vector=reward_vector, scalarization=scalarization, seed=seed*n_seeds+si, render=render, agent_name=agent_name,
+                    exploration=exploration
+                )
+                trajectories.append(traj)
+                if total_eval is None:
+                    total_eval = list(evaluation)
+                else:
+                    for i in range(len(total_eval)):
+                        total_eval[i] += evaluation[i]
+                count_evals += 1
+    for i in range(len(total_eval)):
+        total_eval[i] /= count_evals    
+    return trajectories, tuple(total_eval)
+
 
 
 class ValueSystemLearningPolicy():
@@ -350,6 +538,7 @@ class ValueSystemLearningPolicy():
             """
         if initial_state_distribution is not None:
             self.env.set_initial_state_distribution(initial_state_distribution)
+        
         trajs = self.obtain_trajectories(n_seeds=n_seeds, seed=seed, options=options, stochastic=stochastic,
                                              repeat_per_seed=n_rep_per_seed, 
                                              align_funcs_in_policy=[policy_align_func,],
@@ -576,6 +765,9 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy,BasePolicy):
         self._sampling_learner = None
         self._alignment_func_in_policy = None
 
+    def policy_per_va(self, va):
+        return self.get_learner_for_alignment_function(va)
+
     def get_environ(self, alignment_function):
         self.env.set_align_func(alignment_function)
         if self.masked:
@@ -586,6 +778,10 @@ class LearnerValueSystemLearningPolicy(ValueSystemLearningPolicy,BasePolicy):
             environ = self.env
         
         return environ
+    
+    def set_policy_for_va(self, va, policy: BasePolicy):
+        self.learner_per_align_func[va] = policy
+
 
     def get_learner_for_alignment_function(self, alignment_function):
 
@@ -808,7 +1004,6 @@ class VAlignedDiscreteDictPolicy(VAlignedDiscretePolicy):
 
     def __init__(self, policy_per_va_dict, env, state_encoder=None, expose_state=True, assume_env_produce_state=True, *args, **kwargs):
         self.policy_per_va_dict = policy_per_va_dict
-
         policy_per_va = lambda x:  self.policy_per_va_dict[x]
         
         super().__init__(policy_per_va, env, state_encoder, expose_state, assume_env_produce_state, *args, **kwargs)

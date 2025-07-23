@@ -507,8 +507,12 @@ if __name__ == "__main__":
 
         )
     vsl_algo.init_models(10, vsl_algo.vsi_optimizer_cls, vsl_algo.vsi_optimizer_kwargs)
+    
     data = load_training_results(ref_vsl_algo=vsl_algo,
         experiment_name=experiment_name)
+    print("EN", data.experiment_name)
+    #print("PD", data.policies.policy_per_va_dict.keys())
+    #exit(0)
     print(list(data.target_agent_and_vs_to_learned_ones.values())[0])
     
     print(data.metrics['learned_rewards'](list(data.target_agent_and_vs_to_learned_ones.keys())[0],1))
@@ -516,36 +520,66 @@ if __name__ == "__main__":
     target_al_aid, learned_al_aid = list(data.target_agent_and_vs_to_learned_ones.items())[0]
     
     
+    print("SHOULD B", data.target_agent_and_vs_to_learned_ones)
     
-    
-
+    #custom = np.zeros((env.state_dim), dtype=np.float32)
+    #custom[323] = 1.0
     # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
     exp_estimated, exp_estimated_real, trajs_sampled = data.policies.calculate_value_grounding_expectancy(value_grounding=
         lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,),
         policy_align_func=learned_al_aid,
         seed=parser_args.seed,
         n_rep_per_seed=1,
-        n_seeds=400,
-        stochastic=society_data['stochastic_expert'],
+        n_seeds=100,
+        stochastic=True,
+        initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None # TODO: this do not make sense in general...
+        #initial_state_distribution=single_state
+        )
+    exp_estimated_ns, exp_estimated_real_ns, trajs_sampled_ns = data.policies.calculate_value_grounding_expectancy(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,),
+        policy_align_func=learned_al_aid,
+        seed=parser_args.seed,
+        n_rep_per_seed=1,
+        n_seeds=100,
+        stochastic=False,
         initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None # TODO: this do not make sense in general...
         #initial_state_distribution=single_state
         )
     # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
     exp_precise_estimated = None
     exp_precise_real = None
+    exp_precise_estimated_ns = None
+    exp_precise_real_ns = None
     if society_data['is_tabular']:
         exp_precise_estimated, exp_precise_real= data.policies.calculate_value_grounding_expectancy_precise(value_grounding=
         lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done),
         policy_align_func=learned_al_aid,
          initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
         
-        stochastic=society_data['stochastic_expert']
+        stochastic=True
+        )
+        exp_precise_estimated_ns, exp_precise_real_ns= data.policies.calculate_value_grounding_expectancy_precise(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done),
+        policy_align_func=learned_al_aid,
+         initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+        
+        stochastic=False
         )
     
     
-    print(f"For target agent {target_al_aid} to learned cluster {learned_al_aid}")
-    print(f"Value grounding learned from learned policiy: {exp_estimated} vs precise: {exp_precise_estimated}")
-    print(f"Value grounding real from learned policy: {exp_estimated_real} vs precise: {exp_precise_real}")
+    # Save alignment calculations to a text file
+    alignment_text = (
+        f"For target agent {target_al_aid} to learned cluster {learned_al_aid}\n"+
+        f"EXPERT WAS: STO={society_data['stochastic_expert']} and learner was STO={vsl_algo.learn_stochastic_policy}\n"+
+        f"Value grounding learned from learned policy (STOCHASTIC): {exp_estimated} vs precise: {exp_precise_estimated}\n"+
+        f"Value grounding real from learned policy (STOCHASTIC): {exp_estimated_real} vs precise: {exp_precise_real}\n"+
+        f"Value grounding learned from learned policy (DETERMINISTIC): {exp_estimated_ns} vs precise: {exp_precise_estimated_ns}\n"+
+        f"Value grounding real from learned policy (DETERMINISTIC): {exp_estimated_real_ns} vs precise: {exp_precise_real_ns}\n"
+    )
+    os.makedirs(f'test_results/{experiment_name}/rl', exist_ok=True)
+    with open(f'test_results/{experiment_name}/rl/alignment_calculations.txt', 'w') as f:
+        f.write(alignment_text)
+    print(alignment_text)
     #exit(0)
 
 
@@ -564,25 +598,39 @@ if __name__ == "__main__":
     for t,v in  data.target_agent_and_vs_to_learned_ones.items():
         if t[1] in unique_al and t[1] not in [tt[1] for tt in targets_all]:
             targets_all.append(t)
-    #print(targets_all)
+    print("TARGET", targets_all)
+    #exit(0)
+    #print([t.obs[0] for t in trajs_sampled])
+    #print(list(t.obs[0] for t in dataset_train.fragments1))
+    #exit(0)
+    
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
                                          learned_rewards_per_al_func=
                                          lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
-                                         , vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-                                         namefig='prueba_rpairs_SAMPLED_WITH_LearnedPol.png', show=parser_args.show,
+                                         , vsi_or_vgl='sim',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TRAJS_SAMPLED_W_LEARNED_POL_STO', show=parser_args.show,
                                          trajs_sampled=trajs_sampled)
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
+                                         , vsi_or_vgl='sim',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TRAJS_SAMPLED_W_LEARNED_POL_DET', show=parser_args.show,
+                                         trajs_sampled=trajs_sampled_ns)
+    
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
                                          learned_rewards_per_al_func=
                                          lambda target: (lambda state=None, action=None, next_state=None, done=None,vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
                                          , vsi_or_vgl='sim',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-                                         namefig='prueba_rpairs_ORIGINAL.png', show=parser_args.show,
-                                         trajs_sampled=list(dataset_train.fragments1) + list(dataset_train.fragments2))
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TRAIN_TRAJS', show=parser_args.show,
+                                         trajs_sampled=(list(dataset_train.fragments1) + list(dataset_train.fragments2))[0:100])
+    
+
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
                                          learned_rewards_per_al_func=
                                          lambda target: (lambda state=None, action=None,next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action,next_state=next_state, done=done,)))
-                                         , vsi_or_vgl='vgl',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-                                         namefig='prueba_rpairs_TEST_TRAJS.png', show=parser_args.show,
-                                         trajs_sampled=list(dataset_test.fragments1) + list(dataset_test.fragments2))
+                                         , vsi_or_vgl='sim',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TEST_TRAJS', show=parser_args.show,
+                                         trajs_sampled=(list(dataset_test.fragments1) + list(dataset_test.fragments2))[0:100])
     
     if society_data['is_tabular']:
         plot_learned_and_expert_rewards(vsl_algo=vsl_algo, 
@@ -593,7 +641,7 @@ if __name__ == "__main__":
                                                     state=state, action=action,next_state=next_state, done=done,)))
                                     , vsi_or_vgl='vgl',
         target_align_funcs_to_learned_align_funcs={target_al_aid: data.target_agent_and_vs_to_learned_ones[target_al_aid]},
-        namefig='prueba_r.png', show=parser_args.show,
+        namefig=f'{experiment_name}/rl/reward_diff_tabular', show=parser_args.show,
          targets=targets_all,
         )
     if exp_parser_args.algorithm == 'pc':
@@ -639,13 +687,23 @@ if __name__ == "__main__":
     # This is the learned grounding and the real grounding expectation from the policies learned with the learned reward. 
     exp_precise_estimated = None
     exp_precise_real = None
+    exp_precise_estimated_ns = None
+    exp_precise_real_ns = None
     if society_data['is_tabular']:
+        
         exp_precise_estimated, exp_precise_real= epi.calculate_value_grounding_expectancy_precise(value_grounding=
             lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
             policy_align_func=target_al_aid,
             initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
             
-            stochastic=society_data['stochastic_expert']
+            stochastic=True
+            )
+        exp_precise_estimated_ns, exp_precise_real_ns= epi.calculate_value_grounding_expectancy_precise(value_grounding=
+            lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
+            policy_align_func=target_al_aid,
+            initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+            
+            stochastic=False
             )
         
     # This is the learned grounding and the real grounding expectation from the expert policies 
@@ -654,31 +712,48 @@ if __name__ == "__main__":
         policy_align_func=target_al_aid,
         seed=parser_args.seed,
         n_rep_per_seed=1,
-        n_seeds=400,
-        stochastic=society_data['stochastic_expert'],
+        n_seeds=100,
+        stochastic=True,
         initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
         #initial_state_distribution=single_state
         )
-    # This is the learned grounding and the real grounding expectation from the expert policies
-    exp_precise_estimated = None
-    exp_precise_real = None
-    if society_data['is_tabular']:
-        exp_precise_estimated, exp_precise_real= epi.calculate_value_grounding_expectancy_precise(value_grounding=
-            lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
-            policy_align_func=target_al_aid,
-            initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
-            
-            stochastic=society_data['stochastic_expert']
-            )
-    print(f"Value grounding learned from expert policy: {exp_estimated} vs precise: {exp_precise_estimated}")
-    print(f"Value grounding real from expert policy: {exp_estimated_real} vs precise: {exp_precise_real}")
+    exp_estimated_ns, exp_estimated_real_ns, trajs_sampled2_ns = epi.calculate_value_grounding_expectancy(value_grounding=
+        lambda state=None, action=None, next_state=None, done=None, vi=None: data.metrics['learned_rewards'](target_al_aid,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done),
+        policy_align_func=target_al_aid,
+        seed=parser_args.seed,
+        n_rep_per_seed=1,
+        n_seeds=100,
+        stochastic=False,
+        initial_state_distribution=data.env_state.initial_state_dist if hasattr(data.env_state, 'initial_state_dist') else None,
+        #initial_state_distribution=single_state
+        )
     
+    alignment_text = (
+        f"For target agent {target_al_aid} to learned cluster {learned_al_aid}\n"+
+        f"EXPERT WAS: STO={society_data['stochastic_expert']} and learner was STO={vsl_algo.learn_stochastic_policy}\n"+
+        f"Value grounding learned from EXPERT policy (STOCHASTIC): {exp_estimated} vs precise: {exp_precise_estimated}\n"+
+        f"Value grounding real from EXPERT policy (STOCHASTIC): {exp_estimated_real} vs precise: {exp_precise_real}\n"+
+        f"Value grounding learned from EXPERT policy (DETERMINISTIC): {exp_estimated_ns} vs precise: {exp_precise_estimated_ns}\n"+
+        f"Value grounding real from EXPERT policy (DETERMINISTIC): {exp_estimated_real_ns} vs precise: {exp_precise_real_ns}\n"
+    )
+    
+    os.makedirs(f'test_results/{experiment_name}/rl', exist_ok=True)
+    with open(f'test_results/{experiment_name}/rl/alignment_calculations.txt', 'a') as f:
+        f.write(alignment_text)
+    print(alignment_text)
+
     plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
                                          learned_rewards_per_al_func=
                                          lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done)))
                                          , vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-                                         namefig='prueba_rpairs_SAMPLED_WITH_EXPERT.png', show=parser_args.show,
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TRAJS_SAMPLED_W_EXPERT_POL_STO.png', show=parser_args.show,
                                          trajs_sampled=trajs_sampled2)
+    plot_learned_and_expert_reward_pairs(vsl_algo=vsl_algo, targets=targets_all,
+                                         learned_rewards_per_al_func=
+                                         lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done)))
+                                         , vsi_or_vgl='vsi',target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
+                                         namefig=f'{experiment_name}/rl/reward_pairs_TRAJS_SAMPLED_W_EXPERT_POL_DET.png', show=parser_args.show,
+                                         trajs_sampled=trajs_sampled2_ns)
     
     
     
@@ -687,7 +762,7 @@ if __name__ == "__main__":
                                     , vsl_algo=vsl_algo,
         vsi_or_vgl='sim',
         target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-        namefig='prueba_r.png', show=parser_args.show,
+        namefig=f'{experiment_name}/rl/policy_diff_tabular', show=parser_args.show,
          targets=targets_all,)
         
         plot_learned_and_expert_occupancy_measures(
@@ -695,13 +770,13 @@ if __name__ == "__main__":
             learned_rewards_per_al_func=lambda target: (lambda state=None, action=None, next_state=None, done=None, vi=(int(np.where(np.asarray(target[1])==1.0)[0][0]) if 1.0 in target[1] else 'vs'): np.array(data.metrics['learned_rewards'](target,vg_or_vs=vi)(state=state, action=action, next_state=next_state, done=done,)))
             , vsi_or_vgl='vgl',
             target_align_funcs_to_learned_align_funcs=data.target_agent_and_vs_to_learned_ones,
-            namefig='prueba_r.png', show=parser_args.show,
+            namefig=f'{experiment_name}/rl/occupancy_measures', show=parser_args.show,
             assumed_expert_pi=epi,
             targets=targets_all,
         )
     
     assignment_memory: ClusterAssignmentMemory = data.metrics['assignment_memory']
-    assignment_memory.sort_lexicographic(lexicographic_vs_first=True)
+    assignment_memory.sort_lexicographic(lexicographic_vs_first=False)
     num_digits = len(str(len(assignment_memory.memory)))
     assignments_identifier_to_assignment = OrderedDict({
         f"assign_p{str(i+1).zfill(num_digits)}_vs_first_in_train": assignment_memory.memory[i] for i in range(0, len(assignment_memory.memory))
@@ -729,7 +804,7 @@ if __name__ == "__main__":
             n_iterations_real = data.n_iterations
             
             assignment_memories_per_lre[ename_clean] = metrics_per_lre[ename_clean]['assignment_memory']
-            assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=True)
+            assignment_memories_per_lre[ename_clean].sort_lexicographic(lexicographic_vs_first=False)
 
         plot_metrics_for_experiments(historic_assignments_per_lre, enames_for_lr_curve, assignment_memories=assignment_memories_per_lre, n_iterations_real=n_iterations_real)
         assignments_identifier_to_assignment_lre = {
@@ -825,7 +900,7 @@ if __name__ == "__main__":
     # Put for the first, middle, and last assignment in separated tables.
     # For each assignment, put in a table the value systems of each cluster, the number of agents, the representativity of each cluster regarding value systems, average distance to other clusters, the combined score, the representativity and conciseness of the assignment, and the grouinding coherence (given by the .gr_score).
     #  Make every single column modular, i.e. to activate or deactivate it with a flag.
-    # Output the tables in latex anc csv in the test_results/{experiment_name}/csv and test_results/{experiment_name}/latex folders.
+    # Output the tables in latex anc csv in the {experiment_name}/csv and {experiment_name}/latex folders.
     
     
     output_columns = {
@@ -933,8 +1008,8 @@ if __name__ == "__main__":
 
     # 4: Plots. (PIE + HISTOGRAM + VISUALIZATION)
     
-    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters.pdf", 
-                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters.pdf", 
+    best_gr_then_vs_assignment.plot_vs_assignments(f"test_results/{experiment_name}/train_set/plots/figure_clusters", 
+                                                   f"test_results/{experiment_name}/train_set/plots/hists_clusters", 
                                                    subfig_multiplier=parser_args.subfig_multiplier,
                                                    values_color_map=environment_data['profiles_colors'], 
                                                    values_names=environment_data['values_names'], 

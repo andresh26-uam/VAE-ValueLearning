@@ -36,3 +36,8 @@ register(
      id="MultiValuedCarEnv-v0",
      entry_point="envs.multivalued_car_env:MultiValuedCarEnv",
 )
+
+register(
+    id='FireFightersMO-v0',
+    entry_point='envs.firefighters_env_mo:FireFightersEnvMO',
+)
