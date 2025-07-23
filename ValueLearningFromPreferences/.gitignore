@@ -1,4 +1,5 @@
 .venv*
+.vscode
 checkpoints
 __pycache__
 datasets/comparisons/*
@@ -9,4 +10,6 @@ train_results/*
 test_results/*
 
 datasets/complete_datasets/*
+morl_baselines*
+*tensorboard*
 !__init__.py

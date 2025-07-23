@@ -1,0 +1,41 @@
+{
+  "os":  "macOS-14.7.1-arm64-arm-64bit-Mach-O",
+  "python":  "CPython 3.13.1",
+  "startedAt":  "2025-07-22T13:36:10.147567Z",
+  "args":  [
+    "-e=ffmo",
+    "-dname=ffmo_data"
+  ],
+  "program":  "/Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences/generate_dataset_mo.py",
+  "codePath":  "ValueLearningFromPreferences/generate_dataset_mo.py",
+  "codePathLocal":  "generate_dataset_mo.py",
+  "git":  {
+    "remote":  "https://github.com/andresh26-uam/Values-with-CEP.git",
+    "commit":  "672e98b15babdc9a3d13c5ce7b790acc26eaa5a8"
+  },
+  "email":  "andres.holgado@estudiante.uam.es",
+  "root":  "/Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences",
+  "host":  "Andress-MacBook-Pro.local",
+  "executable":  "/Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences/.venv/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "245107195904",
+      "used":  "239835684864"
+    }
+  },
+  "memory":  {
+    "total":  "17179869184"
+  },
+  "apple":  {
+    "name":  "Apple M2",
+    "ecpuCores":  4,
+    "pcpuCores":  4,
+    "gpuCores":  10,
+    "memoryGb":  16,
+    "swapTotalBytes":  "3221225472",
+    "ramTotalBytes":  "17179869184"
+  },
+  "writerId":  "cjwrecg3e7kdcjolwdxg1jlnkxw16ash"
+}

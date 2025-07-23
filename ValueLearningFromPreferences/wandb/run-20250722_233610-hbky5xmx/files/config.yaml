@@ -1,0 +1,120 @@
+_wandb:
+    value:
+        cli_version: 0.21.0
+        code_path: code/ValueLearningFromPreferences/generate_dataset_mo.py
+        e:
+            cjwrecg3e7kdcjolwdxg1jlnkxw16ash:
+                apple:
+                    ecpuCores: 4
+                    gpuCores: 10
+                    memoryGb: 16
+                    name: Apple M2
+                    pcpuCores: 4
+                    ramTotalBytes: "17179869184"
+                    swapTotalBytes: "3221225472"
+                args:
+                    - -e=ffmo
+                    - -dname=ffmo_data
+                codePath: ValueLearningFromPreferences/generate_dataset_mo.py
+                codePathLocal: generate_dataset_mo.py
+                cpu_count: 8
+                cpu_count_logical: 8
+                disk:
+                    /:
+                        total: "245107195904"
+                        used: "239835684864"
+                email: andres.holgado@estudiante.uam.es
+                executable: /Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences/.venv/bin/python
+                git:
+                    commit: 672e98b15babdc9a3d13c5ce7b790acc26eaa5a8
+                    remote: https://github.com/andresh26-uam/Values-with-CEP.git
+                host: Andress-MacBook-Pro.local
+                memory:
+                    total: "17179869184"
+                os: macOS-14.7.1-arm64-arm-64bit-Mach-O
+                program: /Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences/generate_dataset_mo.py
+                python: CPython 3.13.1
+                root: /Users/andresh26/Desktop/VAE-ValueLearning/ValueLearningFromPreferences
+                startedAt: "2025-07-22T13:36:10.147567Z"
+                writerId: cjwrecg3e7kdcjolwdxg1jlnkxw16ash
+        m:
+            - "2": '*'
+              "5": 2
+              "6":
+                - 1
+              "7": []
+            - "1": global_step
+              "6": []
+              "7": []
+        python_version: 3.13.1
+        t:
+            "1":
+                - 1
+                - 5
+                - 49
+                - 51
+                - 52
+                - 53
+            "2":
+                - 1
+                - 5
+                - 49
+                - 51
+                - 52
+                - 53
+            "3":
+                - 7
+                - 13
+                - 16
+                - 19
+            "4": 3.13.1
+            "5": 0.21.0
+            "12": 0.21.0
+            "13": darwin-arm64
+algo:
+    value: PCNFF_expert
+batch_size:
+    value: 64
+continuous_action:
+    value: false
+env_id:
+    value: FireFightersMO-v0
+gamma:
+    value: 1
+hidden_dim:
+    value: 64
+known_front:
+    value: null
+learning_rate:
+    value: 0.002
+max_buffer_size:
+    value: 100
+max_return:
+    value:
+        - 100
+        - 100
+noise:
+    value: 0.1
+num_er_episodes:
+    value: 20
+num_eval_weights_for_eval:
+    value: 50
+num_model_updates:
+    value: 50
+num_points_pf:
+    value: 100
+num_step_episodes:
+    value: 10
+ref_point:
+    value:
+        - -100
+        - -100
+scaling_factor:
+    value:
+        - 1
+        - 1
+        - 1
+seed:
+    value: null
+total_timesteps:
+    value: 2000
