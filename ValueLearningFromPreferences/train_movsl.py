@@ -22,8 +22,8 @@ from src.algorithms.preference_based_vsl_simple import PVSL
 from src.dataset_processing.data import VSLPreferenceDataset
 from src.dataset_processing.utils import DATASETS_PATH, DEFAULT_SEED, calculate_dataset_save_path
 from src.feature_extractors import BaseRewardFeatureExtractor
-from src.policies.vsl_policies import ValueSystemLearningPolicyCustomLearner
-from src.reward_nets.vsl_reward_functions import ConvexAlignmentLayer, VectorModule, RewardVectorModule, TrainingModes, parse_layer_name
+from src.policies.vsl_policies import RewardVectorFunctionWrapper, ValueSystemLearningPolicyCustomLearner
+from src.reward_nets.vsl_reward_functions import ConvexAlignmentLayer, RewardVectorModuleWithKnownRewards, VectorModule, RewardVectorModule, TrainingModes, parse_layer_name
 from src.utils import filter_none_args, load_json_config
 from train_vsl import parse_cluster_sizes, parse_feature_extractors, parse_optimizer_data
 from use_cases.roadworld_env_use_case.network_env import FeaturePreprocess, FeatureSelection
@@ -162,6 +162,10 @@ class PCN_CUSTOM_REWARD(PCN, MOCustomRewardVector):
         super().set_reward_vector(reward_vector)
         self.reward_vector = reward_vector
         
+        if self.env.has_wrapper_attr("set_reward_vector_function"):
+            self.env.get_wrapper_attr("set_reward_vector_function")(reward_vector)
+        else:
+            self.env = RewardVectorFunctionWrapper(self.env, reward_vector)
         if self.relabel_buffer:
             global_step = 0
             old_replay = deepcopy(self.experience_replay)
@@ -182,144 +186,7 @@ class PCN_CUSTOM_REWARD(PCN, MOCustomRewardVector):
             
 
     
-    def train(self, total_timesteps, eval_env, ref_point, known_pareto_front = None, num_eval_weights_for_eval = 50, num_er_episodes = 20, num_step_episodes = 10, num_model_updates = 50, max_return = None, max_buffer_size = 100, num_points_pf = 100):
-        
-        """Train PCN.
-
-        Args:
-            total_timesteps: total number of time steps to train for
-            eval_env: environment for evaluation
-            ref_point: reference point for hypervolume calculation
-            known_pareto_front: Optimal pareto front for metrics calculation, if known.
-            num_eval_weights_for_eval (int): Number of weights use when evaluating the Pareto front, e.g., for computing expected utility.
-            num_er_episodes: number of episodes to fill experience replay buffer
-            num_step_episodes: number of steps per episode
-            num_model_updates: number of model updates per episode
-            max_return: maximum return for clipping desired return. When None, this will be set to 100 for all objectives.
-            max_buffer_size: maximum buffer size
-            num_points_pf: number of points to sample from pareto front for metrics calculation
-        """
-        max_return = max_return if max_return is not None else np.full(self.reward_dim, 100.0, dtype=np.float32)
-        if self.log:
-            self.register_additional_config(
-                {
-                    "total_timesteps": total_timesteps,
-                    "ref_point": ref_point.tolist(),
-                    "known_front": known_pareto_front,
-                    "num_eval_weights_for_eval": num_eval_weights_for_eval,
-                    "num_er_episodes": num_er_episodes,
-                    "num_step_episodes": num_step_episodes,
-                    "num_model_updates": num_model_updates,
-                    "max_return": max_return.tolist(),
-                    "max_buffer_size": max_buffer_size,
-                    "num_points_pf": num_points_pf,
-                }
-            )
-        self.global_step = 0
-        total_episodes = num_er_episodes
-        n_checkpoints = 0
-
-        # fill buffer with random episodes
-        self.experience_replay = []
-        for _ in range(num_er_episodes):
-            transitions = []
-            obs, _ = self.env.reset()
-            done = False
-            while not done:
-                action = self.env.action_space.sample()
-                n_obs, reward, terminated, truncated, _ = self.env.step(action)
-                reward_real = self.reward_vector(obs, action, n_obs, terminated)
-                transitions.append(Transition(obs, action, np.float32(reward_real).copy(), n_obs, terminated))
-                done = terminated or truncated
-                obs = n_obs
-                self.global_step += 1
-            # add episode in-place
-            self._add_episode(transitions, max_size=max_buffer_size, step=self.global_step)
-
-        while self.global_step < total_timesteps:
-            loss = []
-            entropy = []
-            for _ in range(num_model_updates):
-                l, lp = self.update()
-                loss.append(l.detach().cpu().numpy())
-                if not self.continuous_action:
-                    lp = lp.detach().cpu().numpy()
-                    ent = np.sum(-np.exp(lp) * lp)
-                    entropy.append(ent)
-
-            desired_return, desired_horizon = self._choose_commands(num_er_episodes)
-
-            # get all leaves, contain biggest elements, experience_replay got heapified in choose_commands
-            leaves_r = np.array([e[2][0].reward for e in self.experience_replay[len(self.experience_replay) // 2 :]])
-            # leaves_h = np.array([len(e[2]) for e in self.experience_replay[len(self.experience_replay) // 2 :]])
-
-            if self.log:
-                hv = hypervolume(ref_point, leaves_r)
-                hv_est = hv
-                wandb.log(
-                    {
-                        "train/hypervolume": hv_est,
-                        "train/loss": np.mean(loss),
-                        "global_step": self.global_step,
-                    },
-                )
-                if not self.continuous_action:
-                    wandb.log(
-                        {
-                            "train/entropy": np.mean(entropy),
-                            "global_step": self.global_step,
-                        },
-                    )
-
-            returns = []
-            horizons = []
-            for _ in range(num_step_episodes):
-                transitions = self._run_episode(self.env, desired_return, desired_horizon, max_return)
-                self.global_step += len(transitions)
-                self._add_episode(transitions, max_size=max_buffer_size, step=self.global_step)
-                returns.append(transitions[0].reward)
-                horizons.append(len(transitions))
-
-            total_episodes += num_step_episodes
-            if self.log:
-                wandb.log(
-                    {
-                        "train/episode": total_episodes,
-                        "train/horizon_desired": desired_horizon,
-                        "train/mean_horizon_distance": np.linalg.norm(np.mean(horizons) - desired_horizon),
-                        "global_step": self.global_step,
-                    },
-                )
-
-                for i in range(self.reward_dim):
-                    wandb.log(
-                        {
-                            f"train/desired_return_{i}": desired_return[i],
-                            f"train/mean_return_{i}": np.mean(np.array(returns)[:, i]),
-                            f"train/mean_return_distance_{i}": np.linalg.norm(
-                                np.mean(np.array(returns)[:, i]) - desired_return[i]
-                            ),
-                            "global_step": self.global_step,
-                        },
-                    )
-            print(
-                f"step {self.global_step} \t return {np.mean(returns, axis=0)}, ({np.std(returns, axis=0)}) \t loss {np.mean(loss):.3E} \t horizons {np.mean(horizons)}"
-            )
-
-            if self.global_step >= (n_checkpoints + 1) * total_timesteps / 1000:
-                self.save()
-                n_checkpoints += 1
-                e_returns, _, _ = self.evaluate(eval_env, max_return, n=num_points_pf)
-
-                if self.log:
-                    log_all_multi_policy_metrics(
-                        current_front=e_returns,
-                        hv_ref_point=ref_point,
-                        reward_dim=self.reward_dim,
-                        global_step=self.global_step,
-                        n_sample_weights=num_eval_weights_for_eval,
-                        ref_front=known_pareto_front,
-                    )
+    
 def pvsl():
     parser_args = filter_none_args(parse_args())
     # If a config file is specified, load it and override command line args
