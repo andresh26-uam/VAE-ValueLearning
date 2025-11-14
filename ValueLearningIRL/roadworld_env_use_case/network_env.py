@@ -208,6 +208,7 @@ class RoadWorld(object):
           reward        reward on the next state
           is_done       True/False - if the agent is already on the terminal states
         """
+        prev_state = self.cur_state
         try:
             next_state, self.cur_des = self.get_state_des_transition((self.cur_state,self.cur_des), action)
         except:
@@ -227,7 +228,8 @@ class RoadWorld(object):
         self.state = (self.cur_state, self.cur_des)
         #info = {"moved_to": self.cur_state, "reward": reward}
         
-        trunc = self.iterations >= self.max_iter
+        trunc = self.iterations >= self.max_iter or action not in self.action_list_from_state[prev_state]
+        done = done or action not in self.action_list_from_state[prev_state]
         return self.state, reward, done, trunc, {}
 
     def get_state_transition(self, state, action):
@@ -322,7 +324,7 @@ def get_color_gradient(c1, c2, mix):
     
     return ((1-mix)*c1_rgb + (mix*c2_rgb))
 
-def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None, plot_by_value=False):
+def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.pdf", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None, plot_by_value=False):
     
     #posiciones = {node: node for node in self.graph.nodes()}
     
@@ -401,7 +403,8 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
             if camino is not None:
                 
                 node_color=["tab:red" if n == camino[-1] else "tab:green" if n == camino[0] else "tab:orange" if n in camino else "tab:blue" for n in nodelist]
-                node_size=[150 if n == camino[-1] else 150 if n == camino[0] else 100 if n in camino else 10 for n in nodelist]
+                node_size=[800 if n == camino[-1] else 800 if n == camino[0] else 100 if n in camino else 10 for n in nodelist]
+                edge_colors=['black' if n == camino[-1] else 'black' if n == camino[0] else 'none' if n in camino else 'none' for n in nodelist]
                 
                 for edge in edgelist:
                         valid = False
@@ -415,7 +418,7 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
                             edge_color_by_value[value].append(PROFILE_COLORS.get(PROFILE_NAMES_TO_TUPLE.get(value, 'unk'),'tab:black'))
                             edge_size_by_value[value].append(5)
        
-        nx.draw_networkx_nodes(graph, posiciones, nodelist=nodelist, node_size=node_size, node_color=node_color)
+        nx.draw_networkx_nodes(graph, posiciones, nodelist=nodelist, node_size=node_size, node_color=node_color, edgecolors=edge_colors)
         nx.draw_networkx_edges(graph, posiciones, edge_list_by_value[value], connectionstyle=f'arc3, rad = {arc_rad}', width=edge_size_by_value[value], edge_color=edge_color_by_value[value], label='Shortest path for ' + str(value))
     
     #nx.draw_networkx(self.graph, pos={p: p for p in posiciones if p in camino}, ax=ax, with_labels=False, font_weight='bold', nodelist=[n for n in camino], node_size=[100 if self.points_to_data[tuple(n)]["id"] in (END, START) else 50 for n in camino], node_color=[n for n in node_color if n != 'tab:blue'], edgelist=[ed for ed in self.graph.edges() if ed[0] in camino and ed[1] in camino], edge_color=[ed for ed in edge_color if ed != 'tab:blue'], width=[ed for ed in edge_size if ed > 1.0])#nx.draw_networkx_nodes(G, pos, nodelist=[0, 1, 2, 3], node_color="tab:red", **options)
@@ -426,11 +429,12 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
     #ax.set_ylim([-0.05, 1.05])
     ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
     fig.legend()
+    
+    #plt.show(False)
+    
+    plt.close()
     fig.savefig(save_to)
 
-    if show:
-        plt.show()
-    plt.close()
     
 
 
@@ -660,7 +664,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
         
         def calculate_profiled_dist(d):
                 dists = np.full((path_feature_no_norm.shape[0], len(BASIC_PROFILES)),fill_value=1e6, dtype=np.float32)
-                max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-1000000.0, dtype=np.float32)
+                max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-10000.0, dtype=np.float32)
 
                 for i, bpf in enumerate(BASIC_PROFILES):
                     max_dist_per_pf[i] = float('-inf')
@@ -735,7 +739,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
             
             def calculate_profiled_dist(d):
                 dists = np.full((path_feature_no_norm.shape[0], len(BASIC_PROFILES)),fill_value=1e6, dtype=np.float32)
-                max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-1000000.0, dtype=np.float32)
+                max_dist_per_pf = np.full((len(BASIC_PROFILES),), fill_value=-10000.0, dtype=np.float32)
 
                 for i, bpf in enumerate(BASIC_PROFILES):
                     max_dist_per_pf[i] = float('-inf')
@@ -883,7 +887,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
     
     def shortest_paths_nodes(self, profile, to_state, from_state=None, all_alternatives=False, custom_cost=None):
 
-        if all_alternatives is False:
+        if all_alternatives == False:
             if from_state is None:
                 paths = nx.shortest_path(self.graph, target=self.edge_to_source_dest[to_state]['source'], weight=self.profile_cost_minimization_path(to_state, profile,reverse=True, custom_cost=custom_cost))
                 for k in paths.keys():
@@ -927,7 +931,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
                         for path in paths:
                             edge_path = self.node_path_to_edge_path(path, format_list=True)
                             
-                            if with_length is False:
+                            if with_length == False:
                                 good_edges[key].append( edge_path)
                             else:
                                 good_edges[key].append((edge_path, 
@@ -938,7 +942,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
                             good_edges[key] = [([],0)]
                         for path in paths:
                             edge_path = self.node_path_to_edge_path(path, format_list=True)
-                            if with_length is False:
+                            if with_length == False:
                                 good_edges[key].extend(edge_path)
                                 
                             else:
@@ -1006,7 +1010,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
     
 
 class RoadWorldGymObservationState(RoadWorldGym):
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=False):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=True):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile, visualize_example, feature_selection=FeatureSelection.DEFAULT)
 
         self.state_space = deepcopy(self.observation_space)
@@ -1085,7 +1089,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     def states_to_observation(self, state_des: np.ndarray , check_destinations=True):
         return state_des
 
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, des=413, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=True, des=413, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile,feature_selection, use_optimal_reward_per_profile, feature_preprocessing, visualize_example)
         
         self.horizon = horizon
@@ -1123,17 +1127,20 @@ class RoadWorldGymPOMDP(RoadWorldGym):
             
             for a in range(self.n_actions):
                 if a in self.get_action_list(s):
-                    self.transition_matrix[s, a, self.get_state_des_transition((s, self.cur_des), a)[0]] = 1.0
+                    ns = self.get_state_des_transition((s, self.cur_des), a)[0]
+                    self.transition_matrix[s, a, ns] = 1.0
+                    if ns == self.cur_des:
+                        self.state_actions_with_known_reward[s,a] = True
                 else:
                     self.state_actions_with_known_reward[s,a] = True
                     self.transition_matrix[s, a, s] = 1.0
+
                 
         #initial_states = np.array([int(od.split('_')[0]) for od in self.od_list])
         #self.transition_matrix = sp.as_coo(self.transition_matrix)
         
         self.initial_state_dist = np.zeros(self.n_states, dtype=np.float32)
         indices = np.asarray(list(self.valid_edges))
-        #print(indices)
         self.initial_state_dist[indices] = 1/len(self.valid_edges)
 
     def reset(self,  seed=None,  options=None, st=None, des=None, profile=(1.0, 0.0,0.0), full_random=True):
@@ -1171,13 +1178,15 @@ class RoadWorldGymPOMDP(RoadWorldGym):
 
         
         if state not in self.valid_edges:
-            rew = -1000000
+            rew = -10000.0
         elif state == self.cur_des:
             rew = 0.0
+        elif nstate == self.cur_des:
+            rew = 1.0 # This is the key... It is hard for RL to converge when 0 (actually learns another thing. To get there need a lot of reward, but not too much to cause overfitting...)
         elif nstate not in self.valid_edges:
-            rew =  -1000000
+            rew =  -10000.0
         elif action not in self.get_action_list(state):
-            rew = -1000000
+            rew = -10000.0
         else:
             rew =  -self.cost_model(profile=profile, normalization =self.feature_preprocessing)((nstate, self.cur_des))
             
@@ -1190,7 +1199,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     
 
 class RoadWorldPOMDPStateAsTuple(RoadWorldGym):
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_AND_DEST, use_optimal_reward_per_profile = False, feature_preprocessing = FeaturePreprocess.NO_PREPROCESSING):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=True, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_AND_DEST, use_optimal_reward_per_profile = False, feature_preprocessing = FeaturePreprocess.NO_PREPROCESSING):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset=pre_reset, origins=origins, destinations=destinations, profile=profile, visualize_example=visualize_example, feature_selection=feature_selection, use_optimal_reward_per_profile=use_optimal_reward_per_profile, feature_preprocesssing=feature_preprocessing)
         #self.observation_space = MultiDiscrete(nvec=(self.n_states, self.n_states))
         #self._observation_space = self.observation_space
@@ -1238,14 +1247,11 @@ class RoadWorldPOMDPStateAsTuple(RoadWorldGym):
     
     def step(self, action, reward_function=None, profile=None):
         s, r, d, t, i= super().step(action, reward_function)
-        #print("STEP TO ", self.state, r, d, t, i)
         self.state = s
         t = t or self.iterations >= self.horizon
         return self.state, r, d, t, i
     
     def get_reward(self, state, action, des, profile=None):
-        #print("GET_REWARD AT ", state, self.netconfig[state])
-        #print("STATE", state, "ACTION", action, "DES", des)
         nstate = self.get_state_des_transition((int(state), des), action)[0]
         if profile is None:
             profile = self.last_profile
