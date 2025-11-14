@@ -324,7 +324,7 @@ def get_color_gradient(c1, c2, mix):
     
     return ((1-mix)*c1_rgb + (mix*c2_rgb))
 
-def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.png", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None, plot_by_value=False):
+def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_demo.pdf", show_edge_weights = True, caminos_by_value={'sus': [], 'sec': [], 'eff': []}, custom_weights: dict =None, custom_weights_dest: int = None, plot_by_value=False):
     
     #posiciones = {node: node for node in self.graph.nodes()}
     
@@ -403,7 +403,8 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
             if camino is not None:
                 
                 node_color=["tab:red" if n == camino[-1] else "tab:green" if n == camino[0] else "tab:orange" if n in camino else "tab:blue" for n in nodelist]
-                node_size=[150 if n == camino[-1] else 150 if n == camino[0] else 100 if n in camino else 10 for n in nodelist]
+                node_size=[800 if n == camino[-1] else 800 if n == camino[0] else 100 if n in camino else 10 for n in nodelist]
+                edge_colors=['black' if n == camino[-1] else 'black' if n == camino[0] else 'none' if n in camino else 'none' for n in nodelist]
                 
                 for edge in edgelist:
                         valid = False
@@ -417,7 +418,7 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
                             edge_color_by_value[value].append(PROFILE_COLORS.get(PROFILE_NAMES_TO_TUPLE.get(value, 'unk'),'tab:black'))
                             edge_size_by_value[value].append(5)
        
-        nx.draw_networkx_nodes(graph, posiciones, nodelist=nodelist, node_size=node_size, node_color=node_color)
+        nx.draw_networkx_nodes(graph, posiciones, nodelist=nodelist, node_size=node_size, node_color=node_color, edgecolors=edge_colors)
         nx.draw_networkx_edges(graph, posiciones, edge_list_by_value[value], connectionstyle=f'arc3, rad = {arc_rad}', width=edge_size_by_value[value], edge_color=edge_color_by_value[value], label='Shortest path for ' + str(value))
     
     #nx.draw_networkx(self.graph, pos={p: p for p in posiciones if p in camino}, ax=ax, with_labels=False, font_weight='bold', nodelist=[n for n in camino], node_size=[100 if self.points_to_data[tuple(n)]["id"] in (END, START) else 50 for n in camino], node_color=[n for n in node_color if n != 'tab:blue'], edgelist=[ed for ed in self.graph.edges() if ed[0] in camino and ed[1] in camino], edge_color=[ed for ed in edge_color if ed != 'tab:blue'], width=[ed for ed in edge_size if ed > 1.0])#nx.draw_networkx_nodes(G, pos, nodelist=[0, 1, 2, 3], node_color="tab:red", **options)
@@ -428,11 +429,12 @@ def visualize_graph(graph: nx.Graph,posiciones, show = False, save_to="vgraph_de
     #ax.set_ylim([-0.05, 1.05])
     ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
     fig.legend()
+    
+    #plt.show(False)
+    
+    plt.close()
     fig.savefig(save_to)
 
-    if show:
-        plt.show()
-    plt.close()
     
 
 
@@ -1008,7 +1010,7 @@ class RoadWorldGym(RoadWorld,gym.Env):
     
 
 class RoadWorldGymObservationState(RoadWorldGym):
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=False):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=None, origins=None, destinations=None, profile=(1, 0, 0), visualize_example=True):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile, visualize_example, feature_selection=FeatureSelection.DEFAULT)
 
         self.state_space = deepcopy(self.observation_space)
@@ -1087,7 +1089,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     def states_to_observation(self, state_des: np.ndarray , check_destinations=True):
         return state_des
 
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, des=413, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=True, des=413, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_ONLY, use_optimal_reward_per_profile=False, feature_preprocessing=FeaturePreprocess.NORMALIZATION,):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset, origins, destinations, profile,feature_selection, use_optimal_reward_per_profile, feature_preprocessing, visualize_example)
         
         self.horizon = horizon
@@ -1197,7 +1199,7 @@ class RoadWorldGymPOMDP(RoadWorldGym):
     
 
 class RoadWorldPOMDPStateAsTuple(RoadWorldGym):
-    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=False, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_AND_DEST, use_optimal_reward_per_profile = False, feature_preprocessing = FeaturePreprocess.NO_PREPROCESSING):
+    def __init__(self, network_path, edge_path, node_path, path_feature_path, pre_reset=[[0, 714]], origins=None, destinations=None, profile=[1, 0, 0], visualize_example=True, horizon=50, feature_selection=FeatureSelection.ONE_HOT_ORIGIN_AND_DEST, use_optimal_reward_per_profile = False, feature_preprocessing = FeaturePreprocess.NO_PREPROCESSING):
         super().__init__(network_path, edge_path, node_path, path_feature_path, pre_reset=pre_reset, origins=origins, destinations=destinations, profile=profile, visualize_example=visualize_example, feature_selection=feature_selection, use_optimal_reward_per_profile=use_optimal_reward_per_profile, feature_preprocesssing=feature_preprocessing)
         #self.observation_space = MultiDiscrete(nvec=(self.n_states, self.n_states))
         #self._observation_space = self.observation_space
