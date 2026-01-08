@@ -20,13 +20,13 @@ class HighRiseFireEnv(gym.Env):
         self.state_space = spaces.MultiDiscrete(
             [1, 5, 5, 2, 2, 4], dtype=np.int64)  # Floor, Fire Intensity, Occupancy, Equipment, Visibility, Medical Condition
         """
-        1. Floor Level (Low, Medium, High): Represents different segments of the high-rise building.
+        1. Floor Level (Low, Medium, High): Represents different segments of the high-rise building. (UNUSED: SET TO A SINGLE FLOOR BUILDING.)
         2. Fire Intensity (None, Low, Moderate, High, Severe): Indicates the severity of the fire at the current state.
         3. Occupancy (0 to 4): Indicates whether the area is sparsely or densely populated.
         4. Equipment Readiness (Not Ready, Ready): Reflects the availability and readiness of necessary firefighting equipment.
         5. Visibility (Poor, Good): Represents the environmental condition affecting firefighting efforts.
         6. Firefighter condition (Perfect health, Slightly Injured, Moderately Injured, incapacitated) 
-        Total number of states: 3*5*5*2*2*4 = 1200
+        Total number of states: 1*5*5*2*2*4 = 400
         """
         self.states = {
             STATE_FLOOR_LEVEL: "Floor level",
@@ -44,8 +44,8 @@ class HighRiseFireEnv(gym.Env):
         3. Aggressive Fire Suppression: Engage in direct firefighting to quickly reduce fire intensity.
         4. Coordinate with Other Agencies: Request additional resources or coordination with other emergency services.
         5. Assess and Plan: Conduct a thorough assessment of the building and fire to plan subsequent actions.
-        6. Go upstairs: go one floor up
-        7. Go downstairs: go one floor down
+        6. Go upstairs: go one floor up (UNUSED)
+        7. Go downstairs: go one floor down (UNUSED)
         """
 
         self.actions = {
@@ -176,7 +176,7 @@ class HighRiseFireEnv(gym.Env):
             proximity_reward = -0.1 if state[STATE_EQUIPMENT] == 0 else -1
         elif action == ACTION_ASSESS_AND_PLAN:  # Assess and Plan
             professionalism_reward = 1.0 if state[STATE_VISIBILITY] == 0 else -1.0
-            proximity_reward = -0.5 if state[STATE_EQUIPMENT] == 0 else -1.0
+            proximity_reward = -0.5 if state[STATE_VISIBILITY] == 0 else -1.0
 
         if next_state[STATE_MEDICAL] == 0:
             professionalism_reward = -1.0
@@ -287,4 +287,5 @@ if __name__ == "__main__":
     print("Done:", done)
 
     print(env.encrypt([0, 3, 4, 0, 0, 3]))
+
 
