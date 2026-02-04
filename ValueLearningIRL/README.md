@@ -1,8 +1,8 @@
-# Learning Value Systems in Sequential Decision-Making from Preferences and Inverse Reinforcement Learning
+# Learning the Value Systems of Agents with Preference-based and Inverse Reinforcement Learning
 
-In this repository we approach the value learning problem, as learning computational specifications from human values. This branch has the code for a submission to JAAMAS (Journal of Autonomous Agents and Multiagent Systems).
+This branch has the code for the paper "Learning the Value Systems of Agents with Preference-based and Inverse Reinforcement Learning", published at JAAMAS (Journal of Autonomous Agents and Multiagent Systems): [https://doi.org/10.1007/s10458-026-09732-0](https://doi.org/10.1007/s10458-026-09732-0).
 
-In previous work, we introduce a technique-agnostic framework for the problem of **Value System Learning**, consisting of learning a computational specification of the alignment with a given set of values in a certain context (a task we name **Value Grounding Learning**) and the value preferences (value systems) of possibly heterogeneous agents (what we name **Value System Identification**). We will learn such ethical abstractions from demonstrations of the behavior of different kinds of agents.
+We introduce a technique-agnostic framework for the problem of **Value System Learning**, consisting of learning a computational specification of the alignment with a given set of values in a certain context (a task we name **Value Grounding Learning**) and the value preferences (value systems) of possibly heterogeneous agents (what we name **Value System Identification**). We will learn such ethical abstractions from demonstrations of the behavior of different kinds of agents.
 
  The problem is approached here through a MDP formulation and the value alignment and value preferences are learned through Inverse Reinforcement Learning. Specifically, we use versions of "Deep Maximum Entropy Inverse Reinforcement Learning" (Wulfmeier, 2015) and assume routes are chosen by maximizing an initially unknown value alignment MDP reward function.
 
@@ -11,7 +11,7 @@ In previous work, we introduce a technique-agnostic framework for the problem of
 ## Use cases
 
 * RoadWorld Environment. A route choice modeling use case where the goal is the routes that some simulated agents will choose according to their preferences over the alignment with three human values: *sustainability*, *security* and *efficiency*.
-* Firefighters Environment. A simulated firefighting scenario where agents must choose the correct sequence of action to perform according to the maximization of two different values, namely *proffesionalism* and *proximity*. Future work will be done with real firefighter simulations.
+* Firefighters Environment. A simulated firefighting scenario where agents must choose the correct sequence of action to perform according to the maximization of two different values, namely *proffesionalism* and *proximity*.
 
 ## Installation
 
@@ -41,13 +41,7 @@ We employ Maximum Entropy IRL [Wulfmeier et al., 2015] by default. Use `-t 'vsi'
 
 ### Published work
 ---
-* Under [Branch "TFM"](https://github.com/andresh26-uam/VAE-ValueLearning/tree/TFM/ValueLearningIRL): Master's thesis (July 2024) (in Spanish: TFM Trabajo Fin de Máster) in Artificial Intelligence from Universidad Politécnica de Madrid:
-
-    **Learning Alignment with Human Values: A Case on Route Choice Modeling via Inverse Reinforcement Learning**
-    It is also the same source code for the to-be-published paper:
-
-    Holgado-Sánchez, A., Bajo, J., Billhardt, H., Ossowski, S., and Arias, J. (2024a). **Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**. Submitted to Value Engineering in AI (VALE 2024) track of the International Workshop on AI Value Engineering and AI Compliance Mechanisms (VECOMP 2024), affiliated with the 27th European Conference on Artificial Intelligence (ECAI 2024).
-    https://hal.science/hal-0462779
+* Under [Branch "TFM"](https://github.com/andresh26-uam/VAE-ValueLearning/tree/TFM/ValueLearningIRL): Master's thesis (July 2024) (in Spanish: TFM Trabajo Fin de Máster) in Artificial Intelligence from Universidad Politécnica de Madrid: [**Learning Alignment with Human Values: A Case on Route Choice Modeling via Inverse Reinforcement Learning**](https://portalcientifico.upm.es/es/ipublic/item/10351621). It is also the same source code for the published workshop paper: [**Value Learning for Value-Aligned Route Choice Modeling via Inverse Reinforcement Learning**](https://doi.org/10.1007/978-3-031-85463-7_3).
 
 ### References
 ---
